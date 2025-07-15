@@ -8,7 +8,7 @@ use anyhow::anyhow;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 // #[cfg(all(desktop))]
 // use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder};
 
 #[cfg(not(mobile))]
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -56,6 +56,22 @@ pub fn run() {
         ))
         .setup(|app| {
             let handle = app.handle().clone();
+            
+            // Create and show splash screen
+            let splash_window = match create_splash_window(&handle) {
+                Ok(window) => {
+                    log::info!("Splash screen created successfully");
+                    if let Err(e) = window.show() {
+                        log::error!("Failed to show splash screen: {:?}", e);
+                    }
+                    Some(window)
+                }
+                Err(e) => {
+                    log::error!("Failed to create splash screen: {:?}", e);
+                    None
+                }
+            };
+            
             let result: anyhow::Result<()> = tauri::async_runtime::block_on(async move {
                 setup(handle.clone()).await?;
 
@@ -149,7 +165,21 @@ pub fn run() {
                         });
                 }
 
-                window_builder.build()?;
+                let main_window = window_builder.build()?;
+
+                // Show main window first
+                main_window.show()?;
+                log::info!("Main window created and shown successfully");
+                
+                // Close splash screen after a brief delay to ensure smooth transition
+                let handle_clone = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                    if let Some(splash_window) = handle_clone.get_webview_window("splash") {
+                        log::info!("Closing splash screen");
+                        let _ = splash_window.close();
+                    }
+                });
 
                 // // Setup system tray
                 // #[cfg(all(desktop))]
@@ -350,5 +380,36 @@ fn holochain_dir() -> PathBuf {
         )
         .expect("Could not get app root")
         .join("holochain")
+    }
+}
+
+fn create_splash_window(handle: &AppHandle) -> tauri::Result<WebviewWindow> {
+    // Try to create splash window with custom HTML file
+    let splash_result = WebviewWindowBuilder::new(handle, "splash", tauri::WebviewUrl::App("splash.html".into()))
+        .title("Domino")
+        .inner_size(400.0, 300.0)
+        .resizable(false)
+        .decorations(false)
+        .center()
+        .always_on_top(true)
+        .build();
+    
+    match splash_result {
+        Ok(window) => {
+            log::info!("Splash screen with custom HTML created successfully");
+            Ok(window)
+        }
+        Err(e) => {
+            log::warn!("Failed to create splash with custom HTML: {:?}, creating simple splash", e);
+            // Fallback: create a simple splash with inline content
+            WebviewWindowBuilder::new(handle, "splash", tauri::WebviewUrl::App("about:blank".into()))
+                .title("Domino - Loading...")
+                .inner_size(400.0, 300.0)
+                .resizable(false)
+                .decorations(false)
+                .center()
+                .always_on_top(true)
+                .build()
+        }
     }
 }
