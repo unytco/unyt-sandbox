@@ -170,12 +170,12 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
         .main_window_builder(String::from("main"), true, Some(app_config.app_id), None)
         .await?;
     println!("[unyt_tauri] open_window: Window builder created");
-
+    let app_name = app_config.product_name;
     #[cfg(not(mobile))]
     {
         println!("[unyt_tauri] open_window: Configuring desktop window properties");
         window_builder = window_builder
-            .title(String::from("Unyt"))
+            .title(String::from(app_name))
             .inner_size(1400.0, 1000.0);
         println!(
             "[unyt_tauri] open_window: Desktop window configured with title 'Unyt' and size 1400x1000"

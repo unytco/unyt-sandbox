@@ -1,7 +1,7 @@
 {
-  "version": "0.35.0",
-  "productName": "Unyt",
-  "identifier": "co.unyt.unyt.sandbox",
+  "version": "0.0.1",
+  "productName": "Circulo",
+  "identifier": "co.unyt.unyt.circulo",
   "build": {
     "beforeBuildCommand": "cd ./unyt && make ci-build-ui",
     "devUrl": "http://localhost:1420",
@@ -25,12 +25,12 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2NEE4MDE2OERCREQ3M0EKUldRNjE3Mk5Gb0JLVmlRNzdlVGlQdkNPdG5KWVQyWkhldUdvdXNMbzh0TTlnSG5CdjB5cWVubWUK",
-      "endpoints": ["https://github.com/unytco/shinyyard-unyt/releases/latest/download/latest.json"]
+      "endpoints": ["https://github.com/unytco/circulo/releases/latest/download/latest.json"]
     },
     "deep-link": {
-      "mobile": [{ "scheme": ["unyt"] }],
+      "mobile": [{ "scheme": ["circulo"] }],
       "desktop": {
-        "schemes": ["unyt"]
+        "schemes": ["circulo"]
       }
     }
   }
