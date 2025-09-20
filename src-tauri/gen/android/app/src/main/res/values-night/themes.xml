@@ -2,5 +2,6 @@
     <!-- Base application theme. -->
     <style name="Theme.unyt_tauri" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
+        <!-- Make status bar transparent to reveal app background -->
     </style>
 </resources>
