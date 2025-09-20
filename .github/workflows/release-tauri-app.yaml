@@ -67,7 +67,7 @@ jobs:
             unyt/dnas/alliance/workdir/alliance.dna
             unyt/dnas/agent_details/workdir/agent_details.dna
           body: ${{ steps.changelog.outputs.notes }}
-          name: Unyt v${{ steps.version.outputs.APP_VERSION }}
+          name: Circulo v${{ steps.version.outputs.APP_VERSION }}
           tag: v${{ steps.version.outputs.APP_VERSION }}
           prerelease: true
           draft: true
