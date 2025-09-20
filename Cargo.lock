@@ -1223,6 +1223,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "circulo"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "app_dirs2",
+ "env_logger",
+ "holochain_client",
+ "hyper-tls",
+ "image",
+ "jni",
+ "libc",
+ "log",
+ "migration_zome_trait",
+ "ndk-context",
+ "ndk-sys",
+ "notifications_zome_trait",
+ "opener",
+ "profiles_provider_zome_trait",
+ "push_notifications_service_trait",
+ "serde",
+ "serde_json",
+ "service_providers_utils",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-barcode-scanner",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-dialog",
+ "tauri-plugin-holochain",
+ "tauri-plugin-log",
+ "tauri-plugin-notification",
+ "tauri-plugin-process",
+ "tauri-plugin-safe-area-insets-css",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tempdir",
+ "tokio",
+ "url2",
+ "uuid 1.18.1",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11387,47 +11428,6 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
-
-[[package]]
-name = "unyt-tauri"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "app_dirs2",
- "env_logger",
- "holochain_client",
- "hyper-tls",
- "image",
- "jni",
- "libc",
- "log",
- "migration_zome_trait",
- "ndk-context",
- "ndk-sys",
- "notifications_zome_trait",
- "opener",
- "profiles_provider_zome_trait",
- "push_notifications_service_trait",
- "serde",
- "serde_json",
- "service_providers_utils",
- "tauri",
- "tauri-build",
- "tauri-plugin-barcode-scanner",
- "tauri-plugin-deep-link",
- "tauri-plugin-dialog",
- "tauri-plugin-holochain",
- "tauri-plugin-log",
- "tauri-plugin-notification",
- "tauri-plugin-process",
- "tauri-plugin-safe-area-insets-css",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tempdir",
- "tokio",
- "url2",
- "uuid 1.18.1",
-]
 
 [[package]]
 name = "ureq"
