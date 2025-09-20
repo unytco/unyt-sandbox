@@ -181,8 +181,8 @@ jobs:
           VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_COMMIT_SHA: ${{ steps.version.outputs.APP_VERSION }}
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
-          # VITE_APP_NAME: "Circulo"
-          # VITE_IS_CIRCULO_RELEASE: "true"
+          VITE_APP_NAME: "Circulo"
+          VITE_IS_CIRCULO_RELEASE: "true"
         with:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           releaseDraft: true
@@ -258,8 +258,8 @@ jobs:
           VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_COMMIT_SHA: ${{ steps.version.outputs.APP_VERSION }}
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
-          # VITE_APP_NAME: "Circulo"
-          # VITE_IS_CIRCULO_RELEASE: "true"
+          VITE_APP_NAME: "Circulo"
+          VITE_IS_CIRCULO_RELEASE: "true"
         run: |
           nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
 
