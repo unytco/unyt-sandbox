@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src-tauri/icons/circulo-logo.svg" alt="Circulo" width="300">
+# <img src="src-tauri/icons/circulo-logo.svg" alt="Circulo" width="300">
 
 ![Latest Release](https://img.shields.io/github/v/release/unytco/circulo?style=flat-square&color=blue)
 ![Downloads](https://img.shields.io/github/downloads/unytco/circulo/total?style=flat-square&color=green)
@@ -11,6 +11,8 @@ A mutual credit accounting software with smart agreements built on holochain
 </div>
 
 ## Downloads
+
+<div align="center">
 
 <table>
 <tr>
@@ -52,6 +54,8 @@ Android Universal APK • [AAB Bundle](https://github.com/unytco/circulo/release
 </td> -->
 </tr>
 </table>
+
+</div>
 
 > **Note:** Download links point to the v0.0.1 release. For the latest version, visit the [releases page](https://github.com/unytco/circulo/releases).
 
