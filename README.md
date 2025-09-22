@@ -27,7 +27,7 @@ MSI Installer • [Portable EXE](https://github.com/unytco/circulo/releases/late
 
 **macOS**
 
-[<img src="https://img.shields.io/badge/-Download-black?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_universal.dmg)
+[<img src="https://img.shields.io/badge/-Download-yellow?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_universal.dmg)
 
 DMG Installer • [App Bundle](https://github.com/unytco/circulo/releases/latest/download/circulo.app.tar.gz)
 
