@@ -6,7 +6,7 @@
 ![Downloads](https://img.shields.io/github/downloads/unytco/circulo/total?style=flat-square&color=green)
 ![License](https://img.shields.io/github/license/unytco/circulo?style=flat-square)
 
-_A modern cross-platform application built with Tauri and Rust_
+A mutual credit accounting software with smart agreements built on holochain
 
 </div>
 
@@ -18,42 +18,42 @@ _A modern cross-platform application built with Tauri and Rust_
 
 **Windows**
 
-[<img src="https://img.shields.io/badge/-Download-blue?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_x64_en-US.msi)
+[MSI Installer (x64)](https://github.com/unytco/circulo/releases/download/v0.0.1/Circulo_0.0.1_x64_en-US.msi)
 
-MSI Installer • [Portable EXE](https://github.com/unytco/circulo/releases/latest/download/circulo.exe)
+[EXE Setup (x64)](https://github.com/unytco/circulo/releases/download/v0.0.1/Circulo_0.0.1_x64-setup.exe)
 
 </td>
 <td width="25%" align="center">
 
-**macOS**
+**MacOS**
 
-[<img src="https://img.shields.io/badge/-Download-yellow?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_universal.dmg)
+[Silicon (arm64)](https://github.com/unytco/circulo/releases/download/v0.0.1/Circulo_0.0.1_aarch64.dmg)
 
-DMG Installer • [App Bundle](https://github.com/unytco/circulo/releases/latest/download/circulo.app.tar.gz)
+[Intel (x64)](https://github.com/unytco/circulo/releases/download/v0.0.1/Circulo_0.0.1_x64.dmg)
 
 </td>
 <td width="25%" align="center">
 
 **Linux**
 
-[<img src="https://img.shields.io/badge/-Download-orange?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_amd64.AppImage)
+[AppImage (Universal)](https://github.com/unytco/circulo/releases/download/v0.0.1/Circulo_0.0.1_amd64.AppImage)
 
-AppImage • [DEB](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_amd64.deb) • [TAR.GZ](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_amd64.tar.gz)
+[Debian Package (.deb)](https://github.com/unytco/circulo/releases/download/v0.0.1/Circulo_0.0.1_amd64.deb)
 
 </td>
-<td width="25%" align="center">
+<!-- <td width="25%" align="center">
 
 **Android**
 
-[<img src="https://img.shields.io/badge/-Download-green?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_universal.apk)
+[<img src="https://img.shields.io/badge/-Download-green?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/circulo/releases/download/v0.0.1/app-universal-release.apk)
 
-Universal APK • [ARM64](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_arm64-v8a.apk) • [x86_64](https://github.com/unytco/circulo/releases/latest/download/circulo_0.1.0_x86_64.apk)
+Android Universal APK • [AAB Bundle](https://github.com/unytco/circulo/releases/download/v0.0.1/app-universal-release.aab)
 
-</td>
+</td> -->
 </tr>
 </table>
 
-> **Note:** All download links automatically point to the latest release. For specific versions, visit the [releases page](https://github.com/unytco/circulo/releases).
+> **Note:** Download links point to the v0.0.1 release. For the latest version, visit the [releases page](https://github.com/unytco/circulo/releases).
 
 ## Installation
 
@@ -92,7 +92,7 @@ Universal APK • [ARM64](https://github.com/unytco/circulo/releases/latest/down
 
 </details>
 
-<details>
+<!-- <details>
 <summary><strong>Android</strong></summary>
 
 1. Download the appropriate APK for your device architecture
@@ -100,7 +100,7 @@ Universal APK • [ARM64](https://github.com/unytco/circulo/releases/latest/down
 3. Install the APK file
 4. Launch Circulo from your app drawer
 
-</details>
+</details> -->
 
 ## System Requirements
 
@@ -109,19 +109,15 @@ Universal APK • [ARM64](https://github.com/unytco/circulo/releases/latest/down
 | **Windows** | Windows 10 (64-bit) or later            |
 | **macOS**   | macOS 10.15 (Catalina) or later         |
 | **Linux**   | Ubuntu 18.04+ / equivalent distribution |
-| **Android** | Android 7.0 (API level 24) or later     |
+
+ <!--        | **Android**                             | Android 7.0 (API level 24) or later | -->
 
 **Recommended:** 4GB RAM, 1GB free disk space, internet connection for updates
 
-## Development
-
-Interested in contributing? Check out our [development documentation](docs/) for build instructions and contribution guidelines.
-
 ## Support
 
-- [Documentation](docs/)
 - [Report Issues](https://github.com/unytco/circulo/issues)
-- [Discussions](https://github.com/unytco/circulo/discussions)
+- [Discussions](https://link-to-telegram)
 
 ## License
 
