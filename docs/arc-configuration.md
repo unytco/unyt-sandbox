@@ -76,6 +76,6 @@ Release artifacts are automatically named using the Tauri product name configura
 
 ### Android Platform
 
-- **Zero arc only**: `Unyt.apk`, `Unyt.aab` (standard names, always zero arc)
+- **Zero arc only**: `Unyt.apk`, `Unyt.aab` (clean names, always zero arc)
 
-This is achieved by dynamically setting the `TAURI_PRODUCT_NAME_SUFFIX` environment variable during the build process, which Tauri uses to generate the final product names. Android builds use an empty suffix since they're always zero arc by default.
+This is achieved by post-build renaming scripts that rename the artifacts before uploading them to the release. Android builds get clean names since they're always zero arc by default.
