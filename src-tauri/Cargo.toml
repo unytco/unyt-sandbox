@@ -1,6 +1,6 @@
 [package]
 name = "unyt-tauri"
-version = "0.36.0"
+version = "0.36.4"
 description = "Unyt"
 authors = ["zo-el <joelulahanna@gmail.com>"]
 license = ""
