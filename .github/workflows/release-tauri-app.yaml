@@ -217,58 +217,7 @@ jobs:
           updaterJsonPreferNsis: true
           prerelease: true
           args: ${{ matrix.args }}
-          uploadAssets: false
-
-      - name: Rename and upload artifacts (${{ matrix.arc_mode }} arc)
-        shell: bash
-        run: |
-          # Find built artifacts and rename them properly
-          find src-tauri/target/release/bundle -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.dmg" \) | while read -r file; do
-            filename="$(basename "$file")"
-            dir="$(dirname "$file")"
-
-            base_name="${filename%.*}"
-            extension=".${filename##*.}"
-
-            if [[ "${{ matrix.arc_mode }}" == "default" ]]; then
-              new_name="$filename"
-            else
-              new_name="${base_name}-${{ matrix.arc_mode }}-arc${extension}"
-            fi
-
-            echo "Renaming: $filename -> $new_name"
-            mv "$file" "$dir/$new_name"
-
-            echo "Uploading: $new_name"
-            gh release upload "${{ needs.publish-happ.outputs.releaseId }}" "$dir/$new_name" --repo "${{ github.repository }}"
-          done
-
-          # Handle macOS .app bundles separately (they are directories)
-          find src-tauri/target/release/bundle -name "*.app" -type d | while read -r app_dir; do
-            app_name="$(basename "$app_dir")"
-            dir="$(dirname "$app_dir")"
-
-            base_name="${app_name%.*}"
-            extension=".${app_name##*.}"
-
-            if [[ "${{ matrix.arc_mode }}" == "default" ]]; then
-              new_name="$app_name"
-            else
-              new_name="${base_name}-${{ matrix.arc_mode }}-arc${extension}"
-            fi
-
-            echo "Renaming .app: $app_name -> $new_name"
-            mv "$app_dir" "$dir/$new_name"
-
-            # Create tarball and upload
-            tarball="$dir/$new_name.tar.gz"
-            tar -czf "$tarball" -C "$dir" "$new_name"
-
-            echo "Uploading: $(basename "$tarball")"
-            gh release upload "${{ needs.publish-happ.outputs.releaseId }}" "$tarball" --repo "${{ github.repository }}"
-          done
-        env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          artifactNameSuffix: ${{ matrix.arc_mode == 'default' && '' || format('-{0}-arc', matrix.arc_mode) }}
 
   release-tauri-android-app:
     needs: publish-happ
