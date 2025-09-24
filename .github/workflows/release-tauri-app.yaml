@@ -217,7 +217,7 @@ jobs:
           updaterJsonPreferNsis: true
           prerelease: true
           args: ${{ matrix.args }}
-          assetNamePattern: ${{ matrix.arc_mode == 'default' && 'Unyt_[target]' || format('Unyt-{0}-arc_[target]', matrix.arc_mode) }}
+          assetNamePattern: ${{ matrix.arc_mode == 'default' && '[name]x[version]x[platform]x[arch]x[mode]x[ext]' || format('[name]-{0}-arc-x[version]x[platform]x[arch]x[mode]x[ext]', matrix.arc_mode) }}
 
   release-tauri-android-app:
     needs: publish-happ
