@@ -1,6 +1,6 @@
 {
   "version": "0.36.1",
-  "productName": "Unyt${TAURI_PRODUCT_NAME_SUFFIX}",
+  "productName": "Unyt",
   "identifier": "co.unyt.unyt.sandbox",
   "build": {
     "beforeBuildCommand": "cd ./unyt && make ci-build-ui",

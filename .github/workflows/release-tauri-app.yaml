@@ -208,16 +208,71 @@ jobs:
           VITE_COMMIT_SHA: ${{ steps.version.outputs.APP_VERSION }}
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.arc_factor != 'default' && matrix.arc_factor || '' }}
-          TAURI_PRODUCT_NAME_SUFFIX: ${{ matrix.arc_mode == 'default' && '' || format('-{0}-arc', matrix.arc_mode) }}
           # VITE_APP_NAME: "Circulo"
           # VITE_IS_CIRCULO_RELEASE: "true"
         with:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           releaseDraft: true
-          includeUpdaterJson: true
+          includeUpdaterJson: ${{ matrix.arc_mode == 'default' }}
           updaterJsonPreferNsis: true
           prerelease: true
           args: ${{ matrix.args }}
+          uploadAssets: false
+
+      - name: Rename and upload artifacts (${{ matrix.arc_mode }} arc)
+        shell: bash
+        run: |
+          # Find built artifacts and rename them properly
+          find src-tauri/target/release/bundle -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.dmg" \) | while read -r file; do
+            filename=$(basename "$file")
+            dir=$(dirname "$file")
+            
+            if [[ "${{ matrix.arc_mode }}" == "default" ]]; then
+              # Keep original name for default arc
+              new_name="$filename"
+            else
+              # Add arc mode suffix before extension
+              if [[ "$filename" =~ ^(.+)(\.[^.]+)$ ]]; then
+                base_name="${BASH_REMATCH[1]}"
+                extension="${BASH_REMATCH[2]}"
+                new_name="${base_name}-${{ matrix.arc_mode }}-arc${extension}"
+              else
+                new_name="${filename}-${{ matrix.arc_mode }}-arc"
+              fi
+              
+              # Rename the file
+              mv "$file" "$dir/$new_name"
+            fi
+            
+            echo "Uploading: $new_name"
+            gh release upload ${{ needs.publish-happ.outputs.releaseId }} "$dir/$new_name" --repo ${{ github.repository }}
+          done
+
+          # Handle macOS .app bundles
+          find src-tauri/target/release/bundle -name "*.app" -type d | while read -r app_dir; do
+            app_name=$(basename "$app_dir")
+            dir=$(dirname "$app_dir")
+            
+            if [[ "${{ matrix.arc_mode }}" == "default" ]]; then
+              new_name="$app_name"
+            else
+              if [[ "$app_name" =~ ^(.+)(\.[^.]+)$ ]]; then
+                base_name="${BASH_REMATCH[1]}"
+                extension="${BASH_REMATCH[2]}"
+                new_name="${base_name}-${{ matrix.arc_mode }}-arc${extension}"
+              else
+                new_name="${app_name}-${{ matrix.arc_mode }}-arc"
+              fi
+              mv "$app_dir" "$dir/$new_name"
+            fi
+            
+            # Create tarball and upload
+            tar -czf "$dir/$new_name.tar.gz" -C "$dir" "$new_name"
+            echo "Uploading: $new_name.tar.gz"
+            gh release upload ${{ needs.publish-happ.outputs.releaseId }} "$dir/$new_name.tar.gz" --repo ${{ github.repository }}
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GIT_PAT }}
 
   release-tauri-android-app:
     needs: publish-happ
@@ -287,7 +342,6 @@ jobs:
           VITE_COMMIT_SHA: ${{ steps.version.outputs.APP_VERSION }}
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
           HOLOCHAIN_ARC_FACTOR: "0"
-          TAURI_PRODUCT_NAME_SUFFIX: ""
           # VITE_APP_NAME: "Circulo"
           # VITE_IS_CIRCULO_RELEASE: "true"
         run: |
