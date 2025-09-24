@@ -330,14 +330,33 @@ fn network_config() -> NetworkConfig {
         network_config.bootstrap_url
     );
 
-    // Don't hold any slice of the DHT in mobile
-    if cfg!(mobile) {
-        println!(
-            "[unyt_tauri] network_config: Mobile platform detected, setting target_arc_factor to 0"
-        );
-        network_config.target_arc_factor = 0;
-    } else {
-        println!("[unyt_tauri] network_config: Desktop platform, using default target_arc_factor");
+    // Configure arc factor: only set to 0 for zero arc mode, otherwise use Holochain default
+    match std::env::var("HOLOCHAIN_ARC_FACTOR") {
+        Ok(val) if val == "0" => {
+            println!("[unyt_tauri] network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
+            network_config.target_arc_factor = 0;
+        }
+        Ok(val) => {
+            println!(
+                "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR='{}' - using Holochain default arc factor",
+                val
+            );
+            // Don't set target_arc_factor, let Holochain use its default
+        }
+        Err(_) => {
+            // Default behavior based on platform
+            if cfg!(mobile) {
+                println!(
+                    "[unyt_tauri] network_config: Mobile platform detected, setting target_arc_factor to 0"
+                );
+                network_config.target_arc_factor = 0;
+            } else {
+                println!(
+                    "[unyt_tauri] network_config: Desktop platform detected, using Holochain default arc factor"
+                );
+                // Don't set target_arc_factor, let Holochain use its default
+            }
+        }
     }
 
     println!("[unyt_tauri] network_config: Network configuration created successfully");
