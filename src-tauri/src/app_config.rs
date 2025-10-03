@@ -39,7 +39,7 @@ impl AppConfig {
                 .unwrap_or_else(|| "Unyt".to_string()),
             app_id: format!("{APP_ID_PREFIX}-{}", version.to_string()),
             // app_id: format!("{APP_ID_PREFIX}-{}", DNA_HASH.trim()),
-            network_seed: format!("{}-v0.36", handle.config().identifier),
+            network_seed: format!("{}-iroh", handle.config().identifier),
         }
     }
 }
