@@ -52,6 +52,7 @@ This [Test Plan](./1_0_testing_plan.md) document gives a bit of a overview of th
 [Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_zero-arc_0.39.0_amd64_linux.deb)
 
 </td>
+<!--
  <td width="25%" align="center">
 
 ### **Android**
@@ -63,6 +64,7 @@ This [Test Plan](./1_0_testing_plan.md) document gives a bit of a overview of th
 [AAB Bundle](https://github.com/unytco/unyt-sandbox/releases/download/v0.0.1/app-universal-release.aab)
 
 </td> 
+-->
 </tr>
 </table>
 
