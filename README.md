@@ -25,9 +25,9 @@ This [Test Plan](./1_0_testing_plan.md) document gives a bit of a overview of th
 
 ---
 
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_zero-arc_0.39.0_x64_windows.msi)
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_zero-arc_0.39.0_x64_windows.msi)
 
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_zero-arc_0.39.0_x64_windows.exe)
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_zero-arc_0.39.0_x64_windows.exe)
 
 </td>
 <td width="25%" align="center">
@@ -36,9 +36,9 @@ This [Test Plan](./1_0_testing_plan.md) document gives a bit of a overview of th
 
 ---
 
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_zero-arc_0.39.0_aarch64_darwin)
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_zero-arc_0.39.0_aarch64_darwin)
 
-[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_zero-arc_0.39.0_x64_darwin.dmg)
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_zero-arc_0.39.0_x64_darwin.dmg)
 
 </td>
 <td width="25%" align="center">
@@ -47,18 +47,20 @@ This [Test Plan](./1_0_testing_plan.md) document gives a bit of a overview of th
 
 ---
 
-[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_zero-arc_0.39.0_amd64_linux.AppImage)
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_zero-arc_0.39.0_amd64_linux.AppImage)
 
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_zero-arc_0.39.0_amd64_linux.deb)
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_zero-arc_0.39.0_amd64_linux.deb)
 
 </td>
  <td width="25%" align="center">
 
-**Android**
+### **Android**
 
-[<img src="https://img.shields.io/badge/-Download-green?style=flat-square&logoColor=white" height="35">](https://github.com/unytco/unyt-sandbox/releases/download/v0.0.1/app-universal-release.apk)
+---
 
-Android Universal APK • [AAB Bundle](https://github.com/unytco/unyt-sandbox/releases/download/v0.0.1/app-universal-release.aab)
+[APK](https://github.com/unytco/unyt-sandbox/releases/download/v0.0.1/app-universal-release.apk)
+
+[AAB Bundle](https://github.com/unytco/unyt-sandbox/releases/download/v0.0.1/app-universal-release.aab)
 
 </td> 
 </tr>
@@ -78,9 +80,9 @@ Android Universal APK • [AAB Bundle](https://github.com/unytco/unyt-sandbox/re
 
 ---
 
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_0.39.0_x64_windows.msi)
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_0.39.0_x64_windows.msi)
 
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_0.39.0_x64_windows.exe)
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_0.39.0_x64_windows.exe)
 
 </td>
 <td width="25%" align="center">
@@ -89,9 +91,9 @@ Android Universal APK • [AAB Bundle](https://github.com/unytco/unyt-sandbox/re
 
 ---
 
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_0.39.0_aarch64_darwin)
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_0.39.0_aarch64_darwin)
 
-[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_0.39.0_x64_darwin.dmg)
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_0.39.0_x64_darwin.dmg)
 
 </td>
 <td width="25%" align="center">
@@ -100,9 +102,9 @@ Android Universal APK • [AAB Bundle](https://github.com/unytco/unyt-sandbox/re
 
 ---
 
-[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_0.39.0_amd64_linux.AppImage)
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_0.39.0_amd64_linux.AppImage)
 
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Circulo_0.39.0_amd64_linux.deb)
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.39.0/Unyt_0.39.0_amd64_linux.deb)
 
 </tr>
 </table>
