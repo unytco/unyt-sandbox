@@ -340,6 +340,12 @@ fn network_config() -> NetworkConfig {
         ]
     }));
 
+    network_config.advanced = Some(serde_json::json!({
+        "tx5Transport": {
+            "timeoutS": 30, // defaults to 60
+        }
+    }));
+
     // Configure arc factor: only set to 0 for zero arc mode, otherwise use Holochain default
     println!(
         "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR: {:?}",
