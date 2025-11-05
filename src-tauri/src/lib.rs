@@ -17,57 +17,58 @@ mod menu;
 // #[cfg(mobile)]
 // mod push_notifications;
 
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        println!("[unyt]: {}", format!($($arg)*));
+    };
+}
+
 pub fn happ_bundle() -> AppBundle {
-    println!("[unyt_tauri] Loading happ bundle from workdir/unyt.happ");
+    debug!("Loading happ bundle from workdir/unyt.happ");
     let bytes = include_bytes!("../../workdir/unyt.happ");
-    println!(
-        "[unyt_tauri] Happ bundle bytes loaded, size: {} bytes",
-        bytes.len()
-    );
+    debug!("Happ bundle bytes loaded, size: {} bytes", bytes.len());
     let bundle = AppBundle::unpack(&bytes[..]).expect("Failed to decode unyt happ");
-    println!("[unyt_tauri] Happ bundle decoded successfully");
+    debug!("Happ bundle decoded successfully");
     bundle
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    println!("[unyt_tauri] Starting Tauri application");
+    debug!("Starting Tauri application");
     std::env::set_var("WASM_LOG", "debug");
-    println!("[unyt_tauri] Set WASM_LOG environment variable to debug");
-
-    println!("[unyt_tauri] Building Tauri application with plugins");
+    debug!("Building Tauri application with plugins");
     let mut builder = tauri::Builder::default().plugin(
         tauri_plugin_log::Builder::default()
             .level(log::LevelFilter::Warn)
             .level_for("tracing::span", log::LevelFilter::Off)
             .level_for("iroh", log::LevelFilter::Warn)
-            .level_for("holochain", log::LevelFilter::Error)
-            .level_for("kitsune2", log::LevelFilter::Warn)
-            .level_for("kitsune2_gossip", log::LevelFilter::Warn)
+            .level_for("holochain", log::LevelFilter::Info)
+            .level_for("kitsune2", log::LevelFilter::Info)
+            .level_for("kitsune2_gossip", log::LevelFilter::Info)
             .level_for("kitsune2_transport_iroh", log::LevelFilter::Info)
             .level_for("holochain_runtime", log::LevelFilter::Info)
             .level_for("unyt", log::LevelFilter::Debug)
             .build(),
     );
-    println!("[unyt_tauri] Added logging plugin");
+    debug!("Added logging plugin");
 
     builder = builder
         // .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init());
-    println!("[unyt_tauri] Added notification plugin");
+    debug!("Added notification plugin");
 
     builder = builder.plugin(tauri_plugin_process::init());
-    println!("[unyt_tauri] Added process plugin");
+    debug!("Added process plugin");
 
     builder = builder.plugin(tauri_plugin_dialog::init());
-    println!("[unyt_tauri] Added dialog plugin");
+    debug!("Added dialog plugin");
 
     builder = builder.plugin(tauri_plugin_http::init());
-    println!("[unyt_tauri] Added HTTP plugin");
+    debug!("Added HTTP plugin");
 
     let holochain_dir = holochain_dir();
     let network_config = network_config();
-    println!("[unyt_tauri] Holochain directory: {:?}", holochain_dir);
+    debug!("Holochain directory: {:?}", holochain_dir);
     println!(
         "[unyt_tauri] Network config bootstrap URL: {:?}",
         network_config.bootstrap_url
@@ -77,22 +78,22 @@ pub fn run() {
         vec_to_locked(vec![]),
         HolochainPluginConfig::new(holochain_dir, network_config),
     ));
-    println!("[unyt_tauri] Added holochain plugin with MDNS discovery enabled");
+    debug!("Added holochain plugin with MDNS discovery enabled");
 
     builder = builder.setup(move |app| {
-        println!("[unyt_tauri] Setting up Tauri application");
+        debug!("Setting up Tauri application");
         #[cfg(mobile)]
         {
-            println!("[unyt_tauri] Mobile platform detected, adding mobile-specific plugins");
+            debug!("Mobile platform detected, adding mobile-specific plugins");
             app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
-            println!("[unyt_tauri] Added barcode scanner plugin");
+            debug!("Added barcode scanner plugin");
             app.handle()
                 .plugin(tauri_plugin_safe_area_insets_css::init())?;
-            println!("[unyt_tauri] Added safe area insets CSS plugin");
+            debug!("Added safe area insets CSS plugin");
         }
         #[cfg(not(mobile))]
         {
-            println!("[unyt_tauri] Desktop platform detected, adding desktop-specific plugins");
+            debug!("Desktop platform detected, adding desktop-specific plugins");
             // let h = app.handle();
             // app.handle()
             //     .plugin(tauri_plugin_single_instance::init(move |app, argv, cwd| {
@@ -105,23 +106,23 @@ pub fn run() {
 
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
-            println!("[unyt_tauri] Added updater plugin");
+            debug!("Added updater plugin");
         }
         let handle = app.handle().clone();
-        println!("[unyt_tauri] Setting up holochain setup-completed event listener");
+        debug!("Setting up holochain setup-completed event listener");
 
         app.handle()
             .listen("holochain://setup-completed", move |_event| {
-                println!("[unyt_tauri] Received holochain://setup-completed event");
+                debug!("Received holochain://setup-completed event");
                 let handle2 = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    println!("[unyt_tauri] Starting setup process");
+                    debug!("Starting setup process");
                     if let Err(err) = setup(handle2.clone()).await {
                         println!("[ERROR] Failed to setup: {err:?}");
                         log::error!("Failed to setup: {err:?}");
                         return;
                     }
-                    println!("[unyt_tauri] Setup completed successfully");
+                    debug!("Setup completed successfully");
 
                     // todo
                     // #[cfg(mobile)]
@@ -133,36 +134,36 @@ pub fn run() {
                 });
                 let handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    println!("[unyt_tauri] Opening main window");
+                    debug!("Opening main window");
                     if let Err(err) = open_window(handle.clone()).await {
                         println!("[ERROR] Failed to open window: {err:?}");
                         log::error!("Failed to setup: {err:?}");
                     } else {
-                        println!("[unyt_tauri] Main window opened successfully");
+                        debug!("Main window opened successfully");
                     }
                 });
             });
 
-        println!("[unyt_tauri] Tauri application setup completed");
+        debug!("Tauri application setup completed");
         Ok(())
     });
 
     #[cfg(not(mobile))]
     {
-        println!("[unyt_tauri] Adding desktop menu");
+        debug!("Adding desktop menu");
         builder = builder.menu(|handle| menu::build_menu(handle));
-        println!("[unyt_tauri] Desktop menu added");
+        debug!("Desktop menu added");
     }
 
-    println!("[unyt_tauri] Starting Tauri application run loop");
+    debug!("Starting Tauri application run loop");
     builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-    println!("[unyt_tauri] Tauri application has exited");
+    debug!("Tauri application has exited");
 }
 
 async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
-    println!("[unyt_tauri] open_window: Creating main window");
+    debug!("open_window: Creating main window");
     let app_config = app_config::AppConfig::new(&handle);
     println!(
         "[unyt_tauri] open_window: App config created with app_id: {}",
@@ -173,11 +174,11 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
         .holochain()?
         .main_window_builder(String::from("main"), true, Some(app_config.app_id), None)
         .await?;
-    println!("[unyt_tauri] open_window: Window builder created");
+    debug!("open_window: Window builder created");
 
     #[cfg(not(mobile))]
     {
-        println!("[unyt_tauri] open_window: Configuring desktop window properties");
+        debug!("open_window: Configuring desktop window properties");
         window_builder = window_builder
             .title(app_config.product_name)
             .inner_size(1400.0, 1000.0);
@@ -186,9 +187,9 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
         );
     }
 
-    println!("[unyt_tauri] open_window: Building window");
+    debug!("open_window: Building window");
     let window = window_builder.build()?;
-    println!("[unyt_tauri] open_window: Window built successfully");
+    debug!("open_window: Window built successfully");
     Ok(window)
 }
 
@@ -200,9 +201,9 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 //
 // You can modify this function to suit your needs if they become more complex
 async fn setup(handle: AppHandle) -> anyhow::Result<()> {
-    println!("[unyt_tauri] setup: Starting application setup");
+    debug!("setup: Starting application setup");
     let admin_ws = handle.holochain()?.admin_websocket().await?;
-    println!("[unyt_tauri] setup: Connected to admin websocket");
+    debug!("setup: Connected to admin websocket");
 
     let app_config = AppConfig::new(&handle);
     println!(
@@ -229,7 +230,7 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     );
 
     if !app_is_already_installed {
-        println!("[unyt_tauri] setup: App not installed, checking for previous versions");
+        debug!("setup: App not installed, checking for previous versions");
         let previous_app = installed_apps
             .iter()
             .filter(|app| app.installed_app_id.as_str().starts_with(APP_ID_PREFIX))
@@ -241,7 +242,7 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 prev_app.installed_app_id
             );
         } else {
-            println!("[unyt_tauri] setup: No previous app versions found");
+            debug!("setup: No previous app versions found");
         }
 
         let mut roles_settings: RoleSettingsMap = RoleSettingsMap::new();
@@ -259,7 +260,7 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 }),
             },
         );
-        println!("[unyt_tauri] setup: Role settings configured");
+        debug!("setup: Role settings configured");
 
         if let Some(previous_app) = previous_app {
             println!(
@@ -274,7 +275,7 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 Some(roles_settings),
             )
             .await?;
-            println!("[unyt_tauri] setup: App migration completed");
+            debug!("setup: App migration completed");
 
             println!(
                 "[unyt_tauri] setup: Disabling previous app: {}",
@@ -284,7 +285,7 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 .disable_app(previous_app.installed_app_id.clone())
                 .await
                 .map_err(|err| anyhow!("{err:?}"))?;
-            println!("[unyt_tauri] setup: Previous app disabled");
+            debug!("setup: Previous app disabled");
         } else {
             println!(
                 "[unyt_tauri] setup: Installing new app: {}",
@@ -300,25 +301,25 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                     None,
                 )
                 .await?;
-            println!("[unyt_tauri] setup: New app installed successfully");
+            debug!("setup: New app installed successfully");
         }
 
-        println!("[unyt_tauri] setup: Fresh installation completed");
+        debug!("setup: Fresh installation completed");
         Ok(())
     } else {
-        println!("[unyt_tauri] setup: App already installed, checking for updates");
+        debug!("setup: App already installed, checking for updates");
         handle
             .holochain()?
             .update_app_if_necessary(String::from(app_config.app_id), happ_bundle())
             .await?;
-        println!("[unyt_tauri] setup: App update check completed");
+        debug!("setup: App update check completed");
 
         Ok(())
     }
 }
 
 fn network_config() -> NetworkConfig {
-    println!("[unyt_tauri] network_config: Creating network configuration");
+    debug!("network_config: Creating network configuration");
     let mut network_config = NetworkConfig::default();
 
     // Don't use the bootstrap service on tauri dev mode
@@ -340,11 +341,11 @@ fn network_config() -> NetworkConfig {
         ]
     }));
 
-    network_config.advanced = Some(serde_json::json!({
-        "tx5Transport": {
-            "timeoutS": 30, // defaults to 60
-        }
-    }));
+    // network_config.advanced = Some(serde_json::json!({
+    //     "tx5Transport": {
+    //         "timeoutS": 30, // defaults to 60
+    //     }
+    // }));
 
     // Configure arc factor: only set to 0 for zero arc mode, otherwise use Holochain default
     println!(
@@ -353,7 +354,7 @@ fn network_config() -> NetworkConfig {
     );
     match generated_arc_factor::HOLOCHAIN_ARC_FACTOR {
         "0" => {
-            println!("[unyt_tauri] network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
+            debug!("network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
             network_config.target_arc_factor = 0;
         }
         "" => {
@@ -371,12 +372,12 @@ fn network_config() -> NetworkConfig {
         }
     }
 
-    println!("[unyt_tauri] network_config: Network configuration created successfully");
+    debug!("network_config: Network configuration created successfully");
     network_config
 }
 
 fn holochain_dir() -> PathBuf {
-    println!("[unyt_tauri] holochain_dir: Determining holochain directory path");
+    debug!("holochain_dir: Determining holochain directory path");
     if tauri::is_dev() && cfg!(not(mobile)) {
         println!(
             "[unyt_tauri] holochain_dir: Development mode on desktop, creating temporary directory"
@@ -397,9 +398,9 @@ fn holochain_dir() -> PathBuf {
         );
         tmp_path
     } else {
-        println!("[unyt_tauri] holochain_dir: Production mode or mobile, using app data directory");
+        debug!("holochain_dir: Production mode or mobile, using app data directory");
         let version = get_version();
-        println!("[unyt_tauri] holochain_dir: App version: {}", version);
+        debug!("holochain_dir: App version: {}", version);
 
         let app_root = app_dirs2::app_root(
             app_dirs2::AppDataType::UserData,
@@ -409,7 +410,7 @@ fn holochain_dir() -> PathBuf {
             },
         )
         .expect("Could not get app root");
-        println!("[unyt_tauri] holochain_dir: App root: {:?}", app_root);
+        debug!("holochain_dir: App root: {:?}", app_root);
 
         let holochain_path = app_root.join(version).join("holochain");
         println!(
@@ -422,7 +423,7 @@ fn holochain_dir() -> PathBuf {
 
 fn get_version() -> String {
     let semver = std::env!("CARGO_PKG_VERSION");
-    println!("[unyt_tauri] get_version: Raw semver: {}", semver);
+    debug!("get_version: Raw semver: {}", semver);
 
     if semver.starts_with("0.0.") {
         println!(
