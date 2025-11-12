@@ -206,5 +206,5 @@ async fn get_network_dump<R: tauri::Runtime>(handle: AppHandle<R>) -> anyhow::Re
         .await
         .map_err(|err| anyhow!("Failed to dump network stats: {:?}", err))?;
 
-    Ok(data.transport_stats.backend)
+    Ok(data.backend)
 }

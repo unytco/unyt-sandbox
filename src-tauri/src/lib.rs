@@ -32,24 +32,76 @@ pub fn happ_bundle() -> AppBundle {
     bundle
 }
 
+fn parse_log_level(level: &str) -> Option<log::LevelFilter> {
+    match level.to_lowercase().as_str() {
+        "off" => Some(log::LevelFilter::Off),
+        "error" => Some(log::LevelFilter::Error),
+        "warn" => Some(log::LevelFilter::Warn),
+        "info" => Some(log::LevelFilter::Info),
+        "debug" => Some(log::LevelFilter::Debug),
+        "trace" => Some(log::LevelFilter::Trace),
+        _ => None,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     debug!("Starting Tauri application");
-    std::env::set_var("WASM_LOG", "debug");
+    // check for UNYT_WASM_LOG and set it to debug if it is not set
+    if let Ok(wasm_log) = std::env::var("UNYT_WASM_LOG") {
+        std::env::set_var("WASM_LOG", wasm_log);
+    } else {
+        std::env::set_var("WASM_LOG", "debug");
+    }
     debug!("Building Tauri application with plugins");
-    let mut builder = tauri::Builder::default().plugin(
-        tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Warn)
-            .level_for("tracing::span", log::LevelFilter::Off)
-            .level_for("iroh", log::LevelFilter::Warn)
-            .level_for("holochain", log::LevelFilter::Info)
-            .level_for("kitsune2", log::LevelFilter::Info)
-            .level_for("kitsune2_gossip", log::LevelFilter::Info)
-            .level_for("kitsune2_transport_iroh", log::LevelFilter::Info)
-            .level_for("holochain_runtime", log::LevelFilter::Info)
-            .level_for("unyt", log::LevelFilter::Debug)
-            .build(),
-    );
+
+    // Setup logging with environment variable support
+    let mut log_builder = tauri_plugin_log::Builder::default();
+
+    // Set general log level (default: Warn)
+    let general_level = std::env::var("UNYT_LOG_LEVEL")
+        .ok()
+        .and_then(|level| parse_log_level(&level))
+        .unwrap_or(log::LevelFilter::Warn);
+    log_builder = log_builder.level(general_level);
+    debug!("General log level set to: {:?}", general_level);
+
+    // Default module-specific log levels
+    log_builder = log_builder
+        .level_for("tracing::span", log::LevelFilter::Off)
+        .level_for("iroh", log::LevelFilter::Warn)
+        .level_for("holochain", log::LevelFilter::Info)
+        .level_for("kitsune2", log::LevelFilter::Info)
+        .level_for("kitsune2_gossip", log::LevelFilter::Info)
+        .level_for("kitsune2_api", log::LevelFilter::Debug)
+        .level_for("holochain_runtime", log::LevelFilter::Info)
+        .level_for("unyt", log::LevelFilter::Debug);
+
+    // Override with specific log levels from environment variable
+    if let Ok(specific_logs) = std::env::var("UNYT_SPECIFIC_LOG") {
+        debug!("Applying specific log levels: {}", specific_logs);
+
+        // Parse and collect module-level pairs first
+        let log_configs: Vec<(String, log::LevelFilter)> = specific_logs
+            .split(',')
+            .filter_map(|entry| {
+                let entry = entry.trim();
+                entry.split_once('=').and_then(|(module, level_str)| {
+                    let module = module.trim().to_string();
+                    let level_str = level_str.trim();
+                    parse_log_level(level_str).map(|level| (module, level))
+                })
+            })
+            .collect();
+
+        // Apply the collected configurations
+        for (module, level) in log_configs {
+            debug!("Set log level for '{}' to {:?}", module, level);
+            log_builder = log_builder.level_for(module, level);
+        }
+    }
+
+    let mut builder = tauri::Builder::default().plugin(log_builder.build());
     debug!("Added logging plugin");
 
     builder = builder
