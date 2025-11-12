@@ -135,6 +135,7 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
           fetch-depth: 0
+
       - name: setup node
         uses: actions/setup-node@v1
         with:
@@ -145,11 +146,6 @@ jobs:
         with:
           override: true
           toolchain: 1.88.0
-
-      - name: install Go stable
-        uses: actions/setup-go@v4
-        with:
-          go-version: "stable"
 
       - name: install x86_64 target
         if: matrix.args == '--target x86_64-apple-darwin'
