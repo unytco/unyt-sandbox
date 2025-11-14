@@ -216,8 +216,8 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.arc_factor != 'default' && matrix.arc_factor || '' }}
           # VITE_IS_RIDESHARE_RELEASE: "true"
-          VITE_APP_NAME: "Circulo"
-          VITE_IS_CIRCULO_RELEASE: "true"
+          # VITE_APP_NAME: "Circulo"
+          # VITE_IS_CIRCULO_RELEASE: "true"
         with:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           releaseDraft: true
