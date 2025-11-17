@@ -46,7 +46,7 @@ impl AppConfig {
     }
 }
 
-fn get_version() -> String {
+pub fn get_version() -> String {
     let semver = std::env!("CARGO_PKG_VERSION");
     debug!("get_version: Raw semver: {}", semver);
 

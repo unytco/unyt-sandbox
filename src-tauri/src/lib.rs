@@ -2,7 +2,7 @@ mod app_config;
 mod generated_arc_factor;
 mod utils;
 use anyhow::anyhow;
-pub use app_config::{AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
+pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
 use std::path::PathBuf;
 use tauri::{AppHandle, Listener, WebviewWindow};
 use tauri_plugin_holochain::{
@@ -477,23 +477,4 @@ fn holochain_dir() -> PathBuf {
         );
         holochain_path
     }
-}
-
-fn get_version() -> String {
-    let semver = std::env!("CARGO_PKG_VERSION");
-    debug!("get_version: Raw semver: {}", semver);
-
-    let v: Vec<&str> = semver.split(".").collect();
-    let version = if v.len() >= 2 {
-        format!("{}.{}", v[0], v[1])
-    } else {
-        // Fallback to full version if somehow there's no minor version
-        semver.to_string()
-    };
-
-    println!(
-        "[unyt_tauri] get_version: Returning major.minor version: {}",
-        version
-    );
-    return version;
 }
