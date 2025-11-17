@@ -20,6 +20,7 @@ tauri-build = { version = "2.4.0", default-features = false , features = [] }
 
 [dependencies]
 holochain_client = { version = "0.8.0-dev" }
+holochain_conductor_api = { version = "0.6.0-dev" }
 tauri = { version = "2.8", features = ["devtools"] }
 # tauri-plugin-holochain = { git = "https://github.com/darksoil-studio/tauri-plugin-holochain", branch = "main-0.6", default-features = false, features = ["sqlite"] }
 tauri-plugin-holochain = { git = "https://github.com/zo-el/tauri-plugin-holochain/", branch = "main-0.6-go-pion", default-features = false, features = ["sqlite"] }

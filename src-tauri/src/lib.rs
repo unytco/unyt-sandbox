@@ -3,6 +3,7 @@ mod generated_arc_factor;
 mod utils;
 use anyhow::anyhow;
 pub use app_config::{AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
+use holochain_conductor_api::config::conductor::ReportConfig;
 use std::path::PathBuf;
 use tauri::{AppHandle, Listener, WebviewWindow};
 use tauri_plugin_holochain::{
@@ -392,6 +393,12 @@ fn network_config() -> NetworkConfig {
             { "urls": ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"]}
         ]
     }));
+
+    // enable reporting
+    network_config.report = ReportConfig::JsonLines {
+        days_retained: 30,
+        fetched_op_interval_s: 60,
+    };
 
     // network_config.advanced = Some(serde_json::json!({
     //     "tx5Transport": {
