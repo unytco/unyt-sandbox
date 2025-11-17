@@ -3,12 +3,11 @@ mod generated_arc_factor;
 mod utils;
 use anyhow::anyhow;
 pub use app_config::{AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
-use holochain_conductor_api::config::conductor::ReportConfig;
 use std::path::PathBuf;
 use tauri::{AppHandle, Listener, WebviewWindow};
 use tauri_plugin_holochain::{
     vec_to_locked, AppBundle, AppStatusFilter, DnaModifiersOpt, HolochainExt,
-    HolochainPluginConfig, NetworkConfig, RoleSettings, RoleSettingsMap,
+    HolochainPluginConfig, NetworkConfig, ReportConfig, RoleSettings, RoleSettingsMap,
 };
 pub use utils::migrate_app;
 
