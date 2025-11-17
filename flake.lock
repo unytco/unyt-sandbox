@@ -978,16 +978,16 @@
         "webkitnixpkgs": "webkitnixpkgs_2"
       },
       "locked": {
-        "lastModified": 1763394905,
-        "narHash": "sha256-UtfJEIDUau+hg6aU40/BztSk96IogaDYZJHdC13j8jw=",
+        "lastModified": 1763402863,
+        "narHash": "sha256-87Pkp/GHi5PIjE4L9/JvET3AkLXWegbXJUa30c0yraQ=",
         "owner": "zo-el",
         "repo": "tauri-plugin-holochain",
-        "rev": "ff22bd060e99154ccf1fbe3f946ccf85acb60fd6",
+        "rev": "d3bbc15eb59157b73e941210a2d46624bbbe76ab",
         "type": "github"
       },
       "original": {
         "owner": "zo-el",
-        "ref": "main-0.6-go-pion",
+        "ref": "main-0.6-go-pion-patch",
         "repo": "tauri-plugin-holochain",
         "type": "github"
       }
