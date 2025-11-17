@@ -483,27 +483,16 @@ fn get_version() -> String {
     let semver = std::env!("CARGO_PKG_VERSION");
     debug!("get_version: Raw semver: {}", semver);
 
-    if semver.starts_with("0.0.") {
-        println!(
-            "[unyt_tauri] get_version: Version starts with 0.0., returning full version: {}",
-            semver
-        );
-        return semver.to_string();
-    }
-
-    if semver.starts_with("0.") {
-        let v: Vec<&str> = semver.split(".").collect();
-        let version = format!("{}.{}", v[0], v[1]);
-        println!(
-            "[unyt_tauri] get_version: Version starts with 0., returning major.minor: {}",
-            version
-        );
-        return version;
-    }
     let v: Vec<&str> = semver.split(".").collect();
-    let version = format!("{}", v[0]);
+    let version = if v.len() >= 2 {
+        format!("{}.{}", v[0], v[1])
+    } else {
+        // Fallback to full version if somehow there's no minor version
+        semver.to_string()
+    };
+
     println!(
-        "[unyt_tauri] get_version: Returning major version only: {}",
+        "[unyt_tauri] get_version: Returning major.minor version: {}",
         version
     );
     return version;
