@@ -3,6 +3,59 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47.0]
+
+### Added
+
+- DNA: New function "get_history" provides paginated history retrieval from source chain using sequence ranges [#257](https://github.com/unytco/unyt-app/pull/257)
+- DNA: Add get_actionable_transaction and get_completed_transaction
+- UI: Network diagram connects contacts to network members visually
+- UI: Add Moss compatibility and allow sending and receiving transaction using Moss creatables, and agreement interaction as an asset
+- UI: Prototype tool wizard for setting global configuration [#258](https://github.com/unytco/unyt-app/pull/258)
+- UI: Frontend pagination capacity for history view [#257](https://github.com/unytco/unyt-app/pull/257)
+- UI: Validation receipts progress bar with copy functionality [#257](https://github.com/unytco/unyt-app/pull/257)
+- Moss integration: Added dev moss support, tool-list definition, and weave-tool-curation files [#254](https://github.com/unytco/unyt-app/pull/254)
+- DNA: Added UnytTypes system to UnytDefinitions with five distinct unit types for different validation and accounting behaviors [#258](https://github.com/unytco/unyt-app/pull/258)
+  - **Speculative**: Normal fungible monetary units with variable precision and credit limits; can bridge to external fungible units (has `is_external` flag)
+  - **Tradable**: Embodied units with variable precision and credit limits; supports subtypes and can bridge to inventory systems
+  - **Scaled**: Measurable units (like inches, meters, kilograms) with variable precision but NO credit limits; numbers are transmitted, not transferred
+  - **Rated**: Units with a value range (min/max) and summary function for state aggregation
+  - **Relational**: Units that map values to dictionary entries for categorical data
+  - Unit definition type cannot be changed after creation
+  - Type-specific validation on spends and spend links:
+    - Precision validation: ensures amount precision matches unit definition precision
+    - Credit limit checks: Speculative and Tradable types require credit limits; Scaled, Rated, and Relational do not
+    - Type-specific summarization: each type has custom `summarize_for_accept` and `summarize_for_spend` methods
+    - Precision correction: automatic precision adjustment based on unit type
+  - carry forward ledger stores summary based on the unyt type
+- DNA: get_history returns created parked links [#263](https://github.com/unytco/unyt-app/pull/263)
+
+### Updated
+
+- UI: Check for existing agent before adding to contacts or using in agent select
+- UI: Add status card to transaction modal
+- UI: Sort and prioritize zome call queue, enforce connection calls priority [#257](https://github.com/unytco/unyt-app/pull/257)
+- UI: Complete data sets in chunks of five
+- UI: Verify each actionable transaction prior to allowing action
+- UI: Disambiguate checkconnection in status component [#257](https://github.com/unytco/unyt-app/pull/257)
+- UI: Improved history pagination with better chunking and boundary handling [#257](https://github.com/unytco/unyt-app/pull/257)
+- UI: Added end of history message when pagination reaches the end [#253](https://github.com/unytco/unyt-app/pull/253)
+- UI: Removed optional pagination parameter, pagination is now required [#257](https://github.com/unytco/unyt-app/pull/257)
+- UI: Make warning alert yellow for better visibility [#257](https://github.com/unytco/unyt-app/pull/257)
+- UI: Fix getCopy keys in lane wizard [#257](https://github.com/unytco/unyt-app/pull/257)
+- DNA: Agent check is removed from the validation and an API check_agent_exists can be used by UI [#248](https://github.com/unytco/unyt-app/pull/248)
+- updated credit limit agreement and holo hosting agreement
+- DNA: Updated repo to holochain `v0.6.0` [#255](https://github.com/unytco/unyt-app/pull/255)
+- DNA: Ability to reference multiple lanes for credit adjustments [#258](https://github.com/unytco/unyt-app/pull/258)
+- DNA: Breaking change: removed the `definition` in rave to be global_def or lane_def
+- DNA: Breaking change: Zome call APIs now require `lane_definitions` and/or `global_definition` parameters for multi-unit transactions [#258](https://github.com/unytco/unyt-app/pull/258)
+  - `create_spend`: Now requires optional `lane_definitions: Vec<ActionHash>` parameter (defaults to empty vec)
+  - `accept_transaction`: Now requires optional `lane_definitions: Vec<ActionHash>` parameter (defaults to empty vec)
+  - `create_parked_spend`: Now requires optional `lane_definitions: Vec<ActionHash>` parameter (defaults to empty vec)
+  - `accept_paying_parked_invoice`: Now requires optional `lane_definitions: Vec<ActionHash>` parameter (defaults to empty vec)
+  - `execute_rave`: Now requires `global_definition: ActionHash` (required) and optional `lane_definitions: Vec<ActionHash>` (defaults to empty vec)
+  - Internal structs updated: `Spend`, `RAVE`, and `ParkedSpendTag` now store `global_definition` and `lane_definitions` for proper unit type validation
+
 ## [0.46.0]
 
 ### Updated
@@ -28,9 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - DocDefs are immutable (cannot be updated after creation)
   - DocDef-to-DataBlob links cannot be deleted (ensures data integrity)
   - New LinkTypes: `PathToDocDef`, `DocDefToDataBlob`
+- UI: handles execution error by suggesting a possible options to interact as an other role
 
 ### Updated
 
+- UI: Check for existing agent before adding to contacts or using in agent select
+- UI: Add status card to transaction modal
+- UI: Prioritize zome call queue
+- UI: Complete data sets in chunks of five
+- UI: Verify each actionable transaction prior to allowing action
 - DNA: Struct changes [#239](https://github.com/unytco/unyt-app/pull/239)
   - GlobalDef refactored to use LaneDefinition as lane_def
   - LaneDef service_units changed from Vec<UnitIndex> to UnitIndexMap (BTreeMap<u8, ActionHash>)
@@ -48,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ServiceNetwork to Lane [#240](https://github.com/unytco/unyt-app/pull/240)
   - update_global_units to update_unit_def [#240](https://github.com/unytco/unyt-app/pull/240)
 - DNA: Security review feedback: import rave_engine to coordinator from the integrity zome [#240](https://github.com/unytco/unyt-app/pull/240)
-- DNA: Agent check is removed from the validation and an API check_agent_exist can be used by UI [#248](https://github.com/unytco/unyt-app/pull/248)
+- DNA: Agent check is removed from the validation and an API check_agent_exists can be used by UI [#248](https://github.com/unytco/unyt-app/pull/248)
 
 ## [0.44.0]
 
