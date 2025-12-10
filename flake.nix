@@ -10,7 +10,7 @@
     crane.follows = "holonix/crane";
 
     flake-parts.follows = "holonix/flake-parts";
-    playground.url = "github:darksoil-studio/holochain-playground?ref=main-0.5";
+    # playground.url = "github:darksoil-studio/holochain-playground?ref=main-0.5";
   };
 
   outputs = inputs@{ flake-parts, ... }: flake-parts.lib.mkFlake { inherit inputs; } {
@@ -34,7 +34,7 @@
         packages = (with pkgs; [
           nodejs_20
           binaryen
-          inputs'.playground.packages.hc-playground
+          # inputs'.playground.packages.hc-playground
           yarn
           go_1_24
           
@@ -51,7 +51,7 @@
         packages = (with pkgs; [
           nodejs_20
           binaryen
-          inputs'.playground.packages.hc-playground
+          # inputs'.playground.packages.hc-playground
           yarn
           go_1_24
           
