@@ -5232,17 +5232,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "migration_zome_trait"
-version = "0.1.0"
-source = "git+https://github.com/darksoil-studio/migration-zome-trait?branch=main-0.6#bf0f4cab33b419951af006a106b51d37c34a3796"
-dependencies = [
- "hc_zome_traits",
- "hdk 0.6.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "holochain_serialized_bytes",
- "serde",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10188,7 +10177,6 @@ dependencies = [
  "jni",
  "libc",
  "log",
- "migration_zome_trait",
  "ndk-context",
  "ndk-sys",
  "notifications_zome_trait",
