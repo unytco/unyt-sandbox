@@ -26,8 +26,8 @@ holochain_client = { git = "https://github.com/holochain/holochain", branch = "c
 tauri-plugin-holochain = { git = "https://github.com/zo-el/tauri-plugin-holochain/", branch = "main-0.6-go-pion-patch", default-features = false, features = ["sqlite"] }
 
 # service_providers_utils = { git = "https://github.com/darksoil-studio/service-providers", branch = "main-0.6" }
-push_notifications_service_trait = { git = "https://github.com/darksoil-studio/push-notifications-service", branch = "main-0.6" }
-notifications_zome_trait = { git = "https://github.com/darksoil-studio/notifications-zome-trait", branch = "main-0.6" }
+# push_notifications_service_trait = { git = "https://github.com/darksoil-studio/push-notifications-service", branch = "main-0.6" }
+# notifications_zome_trait = { git = "https://github.com/darksoil-studio/notifications-zome-trait", branch = "main-0.6" }
 # profiles_provider_zome_trait = { git = "https://github.com/darksoil-studio/profiles-zome", branch = "main-0.6" }
 # migration_zome_trait = { git = "https://github.com/darksoil-studio/migration-zome-trait", branch = "main-0.6" }
 
