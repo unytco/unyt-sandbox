@@ -1,6 +1,24 @@
 install:
-	( [ -d  node_modules ] || yarn install )
-	cd unyt && ( [ -d  node_modules ] || yarn install )
+	@if [ -d node_modules ]; then \
+		echo "node_modules already exists, skipping install"; \
+	else \
+		if [ -n "$$CI" ] && [ -z "$$BUILD_WEAVE_CLI" ]; then \
+			echo "CI detected and BUILD_WEAVE_CLI not set, skipping postinstall scripts"; \
+			yarn install --ignore-scripts; \
+		else \
+			yarn install; \
+		fi \
+	fi
+	@cd unyt && if [ -d node_modules ]; then \
+		echo "node_modules already exists, skipping install"; \
+	else \
+		if [ -n "$$CI" ] && [ -z "$$BUILD_WEAVE_CLI" ]; then \
+			echo "CI detected and BUILD_WEAVE_CLI not set, skipping postinstall scripts"; \
+			yarn install --ignore-scripts; \
+		else \
+			yarn install; \
+		fi \
+	fi
 
 setup: 
 	git submodule update --init
