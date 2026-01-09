@@ -1,5 +1,7 @@
 mod app_config;
 mod generated_arc_factor;
+mod runtime;
+mod unyt;
 mod utils;
 use anyhow::anyhow;
 pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
@@ -25,7 +27,7 @@ macro_rules! debug {
 
 pub fn happ_bundle() -> AppBundle {
     debug!("Loading happ bundle from workdir/unyt.happ");
-    let bytes = include_bytes!("../../workdir/unyt.happ");
+    let bytes = include_bytes!("../../unyt/workdir/unyt.happ");
     debug!("Happ bundle bytes loaded, size: {} bytes", bytes.len());
     let bundle = AppBundle::unpack(&bytes[..]).expect("Failed to decode unyt happ");
     debug!("Happ bundle decoded successfully");
@@ -101,8 +103,10 @@ pub fn run() {
         }
     }
 
-    let mut builder = tauri::Builder::default().plugin(log_builder.build());
-    debug!("Added logging plugin");
+    let mut builder = tauri::Builder::default()
+        .plugin(log_builder.build())
+        .invoke_handler(tauri::generate_handler![runtime::get_runtime_status]);
+    debug!("Added logging plugin and runtime commands");
 
     builder = builder
         // .plugin(tauri_plugin_deep_link::init())
@@ -133,6 +137,7 @@ pub fn run() {
     debug!("Added holochain plugin with MDNS discovery enabled");
 
     builder = builder.setup(move |app| {
+        runtime::init(app.handle())?;
         debug!("Setting up Tauri application");
         #[cfg(mobile)]
         {
@@ -252,9 +257,16 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 //     and do so if it is
 //
 // You can modify this function to suit your needs if they become more complex
+use crate::runtime::state::{EnvRuntimeStatus, EnvStatusManager};
+use std::sync::Arc;
+
 async fn setup(handle: AppHandle) -> anyhow::Result<()> {
+    let state_manager = handle.state::<Arc<EnvStatusManager>>();
+    state_manager.update_status(EnvRuntimeStatus::ConductorStarting);
+
     debug!("setup: Starting application setup");
     let admin_ws = handle.holochain()?.admin_websocket().await?;
+    state_manager.update_status(EnvRuntimeStatus::AppInstalling);
     debug!("setup: Connected to admin websocket");
 
     let app_config = AppConfig::new(&handle);
@@ -365,9 +377,12 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
             .update_app_if_necessary(String::from(app_config.app_id), happ_bundle())
             .await?;
         debug!("setup: App update check completed");
-
-        Ok(())
     }
+
+    unyt::init(&handle)?;
+    state_manager.update_status(EnvRuntimeStatus::Networking { peer_count: 0 });
+
+    Ok(())
 }
 
 fn network_config() -> NetworkConfig {

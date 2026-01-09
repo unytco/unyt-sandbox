@@ -45,6 +45,8 @@ tauri-plugin-deep-link = "2"
 opener = { version = "0.7", features = ["reveal"] }
 log = "0.4"
 tauri-plugin-log = "2.0.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url2 = "0.0.6"
 app_dirs2 = "2.5.5"
 tempdir = "0.3.7"
