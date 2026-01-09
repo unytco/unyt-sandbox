@@ -105,7 +105,10 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .plugin(log_builder.build())
-        .invoke_handler(tauri::generate_handler![runtime::get_runtime_status]);
+        .invoke_handler(tauri::generate_handler![
+            runtime::get_runtime_status,
+            runtime::accept_progenitor_role
+        ]);
     debug!("Added logging plugin and runtime commands");
 
     builder = builder
@@ -175,8 +178,12 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     debug!("Starting setup process");
                     if let Err(err) = setup(handle2.clone()).await {
-                        println!("[ERROR] Failed to setup: {err:?}");
-                        log::error!("Failed to setup: {err:?}");
+                        let error_msg = format!("Failed to setup: {err:?}");
+                        println!("[ERROR] {error_msg}");
+                        log::error!("{error_msg}");
+
+                        let state_manager = handle2.state::<Arc<EnvStatusManager>>();
+                        state_manager.update_status(EnvRuntimeStatus::Error(error_msg));
                         return;
                     }
                     debug!("Setup completed successfully");
@@ -193,8 +200,12 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     debug!("Opening main window");
                     if let Err(err) = open_window(handle.clone()).await {
-                        println!("[ERROR] Failed to open window: {err:?}");
-                        log::error!("Failed to setup: {err:?}");
+                        let error_msg = format!("Failed to open window: {err:?}");
+                        println!("[ERROR] {error_msg}");
+                        log::error!("{error_msg}");
+
+                        let state_manager = handle.state::<Arc<EnvStatusManager>>();
+                        state_manager.update_status(EnvRuntimeStatus::Error(error_msg));
                     } else {
                         debug!("Main window opened successfully");
                     }
@@ -367,9 +378,7 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 .await?;
             debug!("setup: New app installed successfully");
         }
-
         debug!("setup: Fresh installation completed");
-        Ok(())
     } else {
         debug!("setup: App already installed, checking for updates");
         handle

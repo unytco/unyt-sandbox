@@ -11,7 +11,12 @@ pub enum EnvRuntimeStatus {
     ConductorStarting,
     AppInstalling,
     Networking { peer_count: usize },
-    Syncing { progress: f32, message: String },
+    Syncing {
+        step: u8,
+        total_steps: u8,
+        message: String,
+    },
+    ProgenitorPrompt,
     Ready,
     Error(String),
 }
