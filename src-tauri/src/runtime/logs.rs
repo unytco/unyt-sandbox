@@ -3,7 +3,7 @@ use std::io;
 use tauri::{AppHandle, Emitter};
 use tracing::Subscriber;
 use tracing_subscriber::layer::Context;
-use tracing_subscriber::{fmt, Layer};
+use tracing_subscriber::Layer;
 
 #[derive(Clone, Serialize)]
 pub struct TauriLogPayload {
@@ -22,18 +22,14 @@ where
     S: Subscriber,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        let mut message = String::new();
-        let mut visitor = fmt::format::DefaultVisitor::new(io::Cursor::new(Vec::new()), true);
-
         let level = event.metadata().level().to_string();
         let target = event.metadata().target().to_string();
 
-        // Quick pass at extracting the message
-        // In prod, we may want to use a more robust formatter.
+        // Extraction of the message
         let log_info = format!("[{}] {}: {:?}", level, target, event);
 
         let _ = self.app_handle.emit(
-            "runtime://raw-log",
+            "runtime://env-log",
             TauriLogPayload {
                 message: log_info,
                 level,

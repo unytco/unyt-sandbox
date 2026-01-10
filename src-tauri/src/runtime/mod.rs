@@ -3,7 +3,7 @@ pub mod status;
 
 use self::status::{EnvRuntimeStatus, EnvStatusManager};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::AppHandle;
 
 /// Initializes the modular runtime components
 pub fn init(handle: &AppHandle) -> anyhow::Result<()> {

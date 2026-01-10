@@ -6,7 +6,7 @@ mod utils;
 use anyhow::anyhow;
 pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
 use std::path::PathBuf;
-use tauri::{AppHandle, Listener, WebviewWindow};
+use tauri::{AppHandle, Listener, WebviewWindow, Manager};
 use tauri_plugin_holochain::{
     vec_to_locked, AppBundle, AppStatusFilter, DnaModifiersOpt, HolochainExt,
     HolochainPluginConfig, NetworkConfig, ReportConfig, RoleSettings, RoleSettingsMap,
@@ -268,7 +268,7 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 //     and do so if it is
 //
 // You can modify this function to suit your needs if they become more complex
-use crate::runtime::state::{EnvRuntimeStatus, EnvStatusManager};
+use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use std::sync::Arc;
 
 async fn setup(handle: AppHandle) -> anyhow::Result<()> {

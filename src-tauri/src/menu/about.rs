@@ -206,5 +206,5 @@ async fn get_network_dump<R: tauri::Runtime>(handle: AppHandle<R>) -> anyhow::Re
         .await
         .map_err(|err| anyhow!("Failed to dump network stats: {:?}", err))?;
 
-    Ok(data.backend)
+    Ok(serde_json::to_string_pretty(&data).unwrap_or_else(|_| "Unable to serialize network stats".to_string()))
 }
