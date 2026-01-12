@@ -5,10 +5,9 @@ mod utils;
 use anyhow::anyhow;
 pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
 use std::sync::Arc;
-use tauri::{AppHandle, Listener, WebviewWindow, Manager};
+use tauri::{AppHandle, Listener, Manager, WebviewWindow};
 use tauri_plugin_holochain::{
-    AppBundle, AppStatusFilter, DnaModifiersOpt, HolochainExt,
-    RoleSettings, RoleSettingsMap,
+    AppBundle, AppStatusFilter, DnaModifiersOpt, HolochainExt, RoleSettings, RoleSettingsMap,
 };
 pub use utils::migrate_app;
 
@@ -44,16 +43,15 @@ pub fn run() {
     }
     debug!("Building Tauri application with plugins");
 
-    let mut builder = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            runtime::get_runtime_status,
-            runtime::update_runtime_status,
-            runtime::boot::is_authorized_progenitor,
-            runtime::boot::accept_progenitor_role,
-            runtime::close_splashscreen,
-            runtime::show_logs,
-            runtime::boot::unlock_lair
-        ]);
+    let mut builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![
+        runtime::get_runtime_status,
+        runtime::update_runtime_status,
+        runtime::boot::is_authorized_progenitor,
+        runtime::boot::accept_progenitor_role,
+        runtime::close_splashscreen,
+        runtime::show_logs,
+        runtime::boot::unlock_lair
+    ]);
     debug!("Added logging plugin and runtime commands");
 
     builder = builder
@@ -79,9 +77,11 @@ pub fn run() {
 
         let handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
-            // Initial attempt to unlock lair with no password
+            // Initial attempt to unlock lair with no password...
+            // If this attempt fails, the UI will eventually call `unlock_lair`` again with a password.
+            // Upon success, the `holochain://setup-completed`` listener below will trigger the remaining setup.
             if let Err(e) = runtime::boot::unlock_lair(handle.clone(), None).await {
-                debug!("Initial lair unlock failed (likely needs password): {}", e);
+                debug!("Lair is locked or awaiting initial password: {}", e);
             }
         });
 
@@ -337,6 +337,6 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
         tracing::info!(target: "unyt::network", "System backend initialization complete. Handing over to Unyt App.");
         status_manager.update_status(runtime::status::EnvRuntimeStatus::Ready);
     }
-    
+
     Ok(())
 }

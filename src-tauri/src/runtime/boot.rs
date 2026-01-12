@@ -21,7 +21,9 @@ pub struct AllianceDnaProps {
 // (Relocated from mod.rs to boot.rs to avoid circular dependencies)
 pub fn holochain_dir() -> PathBuf {
     debug!("holochain_dir: Determining holochain directory path");
-    if tauri::is_dev() && cfg!(not(mobile)) {
+    let use_persistent_dev = std::env::var("UNYT_PERSISTENT_DEV").is_ok();
+
+    if tauri::is_dev() && cfg!(not(mobile)) && !use_persistent_dev {
         println!(
             "[unyt_tauri] holochain_dir: Development mode on desktop, creating temporary directory"
         );
@@ -40,7 +42,7 @@ pub fn holochain_dir() -> PathBuf {
         );
         tmp_path
     } else {
-        debug!("holochain_dir: Production mode (or dev mobile), using app data directory");
+        debug!("holochain_dir: Production mode, using app data directory for persisted storage");
         let version = get_version();
         debug!("holochain_dir: App version: {}", version);
 
@@ -135,14 +137,26 @@ pub async fn unlock_lair(
     password: Option<String>,
 ) -> std::result::Result<(), String> {
     let status_manager = app_handle.state::<Arc<EnvStatusManager>>();
-    status_manager.update_status(EnvRuntimeStatus::LairReady);
+
+    let holochain_dir = holochain_dir();
+    let is_initial_setup = !holochain_dir.exists() || !holochain_dir.join("keystore").exists();
+
+    // If this is the initial env setup attempt and the bypass flag is not set,
+    // trigger the lair pw prompt...
+    if password.is_none() && std::env::var("UNYT_BYPASS_PASSWORD").is_err() {
+        debug!(
+            "unlock_lair: Defaulting to password prompt (initial_setup={}). Use UNYT_BYPASS_PASSWORD to skip.",
+            is_initial_setup
+        );
+        status_manager.update_status(EnvRuntimeStatus::LairAwaitingPassword { is_initial_setup });
+        return Err("Password required (default mode)".to_string());
+    }
 
     let passphrase = match password {
         Some(p) => vec_to_locked(p.as_bytes().to_vec()),
         None => vec_to_locked(vec![]),
     };
 
-    let holochain_dir = holochain_dir();
     let network_config = network_config();
     let config = HolochainPluginConfig::new(holochain_dir, network_config).enable_mdns_discovery();
     tracing::info!(target: "unyt::runtime", "Added holochain plugin with MDNS discovery enabled");
@@ -154,13 +168,20 @@ pub async fn unlock_lair(
                 holochain_runtime,
             };
             app_handle.manage(p);
+            status_manager.update_status(EnvRuntimeStatus::LairReady);
             let _ = app_handle.emit("holochain://setup-completed", ());
             Ok(())
         }
         Err(e) => {
             let err_msg = format!("{:?}", e);
-            if err_msg.contains("LairError") || err_msg.contains("passphrase") {
-                status_manager.update_status(EnvRuntimeStatus::LairAwaitingPassword);
+            // Detect Lair password requirements or incorrect password
+            if err_msg.contains("LairError")
+                || err_msg.contains("passphrase")
+                || err_msg.contains("Inaccessible")
+            {
+                status_manager.update_status(EnvRuntimeStatus::LairAwaitingPassword {
+                    is_initial_setup,
+                });
                 Err("Password required or incorrect".to_string())
             } else {
                 status_manager.update_status(EnvRuntimeStatus::Error(err_msg.clone()));

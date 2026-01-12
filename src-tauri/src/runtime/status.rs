@@ -6,7 +6,9 @@ use tauri::{AppHandle, Emitter, Manager};
 #[serde(tag = "status", content = "data")]
 pub enum EnvRuntimeStatus {
     Starting,
-    LairAwaitingPassword,
+    LairAwaitingPassword {
+        is_initial_setup: bool,
+    },
     LairReady,
     ConductorStarting,
     AppInstalling,
