@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "network:tauri": "concurrently \"cd unyt && yarn network:tauri\" \"yarn launch\"",
-    "launch": "concurrently \"yarn tauri dev --no-watch\" \"yarn tauri dev --no-watch\"",
+    "launch": "yarn tauri dev --no-watch",
     "launch:android": "yarn tauri android dev",
     "tauri": "tauri"
   },

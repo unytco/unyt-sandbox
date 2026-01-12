@@ -3402,7 +3402,7 @@ dependencies = [
 [[package]]
 name = "holochain_runtime"
 version = "0.1.0"
-source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6-go-pion-patch#829410c58ad0d52a515f7d4528446b73e147c186"
+source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6-go-pion-patch#4930baa247840382c4bb05c7d965c3fcdec2c81b"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -4507,7 +4507,7 @@ dependencies = [
 [[package]]
 name = "kitsune_p2p_mdns"
 version = "0.4.4"
-source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6-go-pion-patch#829410c58ad0d52a515f7d4528446b73e147c186"
+source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6-go-pion-patch#4930baa247840382c4bb05c7d965c3fcdec2c81b"
 dependencies = [
  "base64 0.22.1",
  "libmdns",
@@ -6469,7 +6469,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -8700,7 +8700,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-holochain"
 version = "0.0.0"
-source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6-go-pion-patch#829410c58ad0d52a515f7d4528446b73e147c186"
+source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6-go-pion-patch#4930baa247840382c4bb05c7d965c3fcdec2c81b"
 dependencies = [
  "anyhow",
  "bzip2",
@@ -9564,7 +9564,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.4",
  "static_assertions",
 ]
 
