@@ -20,10 +20,10 @@
       # packages.rust = inputs.holonix.packages.${system}.rust;
 
       # Custom rust version
-      # packages.rust = let
-      #   overlays = [ (import inputs.rust-overlay) ];
-      #   pkgs = import inputs.nixpkgs { inherit system overlays; };
-      # in pkgs.rust-bin.stable."1.88.0".minimal;
+      packages.rust = let
+        overlays = [ (import inputs.rust-overlay) ];
+        pkgs = import inputs.nixpkgs { inherit system overlays; };
+      in pkgs.rust-bin.stable."1.88.0".minimal;
 
       formatter = pkgs.nixpkgs-fmt;
 
@@ -37,11 +37,15 @@
           # inputs'.playground.packages.hc-playground
           yarn
           go_1_24
-          
+          fuse
+          zlib
+          inputs.self.packages.${system}.rust
         ]);
 
         shellHook = ''
           export PS1='\[\033[1;34m\][holonix:\w]\$\[\033[0m\] '
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc pkgs.zlib pkgs.fuse ]}:$LD_LIBRARY_PATH"
         '';
       };
       devShells.androidDev = pkgs.mkShell {
@@ -54,11 +58,15 @@
           # inputs'.playground.packages.hc-playground
           yarn
           go_1_24
-          
+          fuse
+          zlib
+          inputs.self.packages.${system}.rust
         ]);
 
         shellHook = ''
           export PS1='\[\033[1;34m\][holonix:\w]\$\[\033[0m\] '
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc pkgs.zlib pkgs.fuse ]}:$LD_LIBRARY_PATH"
         '';
       };
     };

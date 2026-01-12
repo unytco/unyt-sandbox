@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "splashscreen-capability",
+  "description": "Capability for the splashscreen window",
+  "windows": ["splashscreen", "logs"],
+    "permissions": [
+      "core:default",
+      "core:event:default",
+      "core:window:default",
+      "core:path:default",
+      "core:app:default",
+      "core:resources:default",
+      "core:window:allow-close",
+      "core:window:allow-show",
+      "core:window:allow-set-focus",
+      "core:window:allow-get-all-windows"
+    ]
+}

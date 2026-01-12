@@ -3,7 +3,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 mod about;
 
-use crate::holochain_dir;
+use crate::runtime::boot::holochain_dir;
 
 pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     app_handle.on_menu_event(|app_handle, menu_event| match menu_event.id().as_ref() {

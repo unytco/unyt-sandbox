@@ -1,15 +1,14 @@
 mod app_config;
-mod generated_arc_factor;
+mod holochain_consts;
 mod runtime;
-mod unyt;
 mod utils;
 use anyhow::anyhow;
 pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
-use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::{AppHandle, Listener, WebviewWindow, Manager};
 use tauri_plugin_holochain::{
-    vec_to_locked, AppBundle, AppStatusFilter, DnaModifiersOpt, HolochainExt,
-    HolochainPluginConfig, NetworkConfig, ReportConfig, RoleSettings, RoleSettingsMap,
+    AppBundle, AppStatusFilter, DnaModifiersOpt, HolochainExt,
+    RoleSettings, RoleSettingsMap,
 };
 pub use utils::migrate_app;
 
@@ -34,18 +33,6 @@ pub fn happ_bundle() -> AppBundle {
     bundle
 }
 
-fn parse_log_level(level: &str) -> Option<log::LevelFilter> {
-    match level.to_lowercase().as_str() {
-        "off" => Some(log::LevelFilter::Off),
-        "error" => Some(log::LevelFilter::Error),
-        "warn" => Some(log::LevelFilter::Warn),
-        "info" => Some(log::LevelFilter::Info),
-        "debug" => Some(log::LevelFilter::Debug),
-        "trace" => Some(log::LevelFilter::Trace),
-        _ => None,
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     debug!("Starting Tauri application");
@@ -57,57 +44,15 @@ pub fn run() {
     }
     debug!("Building Tauri application with plugins");
 
-    // Setup logging with environment variable support
-    let mut log_builder = tauri_plugin_log::Builder::default();
-
-    // Set general log level (default: Warn)
-    let general_level = std::env::var("UNYT_LOG_LEVEL")
-        .ok()
-        .and_then(|level| parse_log_level(&level))
-        .unwrap_or(log::LevelFilter::Warn);
-    log_builder = log_builder.level(general_level);
-    debug!("General log level set to: {:?}", general_level);
-
-    // Default module-specific log levels
-    log_builder = log_builder
-        .level_for("tracing::span", log::LevelFilter::Off)
-        .level_for("iroh", log::LevelFilter::Warn)
-        .level_for("holochain", log::LevelFilter::Info)
-        .level_for("kitsune2", log::LevelFilter::Info)
-        .level_for("kitsune2_gossip", log::LevelFilter::Info)
-        .level_for("kitsune2_api", log::LevelFilter::Debug)
-        .level_for("holochain_runtime", log::LevelFilter::Info)
-        .level_for("unyt", log::LevelFilter::Debug);
-
-    // Override with specific log levels from environment variable
-    if let Ok(specific_logs) = std::env::var("UNYT_SPECIFIC_LOG") {
-        debug!("Applying specific log levels: {}", specific_logs);
-
-        // Parse and collect module-level pairs first
-        let log_configs: Vec<(String, log::LevelFilter)> = specific_logs
-            .split(',')
-            .filter_map(|entry| {
-                let entry = entry.trim();
-                entry.split_once('=').and_then(|(module, level_str)| {
-                    let module = module.trim().to_string();
-                    let level_str = level_str.trim();
-                    parse_log_level(level_str).map(|level| (module, level))
-                })
-            })
-            .collect();
-
-        // Apply the collected configurations
-        for (module, level) in log_configs {
-            debug!("Set log level for '{}' to {:?}", module, level);
-            log_builder = log_builder.level_for(module, level);
-        }
-    }
-
     let mut builder = tauri::Builder::default()
-        .plugin(log_builder.build())
         .invoke_handler(tauri::generate_handler![
             runtime::get_runtime_status,
-            runtime::accept_progenitor_role
+            runtime::update_runtime_status,
+            runtime::boot::is_authorized_progenitor,
+            runtime::boot::accept_progenitor_role,
+            runtime::close_splashscreen,
+            runtime::show_logs,
+            runtime::boot::unlock_lair
         ]);
     debug!("Added logging plugin and runtime commands");
 
@@ -125,23 +70,21 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_http::init());
     debug!("Added HTTP plugin");
 
-    let holochain_dir = holochain_dir();
-    let network_config = network_config();
-    debug!("Holochain directory: {:?}", holochain_dir);
-    println!(
-        "[unyt_tauri] Network config bootstrap URL: {:?}",
-        network_config.bootstrap_url
-    );
-
-    builder = builder.plugin(tauri_plugin_holochain::async_init(
-        vec_to_locked(vec![]),
-        HolochainPluginConfig::new(holochain_dir, network_config),
-    ));
-    debug!("Added holochain plugin with MDNS discovery enabled");
+    builder = builder.plugin(tauri_plugin_holochain::plugin_builder().build());
+    debug!("Added holochain plugin (manual launch mode)");
 
     builder = builder.setup(move |app| {
         runtime::init(app.handle())?;
         debug!("Setting up Tauri application");
+
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            // Initial attempt to unlock lair with no password
+            if let Err(e) = runtime::boot::unlock_lair(handle.clone(), None).await {
+                debug!("Initial lair unlock failed (likely needs password): {}", e);
+            }
+        });
+
         #[cfg(mobile)]
         {
             debug!("Mobile platform detected, adding mobile-specific plugins");
@@ -240,7 +183,7 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 
     let mut window_builder = handle
         .holochain()?
-        .main_window_builder(String::from("main"), true, Some(app_config.app_id), None)
+        .main_window_builder(String::from("main"), false, Some(app_config.app_id), None)
         .await?;
     debug!("open_window: Window builder created");
 
@@ -249,7 +192,8 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
         debug!("open_window: Configuring desktop window properties");
         window_builder = window_builder
             .title(app_config.product_name)
-            .inner_size(1400.0, 1000.0);
+            .inner_size(1400.0, 1000.0)
+            .transparent(false);
         println!(
             "[unyt_tauri] open_window: Desktop window configured with title 'Unyt' and size 1400x1000"
         );
@@ -257,7 +201,8 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 
     debug!("open_window: Building window");
     let window = window_builder.build()?;
-    debug!("open_window: Window built successfully");
+    window.hide()?; // Ensure it stays hidden until explicitly shown by close_splashscreen
+    debug!("open_window: Window built successfully and hidden");
     Ok(window)
 }
 
@@ -267,9 +212,7 @@ async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 //   - If it's installed, check if it's necessary to update the coordinators for our hApp,
 //     and do so if it is
 //
-// You can modify this function to suit your needs if they become more complex
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
-use std::sync::Arc;
 
 async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     let state_manager = handle.state::<Arc<EnvStatusManager>>();
@@ -388,117 +331,12 @@ async fn setup(handle: AppHandle) -> anyhow::Result<()> {
         debug!("setup: App update check completed");
     }
 
-    unyt::init(&handle)?;
-    state_manager.update_status(EnvRuntimeStatus::Networking { peer_count: 0 });
-
+    // Set status to Ready - Backend initialization is complete.
+    // Handing over to Unyt App to manage peer discovery and global def sync.
+    if let Some(status_manager) = handle.try_state::<Arc<runtime::status::EnvStatusManager>>() {
+        tracing::info!(target: "unyt::network", "System backend initialization complete. Handing over to Unyt App.");
+        status_manager.update_status(runtime::status::EnvRuntimeStatus::Ready);
+    }
+    
     Ok(())
-}
-
-fn network_config() -> NetworkConfig {
-    debug!("network_config: Creating network configuration");
-    let mut network_config = NetworkConfig::default();
-
-    // Don't use the bootstrap service on tauri dev mode
-    // if tauri::is_dev() {
-    //     network_config.bootstrap_url = url2::Url2::parse("http://0.0.0.0:8888");
-    // } else {
-    //     network_config.bootstrap_url =
-    //         url2::Url2::parse("https://bootstrap.kitsune-v0-1.kitsune.darksoil-studio.garnix.me");
-    // }
-    network_config.bootstrap_url = url2::Url2::parse("https://dev-test-bootstrap2.holochain.org/");
-    println!(
-        "[unyt_tauri] network_config: Bootstrap URL set to: {:?}",
-        network_config.bootstrap_url
-    );
-
-    network_config.webrtc_config = Some(serde_json::json!({
-        "iceServers": [
-            { "urls": ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"]}
-        ]
-    }));
-
-    // enable reporting
-    network_config.report = ReportConfig::JsonLines {
-        days_retained: 30,
-        fetched_op_interval_s: 60,
-    };
-
-    // network_config.advanced = Some(serde_json::json!({
-    //     "tx5Transport": {
-    //         "timeoutS": 30, // defaults to 60
-    //     }
-    // }));
-
-    // Configure arc factor: only set to 0 for zero arc mode, otherwise use Holochain default
-    println!(
-        "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR: {:?}",
-        generated_arc_factor::HOLOCHAIN_ARC_FACTOR
-    );
-    match generated_arc_factor::HOLOCHAIN_ARC_FACTOR {
-        "0" => {
-            debug!("network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
-            network_config.target_arc_factor = 0;
-        }
-        "" => {
-            println!(
-                "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR='' - using Holochain default arc factor"
-            );
-            // Don't set target_arc_factor, let Holochain use its default
-        }
-        val => {
-            println!(
-                "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR='{}' - using Holochain default arc factor",
-                val
-            );
-            // Don't set target_arc_factor, let Holochain use its default
-        }
-    }
-
-    debug!("network_config: Network configuration created successfully");
-    network_config
-}
-
-fn holochain_dir() -> PathBuf {
-    debug!("holochain_dir: Determining holochain directory path");
-    if tauri::is_dev() && cfg!(not(mobile)) {
-        println!(
-            "[unyt_tauri] holochain_dir: Development mode on desktop, creating temporary directory"
-        );
-        let tmp_dir =
-            tempdir::TempDir::new(IDENTIFIER_DIR).expect("Could not create temporary directory");
-        println!(
-            "[unyt_tauri] holochain_dir: Temporary directory created: {:?}",
-            tmp_dir.path()
-        );
-
-        // Convert `tmp_dir` into a `Path`, destroying the `TempDir`
-        // without deleting the directory.
-        let tmp_path = tmp_dir.into_path();
-        println!(
-            "[unyt_tauri] holochain_dir: Using temporary path: {:?}",
-            tmp_path
-        );
-        tmp_path
-    } else {
-        debug!("holochain_dir: Production mode or mobile, using app data directory");
-        let version = get_version();
-        debug!("holochain_dir: App version: {}", version);
-
-        let app_root = app_dirs2::app_root(
-            app_dirs2::AppDataType::UserData,
-            &app_dirs2::AppInfo {
-                name: IDENTIFIER_DIR,
-                author: std::env!("CARGO_PKG_AUTHORS"),
-            },
-        )
-        .expect("Could not get app root");
-        debug!("holochain_dir: App root: {:?}", app_root);
-
-        let holochain_path = app_root.join(version).join("holochain");
-        println!(
-            "[unyt_tauri] holochain_dir: Final holochain path: {:?}",
-            holochain_path
-        );
-        holochain_path
-    }
 }

@@ -10,7 +10,6 @@ pub enum EnvRuntimeStatus {
     LairReady,
     ConductorStarting,
     AppInstalling,
-    Networking { peer_count: usize },
     Syncing {
         step: u8,
         total_steps: u8,
@@ -35,7 +34,10 @@ impl EnvStatusManager {
     }
 
     pub fn update_status(&self, new_status: EnvRuntimeStatus) {
-        let mut status = self.status.lock().unwrap();
+        let mut status = self.status.lock().unwrap_or_else(|poisoned| {
+            tracing::error!(target: "unyt::runtime", "Status Mutex was poisoned! Attempting to recover...");
+            poisoned.into_inner()
+        });
         if *status != new_status {
             *status = new_status.clone();
             let _ = self.app_handle.emit("runtime://status-update", new_status);
@@ -43,7 +45,10 @@ impl EnvStatusManager {
     }
 
     pub fn get_status(&self) -> EnvRuntimeStatus {
-        self.status.lock().unwrap().clone()
+        self.status.lock().unwrap_or_else(|poisoned| {
+            tracing::error!(target: "unyt::runtime", "Status Mutex was poisoned! Attempting to recover...");
+            poisoned.into_inner()
+        }).clone()
     }
 }
 

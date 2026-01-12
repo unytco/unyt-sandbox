@@ -1,4 +1,4 @@
-use crate::{app_config::AppConfig, generated_arc_factor::HOLOCHAIN_VERSION, network_config};
+use crate::{app_config::AppConfig, runtime::boot::{holochain_dir, network_config}, holochain_consts::HOLOCHAIN_VERSION};
 use anyhow::anyhow;
 use holochain_client::{AppInfo, CellInfo};
 use tauri::{AppHandle, Manager};

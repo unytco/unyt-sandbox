@@ -47,10 +47,18 @@ pub fn init(app_handle: AppHandle) -> anyhow::Result<()> {
         app_handle: app_handle.clone(),
     };
 
-    // Filter to show interesting Holochain/Kitsune logs
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new("holochain=info,kitsune2=info,unyt=debug")
-    });
+    // Show filtered Holochain/Kitsune logs
+    let holochain_log = std::env::var("HOLOCHAIN_LOG").unwrap_or_else(|_| "info".to_string());
+    let kitsune_log = std::env::var("KITSUNE_LOG").unwrap_or_else(|_| "info".to_string());
+    let unyt_log = std::env::var("UNYT_LOG").unwrap_or_else(|_| "debug".to_string());
+
+    let filter_str = format!(
+        "holochain={},kitsune2={},unyt={}",
+        holochain_log, kitsune_log, unyt_log
+    );
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter_str));
 
     tracing_subscriber::registry()
         .with(filter)
