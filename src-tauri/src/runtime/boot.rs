@@ -16,6 +16,9 @@ pub struct AllianceDnaProps {
     pub progenitor_pubkey: Option<AgentPubKey>,
 }
 
+// This function determines the holochain directory path based on the development mode and the app version
+// Returns the path to the holochain directory
+// (Relocated from mod.rs to boot.rs to avoid circular dependencies)
 pub fn holochain_dir() -> PathBuf {
     debug!("holochain_dir: Determining holochain directory path");
     if tauri::is_dev() && cfg!(not(mobile)) {
@@ -60,6 +63,9 @@ pub fn holochain_dir() -> PathBuf {
     }
 }
 
+// This function creates the network configuration for the holochain runtime
+// Returns the network configuration
+// (Relocated from mod.rs to boot.rs to avoid circular dependencies)
 pub fn network_config() -> NetworkConfig {
     debug!("network_config: Creating network configuration");
     let mut network_config = NetworkConfig::default();
@@ -81,6 +87,12 @@ pub fn network_config() -> NetworkConfig {
         days_retained: 30,
         fetched_op_interval_s: 60,
     };
+
+    // network_config.advanced = Some(serde_json::json!({
+    //     "tx5Transport": {
+    //         "timeoutS": 30, // defaults to 60
+    //     }
+    // }));
 
     // Configure arc factor: only set to 0 for zero arc mode, otherwise use Holochain default
     println!(

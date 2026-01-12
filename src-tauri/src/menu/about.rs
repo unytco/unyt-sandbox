@@ -1,6 +1,7 @@
-use crate::{app_config::AppConfig, runtime::boot::{holochain_dir, network_config}, holochain_consts::HOLOCHAIN_VERSION};
+use crate::{app_config::AppConfig, runtime::boot::network_config, holochain_consts::HOLOCHAIN_VERSION};
 use anyhow::anyhow;
 use holochain_client::{AppInfo, CellInfo};
+use serde_json::Value;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_holochain::HolochainExt;
@@ -206,5 +207,9 @@ async fn get_network_dump<R: tauri::Runtime>(handle: AppHandle<R>) -> anyhow::Re
         .await
         .map_err(|err| anyhow!("Failed to dump network stats: {:?}", err))?;
 
-    Ok(serde_json::to_string_pretty(&data).unwrap_or_else(|_| "Unable to serialize network stats".to_string()))
+    // Extract only the backend information
+    let data_value = serde_json::to_value(&data).map_err(|e| anyhow!("Failed to serialize network stats: {:?}", e))?;
+    let backend = data_value.get("backend").cloned().unwrap_or(Value::String("No backend info available".to_string()));
+
+    Ok(serde_json::to_string_pretty(&backend).unwrap_or_else(|_| "Unable to format network backend stats".to_string()))
 }

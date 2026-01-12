@@ -31,6 +31,7 @@ use tauri_plugin_holochain::*;
 //     }
 // }
 
+#[allow(deprecated)]
 pub async fn migrate_app(
     holochain_runtime: &HolochainRuntime,
     existing_app_id: InstalledAppId,

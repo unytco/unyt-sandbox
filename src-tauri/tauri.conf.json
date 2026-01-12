@@ -19,7 +19,7 @@
         "url": "/splashscreen.html",
         "width": 800,
         "height": 600,
-        "resizable": false,
+        "resizable": true,
         "decorations": false,
         "center": true,
         "transparent": false,
