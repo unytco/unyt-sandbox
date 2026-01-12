@@ -1,5 +1,10 @@
 [profile.dev]
-opt-level = "z"
+incremental = true
+opt-level = 0
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [profile.release]
 opt-level = "z"
