@@ -143,15 +143,12 @@ pub async fn unlock_lair(
     let holochain_dir = holochain_dir();
     let is_initial_setup = !holochain_dir.exists() || !holochain_dir.join("keystore").exists();
 
-    // If this is the initial env setup attempt and the bypass flag is not set,
-    // trigger the lair pw prompt...
-    if password.is_none() && std::env::var("UNYT_BYPASS_PASSWORD").is_err() {
-        debug!(
-            "unlock_lair: Defaulting to password prompt (initial_setup={}). Use UNYT_BYPASS_PASSWORD to skip.",
-            is_initial_setup
-        );
+    // Trigger password prompt ONLY on initial setup if no password/bypass is provided.
+    // Otherwise, fall through to attempt unlock (initial empty-pass attempt happens on subsequent runs).
+    if is_initial_setup && password.is_none() && std::env::var("UNYT_BYPASS_PASSWORD").is_err() {
+        debug!("unlock_lair: Initial setup detected, triggering password prompt. Note: Use UNYT_BYPASS_PASSWORD to skip.");
         status_manager.update_status(EnvRuntimeStatus::LairAwaitingPassword { is_initial_setup });
-        return Err("Password required (default mode)".to_string());
+        return Err("Password required (initial setup)".to_string());
     }
 
     let passphrase = match password {

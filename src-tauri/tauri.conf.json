@@ -18,7 +18,7 @@
         "title": "Unyt Loading",
         "url": "/splashscreen.html",
         "width": 800,
-        "height": 600,
+        "height": 800,
         "resizable": true,
         "decorations": false,
         "center": true,

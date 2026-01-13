@@ -17,7 +17,6 @@ pub enum EnvRuntimeStatus {
         total_steps: u8,
         message: String,
     },
-    ProgenitorPrompt,
     Ready,
     Error(String),
 }
