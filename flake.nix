@@ -20,12 +20,12 @@
       # packages.rust = inputs.holonix.packages.${system}.rust;
 
       # Custom rust version
-      packages.rust = let
-        overlays = [ (import inputs.rust-overlay) ];
-        pkgs = import inputs.nixpkgs { inherit system overlays; };
-      in pkgs.rust-bin.stable."1.88.0".default.override {
-        targets = [ "wasm32-unknown-unknown" ];
-      };
+      # packages.rust = let
+      #   overlays = [ (import inputs.rust-overlay) ];
+      #   pkgs = import inputs.nixpkgs { inherit system overlays; };
+      # in pkgs.rust-bin.stable."1.88.0".default.override {
+      #   targets = [ "wasm32-unknown-unknown" ];
+      # };
 
       formatter = pkgs.nixpkgs-fmt;
 
