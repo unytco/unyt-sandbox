@@ -3,6 +3,8 @@ use crate::holochain_consts;
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use log::debug;
 use serde::{Deserialize, Serialize};
+use secrecy::{ExposeSecret, SecretString};
+use zeroize::Zeroize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
@@ -134,7 +136,7 @@ pub fn network_config() -> NetworkConfig {
 #[tauri::command]
 pub async fn unlock_lair(
     app_handle: AppHandle,
-    password: Option<String>,
+    password: Option<SecretString>,
 ) -> std::result::Result<(), String> {
     let status_manager = app_handle.state::<Arc<EnvStatusManager>>();
 
@@ -153,7 +155,12 @@ pub async fn unlock_lair(
     }
 
     let passphrase = match password {
-        Some(p) => vec_to_locked(p.as_bytes().to_vec()),
+        Some(p) => {
+            let mut bytes = p.expose_secret().as_bytes().to_vec();
+            let locked = vec_to_locked(bytes.clone());
+            bytes.zeroize();
+            locked
+        }
         None => vec_to_locked(vec![]),
     };
 

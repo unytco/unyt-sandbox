@@ -68,6 +68,29 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_http::init());
     debug!("Added HTTP plugin");
 
+    // Secure lair keystore with argon2
+    builder = builder.plugin(tauri_plugin_stronghold::Builder::new(|password| {
+        use argon2::{
+            password_hash::{PasswordHasher, SaltString},
+            Argon2,
+        };
+
+        // NB: use the environment variable for the salt (TAURI_LAIR_SALT),
+        // the default should be used as testing fallback only...
+        let salt_str = std::env::var("TAURI_LAIR_SALT")
+            .unwrap_or_else(|_| "u76ByY463Y0vO58yD5S6Vw".to_string());
+
+        let salt = SaltString::from_b64(&salt_str).expect("invalid salt");
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .expect("failed to hash password")
+            .hash
+            .expect("failed to get hash bytes")
+            .as_bytes()
+            .to_vec()
+    }).build());
+    debug!("Enabled argon2-based password hashing for lair keystore");
+
     builder = builder.plugin(tauri_plugin_holochain::plugin_builder().build());
     debug!("Added holochain plugin (manual launch mode)");
 
