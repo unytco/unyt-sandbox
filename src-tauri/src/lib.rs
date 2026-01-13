@@ -25,7 +25,7 @@ macro_rules! debug {
 
 pub fn happ_bundle() -> AppBundle {
     debug!("Loading happ bundle from workdir/unyt.happ");
-    let bytes = include_bytes!("../../unyt/workdir/unyt.happ");
+    let bytes = include_bytes!("../../workdir/unyt.happ");
     debug!("Happ bundle bytes loaded, size: {} bytes", bytes.len());
     let bundle = AppBundle::unpack(&bytes[..]).expect("Failed to decode unyt happ");
     debug!("Happ bundle decoded successfully");
