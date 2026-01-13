@@ -16,6 +16,7 @@ use tauri_plugin_holochain::{
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct AllianceDnaProps {
     pub progenitor_pubkey: Option<AgentPubKey>,
+    pub notary_agents: Option<Vec<AgentPubKey>>,
 }
 
 // This function determines the holochain directory path based on the development mode and the app version
@@ -220,11 +221,15 @@ pub async fn is_authorized_progenitor(app_handle: AppHandle) -> std::result::Res
     if let Some(cells) = app.cell_info.get("alliance") {
         for cell in cells {
             if let CellInfo::Provisioned(provisioned) = cell {
-                let props: AllianceDnaProps = serde_json::from_value(
-                    serde_json::to_value(&provisioned.dna_modifiers.properties)
-                        .map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| format!("Failed to decode DNA properties: {:?}", e))?;
+                let props_value = serde_json::to_value(&provisioned.dna_modifiers.properties)
+                    .map_err(|e| e.to_string())?;
+                
+                let props: AllianceDnaProps = if props_value.is_null() {
+                    AllianceDnaProps::default()
+                } else {
+                    serde_json::from_value(props_value)
+                        .map_err(|e| format!("Failed to decode DNA properties: {:?}", e))?
+                };
 
                 if let Some(progenitor_key) = props.progenitor_pubkey {
                     let is_match = progenitor_key == my_pub_key;
