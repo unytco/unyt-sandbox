@@ -46,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlDREE5RUM3ODE0QzA4MDEKUldRQkNFeUJ4NTdhbkt1QXUvVWhFVkJFY1JVNVNmZ0VZajRUZERoUFV2YmZxV1B3ZFRwYnUrRi8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2NEE4MDE2OERCREQ3M0EKUldRNjE3Mk5Gb0JLVmlRNzdlVGlQdkNPdG5KWVQyWkhldUdvdXNMbzh0TTlnSG5CdjB5cWVubWUK",
       "endpoints": [
         "https://github.com/unytco/unyt-sandbox-tx5/releases/latest/download/latest.json",
         "https://github.com/unytco/unyt-sandbox-tx5/releases/latest/download/latest-zero-arc.json"
