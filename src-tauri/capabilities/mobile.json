@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "mobile-capability",
-  "windows": ["main"],
+  "windows": ["main",  "splashscreen", "  logs"],
   "platforms": ["iOS", "android"],
   "permissions": [
     "barcode-scanner:allow-check-permissions",

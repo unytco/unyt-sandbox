@@ -1,9 +1,13 @@
-use crate::{app_config::AppConfig, generated_arc_factor::HOLOCHAIN_VERSION, network_config};
+use crate::{
+    app_config::AppConfig, consts::HOLOCHAIN_VERSION,
+    runtime::boot::holochain::network_config,
+};
 use anyhow::anyhow;
 use holochain_client::{AppInfo, CellInfo};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_holochain::HolochainExt;
+use log::error;
 
 pub async fn about_menu<R: tauri::Runtime>(h: &AppHandle<R>) {
     let app_version = h.package_info().version.to_string();
@@ -125,7 +129,7 @@ pub async fn about_menu<R: tauri::Runtime>(h: &AppHandle<R>) {
                         serde_json::to_string(&msg).unwrap_or_default()
                     );
                     if let Err(e) = window.eval(&js_code) {
-                        log::error!("Failed to copy to clipboard: {:?}", e);
+                        error!("Failed to copy to clipboard: {:?}", e);
                     }
                 }
             }

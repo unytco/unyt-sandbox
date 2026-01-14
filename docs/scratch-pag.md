@@ -4,7 +4,7 @@
 
 - put the menu back in and test
 
-## Tech Debth
+## Tech Debt
 
 - see that if an migration is triggered but the DNA's are the same it makes a decision, so that the app does not fail to start up
 
