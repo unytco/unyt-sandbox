@@ -3,6 +3,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-test.*" # Test: v1.0.0-test.0
 
 env:
   PRODUCT_NAME: "Unyt-tx5"
@@ -215,7 +216,7 @@ jobs:
           VITE_COMMIT_SHA: ${{ env.PRODUCT_NAME }}-${{ steps.version.outputs.APP_VERSION }}-tx5-${{ matrix.arc_factor }} # this is the tag that will be added to sentry
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.arc_factor != 'default' && matrix.arc_factor || '' }}
-          VITE_IS_RIDESHARE_RELEASE: "true"
+          # VITE_IS_RIDESHARE_RELEASE: "true"
           # VITE_APP_NAME: "Circulo"
           # VITE_IS_CIRCULO_RELEASE: "true"
         with:
