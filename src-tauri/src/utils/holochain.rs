@@ -1,9 +1,18 @@
 use anyhow::anyhow;
-use std::{
-    collections::HashMap,
-    // time::Duration
-};
+use log::debug;
+use std::collections::HashMap;
+use tauri_plugin_holochain::AppBundle;
 use tauri_plugin_holochain::*;
+use tracing::info;
+
+pub fn happ_bundle() -> AppBundle {
+    debug!("Loading happ bundle from workdir/unyt.happ");
+    let bytes = include_bytes!("../../../workdir/unyt.happ");
+    debug!("Happ bundle bytes loaded, size: {} bytes", bytes.len());
+    let bundle = AppBundle::unpack(&bytes[..]).expect("Failed to decode unyt happ");
+    debug!("Happ bundle decoded successfully");
+    bundle
+}
 
 // pub async fn with_retries<T>(
 //     condition: impl AsyncFn() -> anyhow::Result<T>,
@@ -38,10 +47,9 @@ pub async fn migrate_app(
     new_app_bundle: AppBundle,
     new_roles_settings: Option<RoleSettingsMap>,
 ) -> anyhow::Result<AppInfo> {
-    log::info!(
+    info!(
         "Migrating from old app {} to new app {}.",
-        existing_app_id,
-        new_app_id
+        existing_app_id, new_app_id
     );
     let admin_ws = holochain_runtime.admin_websocket().await?;
     let apps = admin_ws.list_apps(None).await?;
@@ -123,7 +131,7 @@ pub async fn migrate_app(
         };
 
         if new_dna_hash.eq(&existing_cell.cell_id.dna_hash()) {
-            log::info!("Reusing role {}.", new_role.name);
+            info!("Reusing role {}.", new_role.name);
 
             roles_settings.insert(
                 new_role.name,
