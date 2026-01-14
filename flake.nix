@@ -2,8 +2,8 @@
   description = "Flake for Holochain app development";
 
   inputs = {
-    tauri-plugin-holochain.url = "github:zo-el/tauri-plugin-holochain/main-0.6-go-pion-patch";
-    holonix.url = "github:holochain/holonix/main";
+    tauri-plugin-holochain.url = "github:zo-el/tauri-plugin-holochain/main-0.6-go-pion";
+    holonix.url = "github:holochain/holonix/main-0.6";
     
     nixpkgs.follows = "holonix/nixpkgs";
     rust-overlay.follows = "holonix/rust-overlay";
