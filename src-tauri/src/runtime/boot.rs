@@ -1,7 +1,7 @@
 use crate::app_config::{get_version, AppConfig, IDENTIFIER_DIR};
 use crate::holochain_consts;
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
-use log::debug;
+use tracing::{debug, info, warn, error};
 use serde::{Deserialize, Serialize};
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroize;
@@ -27,22 +27,14 @@ pub fn holochain_dir() -> PathBuf {
     let use_persistent_dev = std::env::var("UNYT_PERSISTENT_DEV").is_ok();
 
     if tauri::is_dev() && cfg!(not(mobile)) && !use_persistent_dev {
-        println!(
-            "[unyt_tauri] holochain_dir: Development mode on desktop, creating temporary directory"
-        );
+        debug!("holochain_dir: Development mode on desktop, creating temporary directory");
         let tmp_dir =
             tempdir::TempDir::new(IDENTIFIER_DIR).expect("Could not create temporary directory");
-        println!(
-            "[unyt_tauri] holochain_dir: Temporary directory created: {:?}",
-            tmp_dir.path()
-        );
+        debug!("holochain_dir: Temporary directory created: {:?}", tmp_dir.path());
 
         // Convert `tmp_dir` into a `Path` (this destroys the `TempDir` without deleting the directory)
         let tmp_path = tmp_dir.into_path();
-        println!(
-            "[unyt_tauri] holochain_dir: Using temporary path: {:?}",
-            tmp_path
-        );
+        debug!("holochain_dir: Using temporary path: {:?}", tmp_path);
         tmp_path
     } else {
         debug!("holochain_dir: Production mode, using app data directory for persisted storage");
@@ -60,10 +52,7 @@ pub fn holochain_dir() -> PathBuf {
         debug!("holochain_dir: App root: {:?}", app_root);
 
         let holochain_path = app_root.join(version).join("holochain");
-        println!(
-            "[unyt_tauri] holochain_dir: Final holochain path: {:?}",
-            holochain_path
-        );
+        info!("holochain_dir: Final holochain path: {:?}", holochain_path);
         holochain_path
     }
 }
@@ -76,10 +65,7 @@ pub fn network_config() -> NetworkConfig {
     let mut network_config = NetworkConfig::default();
 
     network_config.bootstrap_url = url2::Url2::parse("https://dev-test-bootstrap2.holochain.org/");
-    println!(
-        "[unyt_tauri] network_config: Bootstrap URL set to: {:?}",
-        network_config.bootstrap_url
-    );
+    debug!("network_config: Bootstrap URL set to: {:?}", network_config.bootstrap_url);
 
     network_config.webrtc_config = Some(serde_json::json!({
         "iceServers": [
@@ -100,33 +86,22 @@ pub fn network_config() -> NetworkConfig {
     // }));
 
     // Configure arc factor: only set to 0 for zero arc mode, otherwise use Holochain default
-    println!(
-        "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR: {:?}",
-        holochain_consts::HOLOCHAIN_ARC_FACTOR
-    );
+    debug!("network_config: HOLOCHAIN_ARC_FACTOR: {:?}", holochain_consts::HOLOCHAIN_ARC_FACTOR);
     match holochain_consts::HOLOCHAIN_ARC_FACTOR {
         "0" => {
             debug!("network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
             network_config.target_arc_factor = 0;
         }
         "" => {
-            println!(
-                "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR='' - using Holochain default arc factor"
-            );
+            debug!("network_config: HOLOCHAIN_ARC_FACTOR='' - using Holochain default arc factor");
             // Don't set target_arc_factor, let Holochain use its default
         }
         val => {
             if let Ok(arc_factor) = val.parse::<u32>() {
-                println!(
-                    "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR='{}' - using custom arc factor",
-                    arc_factor
-                );
+                debug!("network_config: HOLOCHAIN_ARC_FACTOR='{}' - using custom arc factor", arc_factor);
                 network_config.target_arc_factor = arc_factor;
             } else {
-                println!(
-                    "[unyt_tauri] network_config: HOLOCHAIN_ARC_FACTOR='{}' - using Holochain default arc factor",
-                    val
-                );
+                warn!("network_config: HOLOCHAIN_ARC_FACTOR='{}' - using Holochain default arc factor", val);
             }
         }
     }

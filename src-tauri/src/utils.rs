@@ -1,9 +1,7 @@
 use anyhow::anyhow;
-use std::{
-    collections::HashMap,
-    // time::Duration
-};
+use std::collections::HashMap;
 use tauri_plugin_holochain::*;
+use tracing::{info, warn};
 
 // pub async fn with_retries<T>(
 //     condition: impl AsyncFn() -> anyhow::Result<T>,
@@ -19,8 +17,8 @@ use tauri_plugin_holochain::*;
 //                 return Ok(r);
 //             }
 //             Err(err) => {
-//                 log::warn!("Condition not met yet: {err:?} Retrying in {}ms.", sleep_ms);
-//                 std::thread::sleep(Duration::from_millis(sleep_ms));
+//                 warn!("Condition not met yet: {err:?} Retrying in {}ms.", sleep_ms);
+//                 std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
 
 //                 retry_count += 1;
 //                 if retry_count == retries {
@@ -39,7 +37,7 @@ pub async fn migrate_app(
     new_app_bundle: AppBundle,
     new_roles_settings: Option<RoleSettingsMap>,
 ) -> anyhow::Result<AppInfo> {
-    log::info!(
+    info!(
         "Migrating from old app {} to new app {}.",
         existing_app_id,
         new_app_id
@@ -124,7 +122,7 @@ pub async fn migrate_app(
         };
 
         if new_dna_hash.eq(&existing_cell.cell_id.dna_hash()) {
-            log::info!("Reusing role {}.", new_role.name);
+            info!("Reusing role {}.", new_role.name);
 
             roles_settings.insert(
                 new_role.name,

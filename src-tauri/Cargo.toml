@@ -47,6 +47,7 @@ opener = { version = "0.7", features = ["reveal"] }
 log = "0.4"
 tauri-plugin-log = "2.0.0"
 tracing = "0.1"
+tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url2 = "0.0.6"
 app_dirs2 = "2.5.5"

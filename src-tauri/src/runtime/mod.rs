@@ -46,14 +46,14 @@ pub fn close_splashscreen(app_handle: AppHandle) {
 
 #[tauri::command]
 pub fn show_logs(app_handle: AppHandle) {
-    println!("[unyt_tauri] show_logs command received");
+    tracing::debug!("show_logs command received");
     tracing::info!(target: "unyt::runtime", "Showing logs window");
 
     if let Some(logs) = app_handle.get_webview_window("logs") {
         let _ = logs.show();
         let _ = logs.set_focus();
     } else {
-        println!("[unyt_tauri] Logs window not found, recreating...");
+        tracing::debug!("Logs window not found, recreating...");
         let res = tauri::WebviewWindowBuilder::new(
             &app_handle,
             "logs",

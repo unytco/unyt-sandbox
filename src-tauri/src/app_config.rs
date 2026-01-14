@@ -1,4 +1,4 @@
-use log::debug;
+use tracing::{debug, info};
 use tauri::AppHandle;
 
 // This is when we are setting it the same as the identifier
@@ -58,9 +58,6 @@ pub fn get_version() -> String {
         semver.to_string()
     };
 
-    println!(
-        "[unyt_tauri] get_version: Returning major.minor version: {}",
-        version
-    );
+    debug!("get_version: Returning major.minor version: {}", version);
     return version;
 }

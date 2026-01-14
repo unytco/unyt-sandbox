@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::io;
 use tauri::{AppHandle, Emitter};
 use tracing::Subscriber;
+use tracing_log::LogTracer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
@@ -25,13 +26,32 @@ where
         let level = event.metadata().level().to_string();
         let target = event.metadata().target().to_string();
 
-        // Extraction of the message
-        let log_info = format!("[{}] {}: {:?}", level, target, event);
+        let mut message = String::new();
+        struct MessageVisitor<'a>(&'a mut String);
+        impl<'a> tracing::field::Visit for MessageVisitor<'a> {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    use std::fmt::Write;
+                    let _ = write!(self.0, "{:?}", value);
+                }
+            }
+        }
+        event.record(&mut MessageVisitor(&mut message));
+
+        // If no message field was found, fall back to the whole event debug string
+        if message.is_empty() {
+            message = format!("{:?}", event);
+        }
+
+        // Clean up quotes from Debug formatting if present
+        if message.starts_with('"') && message.ends_with('"') {
+            message = message[1..message.len() - 1].to_string();
+        }
 
         let _ = self.app_handle.emit(
             "runtime://env-log",
             TauriLogPayload {
-                message: log_info,
+                message,
                 level,
                 target,
             },
@@ -42,6 +62,9 @@ where
 /// Initialize the log bridge
 pub fn init(app_handle: AppHandle) -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
+
+    // Bridge standard log crate to tracing
+    LogTracer::init().ok(); // Ignore error if already initialized
 
     let tauri_layer = TauriLogLayer {
         app_handle: app_handle.clone(),
