@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "network:tauri": "concurrently \"cd unyt && yarn network:tauri\" \"yarn launch\"",
-    "launch": "yarn tauri dev --no-watch",
+    "launch": "concurrently \"yarn tauri dev --no-watch\" \"yarn tauri dev --no-watch\"",
+    "clean-launch": "rm -rf ~/.local/share/co.unyt.tx5.sandbox && yarn launch",
     "launch:android": "yarn tauri android dev",
     "tauri": "tauri"
   },
