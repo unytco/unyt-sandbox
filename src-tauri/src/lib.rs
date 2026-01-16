@@ -30,13 +30,11 @@ pub fn run() {
     debug!("Building Tauri application with plugins");
 
     let mut builder = tauri::Builder::default()
-        // .plugin(runtime::logs::init_legacy_logger())
         .invoke_handler(tauri::generate_handler![
             runtime::events::get_runtime_status,
             runtime::events::update_runtime_status,
             runtime::events::get_app_port,
             runtime::boot::progenitor::is_authorized_progenitor,
-            runtime::boot::progenitor::accept_progenitor_role,
             runtime::events::close_splashscreen,
             runtime::events::show_logs,
             runtime::boot::lair::unlock_lair
@@ -88,13 +86,14 @@ pub fn run() {
     info!("Added holochain plugin");
 
     builder = builder.setup(move |app| {
+        // Initialize logs and status
         runtime::init(app.handle())?;
-        debug!("Setting up Tauri application");
+        debug!("Tauri setup initialized");
 
         let handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
             // Initial attempt to unlock lair with no password...
-            // If this attempt fails, the UI will eventually call `unlock_lair`` again with a password.
+            // If this attempt fails, the UI will eventually call `unlock_lair` again with a password.
             // Upon success, the `LairReady` status update will trigger the remaining setup.
             if let Err(e) = runtime::boot::lair::unlock_lair(handle.clone(), None).await {
                 info!("Lair is locked or awaiting initial password: {}", e);
@@ -129,6 +128,8 @@ pub fn run() {
             debug!("Added updater plugin");
         }
         let handle = app.handle().clone();
+
+        // Track if setup has been triggered (to prevent multiple setup attempts)
         let setup_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         app.handle()
@@ -140,6 +141,7 @@ pub fn run() {
 
                 debug!("Received runtime status update: {:?}", status);
 
+                // Only trigger setup if Lair is ready and we haven't already done so
                 if status == EnvRuntimeStatus::LairReady
                     && !setup_triggered.swap(true, std::sync::atomic::Ordering::SeqCst)
                 {

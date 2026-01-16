@@ -63,8 +63,8 @@ pub fn init(app_handle: AppHandle) -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::{fmt, EnvFilter};
 
-    // Bridge standard log crate to tracing
-    // We use .ok() because another logger (like tauri-plugin-log) might have already initialized the log bridge
+    // Bridge standard log crate to `tracing` logs. We ignore the result because the
+    // global logger might have already been initialized by another component.
     let _ = LogTracer::init();
 
     // Build the Unified Filter (Legacy Logic)
@@ -72,14 +72,14 @@ pub fn init(app_handle: AppHandle) -> anyhow::Result<()> {
         .with_default_directive(tracing::Level::WARN.into())
         .from_env_lossy();
 
-    // 1. Restore Legacy UNYT_LOG_LEVEL
+    // 1. Logs (legacy) UNYT_LOG_LEVEL
     if let Ok(level) = std::env::var("UNYT_LOG_LEVEL") {
         if let Ok(directive) = level.parse::<tracing_subscriber::filter::Directive>() {
             filter = filter.add_directive(directive);
         }
     }
 
-    // 2. Restore Legacy UNYT_SPECIFIC_LOG (e.g., "unyt=debug,holochain=info")
+    // 2. Logs (legacy) UNYT_SPECIFIC_LOG (e.g., "unyt=debug,holochain=info")
     if let Ok(specific_logs) = std::env::var("UNYT_SPECIFIC_LOG") {
         for entry in specific_logs.split(',') {
             if let Ok(directive) = entry.trim().parse() {
@@ -104,22 +104,22 @@ pub fn init(app_handle: AppHandle) -> anyhow::Result<()> {
         }
     }
 
-    // UI Output Layer (The new approach)
+    // UI Logs Output Layer
     let tauri_log_bridge = TauriLogBridge {
         app_handle: app_handle.clone(),
     };
 
-    // Terminal Output Layer (The old approach's visibility)
+    // Terminal Logs Output Layer
     let terminal_layer = fmt::layer()
         .with_target(true)
         .with_thread_ids(false)
         .with_level(true);
 
-    // Combine everything into a single Registry
+    // Combine everything into a single log registry
     let _ = tracing_subscriber::registry()
-        .with(filter) // Logic: What to show
-        .with(tauri_log_bridge) // Sink 1: Show in UI
-        .with(terminal_layer) // Sink 2: Show in Terminal
+        .with(filter) // Logic - ie: Determines what logs to show
+        .with(tauri_log_bridge) // Sink 1: Shows logs in UI
+        .with(terminal_layer) // Sink 2: Shows  logs in Terminal
         .try_init();
 
     Ok(())

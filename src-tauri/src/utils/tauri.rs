@@ -174,7 +174,7 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
         .map_err(|err| anyhow!("Failed to get app websocket: {:?}", err))?;
     
     // We can get the port directly from the app_ws.
-    // In holochain_client 0.5+, we might need to use get_port() if it exists or similar.
+    // In holochain_client versions > 0.5, we might need to use get_port() instead.
     // If not, we can now safely look it up in the plugin's auths because app_websocket() just populated it.
     let port = {
         let auths = holochain.holochain_runtime.apps_websockets_auths.lock().await;

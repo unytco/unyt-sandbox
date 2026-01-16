@@ -60,9 +60,3 @@ pub async fn is_authorized_progenitor(app_handle: AppHandle) -> std::result::Res
 
     Ok(false)
 }
-
-#[tauri::command]
-pub fn accept_progenitor_role(status_manager: tauri::State<'_, Arc<EnvStatusManager>>) {
-    tracing::info!(target: "unyt::runtime", "User accepted progenitor role.");
-    status_manager.update_status(EnvRuntimeStatus::Ready);
-}

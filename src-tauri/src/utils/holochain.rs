@@ -2,7 +2,6 @@ extern crate tokio;
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 
 use anyhow::anyhow;
-use log::debug;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
@@ -10,8 +9,8 @@ use tauri_plugin_holochain::AppBundle;
 use tauri_plugin_holochain::*;
 use tauri_plugin_holochain::{DnaModifiersOpt, HolochainExt, RoleSettings, RoleSettingsMap};
 use tokio::time::sleep;
-use tracing::error;
-use tracing::info;
+use tracing::{error, info};
+use log::debug;
 
 pub fn happ_bundle() -> AppBundle {
     debug!("Loading happ bundle from workdir/unyt.happ");
@@ -298,14 +297,6 @@ pub async fn dna_hash_for_app_bundle_role(
 
 //     Ok(implemented_zome_traits)
 // }
-
-//
-// Very simple setup for now:
-// - On app start, check whether the app is already installed:
-//   - If it's not installed, install it
-//   - If it's installed, check if it's necessary to update the coordinators for our hApp,
-//     and do so if it is
-//
 
 pub fn spawn_heartbeat(handle: AppHandle) {
     info!("Starting conductor health heartbeat");
