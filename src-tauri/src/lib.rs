@@ -113,15 +113,16 @@ pub fn run() {
         #[cfg(not(mobile))]
         {
             debug!("Desktop platform detected, adding desktop-specific plugins");
-            // let h = app.handle();
-            // app.handle()
-            //     .plugin(tauri_plugin_single_instance::init(move |app, argv, cwd| {
-            //         // h.emit(
-            //         //     "single-instance",
-            //         //     Payload { args: argv, cwd },
-            //         // )
-            //         // .unwrap();
-            //     }))?;
+
+            app.handle()
+                .plugin(tauri_plugin_single_instance::init(move |app, _argv, _cwd| {
+                    info!("Second instance detected, focusing main window");
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.set_focus();
+                    } else if let Some(splash) = app.get_webview_window("splashscreen") {
+                        let _ = splash.set_focus();
+                    }
+                }))?;
 
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;

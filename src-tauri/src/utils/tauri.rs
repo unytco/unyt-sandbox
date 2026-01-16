@@ -20,7 +20,12 @@ pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 
     let mut window_builder = handle
         .holochain()?
-        .main_window_builder(String::from("main"), true, Some(app_config.app_id.clone()), None)
+        .main_window_builder(
+            String::from("main"),
+            true,
+            Some(app_config.app_id.clone()),
+            None,
+        )
         .await?;
     debug!("open_window: Window builder created");
 
@@ -69,6 +74,12 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
         app_config.app_id
     );
 
+    state_manager.update_status(EnvRuntimeStatus::Syncing {
+        step: 1,
+        total_steps: 3,
+        message: String::from("Checking installed applications..."),
+    });
+
     let installed_apps = admin_ws
         .list_apps(Some(AppStatusFilter::Enabled))
         .await
@@ -90,6 +101,12 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
 
     if !app_is_already_installed {
         debug!("setup: App not installed, checking for previous versions");
+        state_manager.update_status(EnvRuntimeStatus::Syncing {
+            step: 1,
+            total_steps: 4,
+            message: String::from("Installing application..."),
+        });
+
         let previous_app = installed_apps
             .iter()
             .filter(|app| app.installed_app_id.as_str().starts_with(APP_ID_PREFIX))
@@ -100,6 +117,14 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 "[unyt_tauri] setup: Found previous app version: {}",
                 prev_app.installed_app_id
             );
+            state_manager.update_status(EnvRuntimeStatus::Syncing {
+                step: 1,
+                total_steps: 4,
+                message: format!(
+                    "Migrating from previous version {}...",
+                    prev_app.installed_app_id
+                ),
+            });
         }
 
         let mut roles_settings: RoleSettingsMap = RoleSettingsMap::new();
@@ -157,6 +182,11 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
         info!("setup: Fresh installation completed");
     } else {
         info!("setup: App already installed, checking for updates");
+        state_manager.update_status(EnvRuntimeStatus::Syncing {
+            step: 2,
+            total_steps: 4,
+            message: String::from("Checking for application updates..."),
+        });
         holochain
             .update_app_if_necessary(app_config.app_id.clone(), happ_bundle())
             .await?;
@@ -164,29 +194,56 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     }
 
     // Now that the app is installed/updated, we MUST ensure it's enabled and authorized.
+    state_manager.update_status(EnvRuntimeStatus::Syncing {
+        step: 3,
+        total_steps: 4,
+        message: String::from("Authorizing application access..."),
+    });
+
     // We use the plugin's `app_websocket` method which handles:
     // 1. Finding or creating an app interface.
     // 2. Ensuring the app is enabled.
     // 3. Authenticating (generating/storing the token).
     // This will populate the plugin's internal `apps_websockets_auths` state.
-    println!("[unyt_tauri] setup: Ensuring app websocket is ready for app_id: {}...", app_config.app_id);
-    let app_ws = holochain.app_websocket(app_config.app_id.clone()).await
+    println!(
+        "[unyt_tauri] setup: Ensuring app websocket is ready for app_id: {}...",
+        app_config.app_id
+    );
+    let app_ws = holochain
+        .app_websocket(app_config.app_id.clone())
+        .await
         .map_err(|err| anyhow!("Failed to get app websocket: {:?}", err))?;
-    
+
     // We can get the port directly from the app_ws.
     // In holochain_client versions > 0.5, we might need to use get_port() instead.
     // If not, we can now safely look it up in the plugin's auths because app_websocket() just populated it.
     let port = {
-        let auths = holochain.holochain_runtime.apps_websockets_auths.lock().await;
+        let auths = holochain
+            .holochain_runtime
+            .apps_websockets_auths
+            .lock()
+            .await;
         auths.iter()
             .find(|auth| auth.app_id.eq(&app_config.app_id))
             .map(|auth| auth.app_websocket_port)
             .ok_or_else(|| anyhow!("App websocket was created but no port found in auths list. This should not happen."))?
     };
 
-    println!("[unyt_tauri] setup: Successfully authorized app on port {} for app_id {}", port, app_config.app_id);
-    
-    println!("[unyt_tauri] setup: Emitting backend-ready on port {}", port);
+    println!(
+        "[unyt_tauri] setup: Successfully authorized app on port {} for app_id {}",
+        port, app_config.app_id
+    );
+
+    state_manager.update_status(EnvRuntimeStatus::Syncing {
+        step: 4,
+        total_steps: 4,
+        message: String::from("Finalizing system initialization..."),
+    });
+
+    println!(
+        "[unyt_tauri] setup: Emitting backend-ready on port {}",
+        port
+    );
     let _ = handle.emit("backend-ready", port);
 
     // Set status to Ready - Backend initialization is complete.
@@ -200,4 +257,3 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
 
     Ok(())
 }
-
