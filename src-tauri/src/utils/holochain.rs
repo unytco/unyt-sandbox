@@ -2,6 +2,7 @@ extern crate tokio;
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 
 use anyhow::anyhow;
+use log::debug;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
@@ -10,7 +11,6 @@ use tauri_plugin_holochain::*;
 use tauri_plugin_holochain::{DnaModifiersOpt, HolochainExt, RoleSettings, RoleSettingsMap};
 use tokio::time::sleep;
 use tracing::{error, info};
-use log::debug;
 
 pub fn happ_bundle() -> AppBundle {
     debug!("Loading happ bundle from workdir/unyt.happ");

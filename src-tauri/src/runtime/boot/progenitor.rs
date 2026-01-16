@@ -1,7 +1,5 @@
 use crate::app_config::AppConfig;
-use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tauri::AppHandle;
 use tauri_plugin_holochain::{AgentPubKey, AppStatusFilter, CellInfo, HolochainExt};
 
