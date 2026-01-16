@@ -19,7 +19,7 @@ macro_rules! debug {
     };
 }
 
-pub fn parse_log_level(level: &str) -> Option<log::LevelFilter> {
+pub fn _parse_log_level(level: &str) -> Option<log::LevelFilter> {
     match level.to_lowercase().as_str() {
         "off" => Some(log::LevelFilter::Off),
         "error" => Some(log::LevelFilter::Error),
@@ -31,13 +31,13 @@ pub fn parse_log_level(level: &str) -> Option<log::LevelFilter> {
     }
 }
 
-pub fn init_legacy_logger<R: Runtime>() -> TauriPlugin<R> {
+pub fn _init_legacy_logger<R: Runtime>() -> TauriPlugin<R> {
     let mut log_builder = tauri_plugin_log::Builder::default();
 
     // Set general log level (default: Warn)
     let general_level = std::env::var("UNYT_LOG_LEVEL")
         .ok()
-        .and_then(|level| parse_log_level(&level))
+        .and_then(|level| _parse_log_level(&level))
         .unwrap_or(log::LevelFilter::Warn);
 
     log_builder = log_builder.level(general_level);
@@ -62,7 +62,7 @@ pub fn init_legacy_logger<R: Runtime>() -> TauriPlugin<R> {
                 entry.split_once('=').and_then(|(module, level_str)| {
                     let module = module.trim().to_string();
                     let level_str = level_str.trim();
-                    parse_log_level(level_str).map(|level| (module, level))
+                    _parse_log_level(level_str).map(|level| (module, level))
                 })
             })
             .collect();
