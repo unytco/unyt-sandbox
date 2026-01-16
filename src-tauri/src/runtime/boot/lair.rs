@@ -2,7 +2,7 @@ use crate::runtime::boot::holochain::{holochain_dir, network_config};
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use secrecy::{ExposeSecret, SecretString};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_holochain::{
     launch_holochain_runtime, vec_to_locked, HolochainPlugin, HolochainPluginConfig,
 };

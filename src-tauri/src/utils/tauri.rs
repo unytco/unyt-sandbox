@@ -20,7 +20,7 @@ pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 
     let mut window_builder = handle
         .holochain()?
-        .main_window_builder(String::from("main"), true, Some(app_config.app_id), None)
+        .main_window_builder(String::from("main"), true, Some(app_config.app_id.clone()), None)
         .await?;
     debug!("open_window: Window builder created");
 
@@ -58,7 +58,8 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     state_manager.update_status(EnvRuntimeStatus::ConductorStarting);
 
     println!("[unyt_tauri] setup: Starting application setup");
-    let admin_ws = handle.holochain()?.admin_websocket().await?;
+    let holochain = handle.holochain()?;
+    let admin_ws = holochain.admin_websocket().await?;
     println!("[unyt_tauri] setup: Connected to admin websocket");
     state_manager.update_status(EnvRuntimeStatus::AppInstalling);
 
@@ -71,7 +72,8 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     let installed_apps = admin_ws
         .list_apps(Some(AppStatusFilter::Enabled))
         .await
-        .map_err(|err| tauri_plugin_holochain::Error::ConductorApiError(err))?;
+        // .map_err(|err| tauri_plugin_holochain::Error::ConductorApiError(err))?;
+        .map_err(|err| anyhow!("{err:?}"))?;
     println!(
         "[unyt_tauri] setup: Found {} installed apps",
         installed_apps.len()
@@ -98,26 +100,19 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 "[unyt_tauri] setup: Found previous app version: {}",
                 prev_app.installed_app_id
             );
-        } else {
-            debug!("setup: No previous app versions found");
         }
 
         let mut roles_settings: RoleSettingsMap = RoleSettingsMap::new();
-        println!(
-            "[unyt_tauri] setup: Creating role settings for alliance with network_seed: {:?}",
-            app_config.network_seed
-        );
         roles_settings.insert(
             String::from("alliance"),
             RoleSettings::Provisioned {
                 membrane_proof: None,
                 modifiers: Some(DnaModifiersOpt {
-                    network_seed: Some(app_config.network_seed),
+                    network_seed: Some(app_config.network_seed.clone()),
                     ..Default::default()
                 }),
             },
         );
-        info!("setup: Role settings configured");
 
         if let Some(previous_app) = previous_app {
             println!(
@@ -125,7 +120,7 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 previous_app.installed_app_id
             );
             migrate_app(
-                &handle.holochain()?.holochain_runtime,
+                &holochain.holochain_runtime,
                 previous_app.installed_app_id.clone(),
                 app_config.app_id.clone(),
                 happ_bundle(),
@@ -148,10 +143,9 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 "[unyt_tauri] setup: Installing new app: {}",
                 app_config.app_id
             );
-            handle
-                .holochain()?
+            holochain
                 .install_app(
-                    String::from(app_config.app_id),
+                    app_config.app_id.clone(),
                     happ_bundle(),
                     Some(roles_settings),
                     None,
@@ -163,29 +157,34 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
         info!("setup: Fresh installation completed");
     } else {
         info!("setup: App already installed, checking for updates");
-        handle
-            .holochain()?
-            .update_app_if_necessary(String::from(app_config.app_id), happ_bundle())
+        holochain
+            .update_app_if_necessary(app_config.app_id.clone(), happ_bundle())
             .await?;
         info!("setup: App update check completed");
     }
-    
-    println!("[unyt_tauri] setup: Waiting for app websocket port...");
-    
-    // Give the conductor a moment to fully initialize listeners
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-    // IMPORTANT: In a multi-app scenario, we should filter these auths to find the one matching our app_id.
-    // Since we currently only have one primary app, taking the first available port is sufficient.
-    let port = handle
-        .holochain()?
-        .holochain_runtime
-        .apps_websockets_auths
-        .lock()
-        .await
-        .first()
-        .map(|auth| auth.app_websocket_port)
-        .ok_or(anyhow!("No app websocket port found"))?;
+    // Now that the app is installed/updated, we MUST ensure it's enabled and authorized.
+    // We use the plugin's `app_websocket` method which handles:
+    // 1. Finding or creating an app interface.
+    // 2. Ensuring the app is enabled.
+    // 3. Authenticating (generating/storing the token).
+    // This will populate the plugin's internal `apps_websockets_auths` state.
+    println!("[unyt_tauri] setup: Ensuring app websocket is ready for app_id: {}...", app_config.app_id);
+    let app_ws = holochain.app_websocket(app_config.app_id.clone()).await
+        .map_err(|err| anyhow!("Failed to get app websocket: {:?}", err))?;
+    
+    // We can get the port directly from the app_ws.
+    // In holochain_client 0.5+, we might need to use get_port() if it exists or similar.
+    // If not, we can now safely look it up in the plugin's auths because app_websocket() just populated it.
+    let port = {
+        let auths = holochain.holochain_runtime.apps_websockets_auths.lock().await;
+        auths.iter()
+            .find(|auth| auth.app_id.eq(&app_config.app_id))
+            .map(|auth| auth.app_websocket_port)
+            .ok_or_else(|| anyhow!("App websocket was created but no port found in auths list. This should not happen."))?
+    };
+
+    println!("[unyt_tauri] setup: Successfully authorized app on port {} for app_id {}", port, app_config.app_id);
     
     println!("[unyt_tauri] setup: Emitting backend-ready on port {}", port);
     let _ = handle.emit("backend-ready", port);
@@ -201,3 +200,4 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
 
     Ok(())
 }
+

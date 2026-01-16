@@ -327,7 +327,7 @@ pub fn spawn_heartbeat(handle: AppHandle) {
                 Ok(holochain) => {
                     let admin_ws_res = holochain.admin_websocket().await;
                     match admin_ws_res {
-                        Ok(mut admin_ws) => {
+                        Ok(admin_ws) => {
                             if let Err(e) = admin_ws.list_app_interfaces().await {
                                 error!(target: "unyt::runtime", "Heartbeat: Admin WebSocket ping failed: {:?}", e);
                                 status_manager.update_status(EnvRuntimeStatus::ConductorCrashed);

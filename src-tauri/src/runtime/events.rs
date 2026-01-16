@@ -1,3 +1,4 @@
+use crate::app_config::AppConfig;
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -6,11 +7,14 @@ use tauri_plugin_holochain::HolochainExt;
 #[tauri::command]
 pub async fn get_app_port(app_handle: AppHandle) -> Option<u16> {
     let holochain = app_handle.holochain().ok()?;
+    let app_config = AppConfig::new(&app_handle);
     let auths = holochain.holochain_runtime.apps_websockets_auths.lock().await;
-    
-    // Note: In a multi-app scenario, we should filter these auths to find the one matching a specific app_id.
-    // For now, we assume the first available interface is the one for our primary app.
-    auths.first().map(|auth| auth.app_websocket_port)
+
+    // Filter for the specific app_id to ensure we don't return a port for a different/stale app.
+    auths
+        .iter()
+        .find(|auth| auth.app_id.eq(&app_config.app_id))
+        .map(|auth| auth.app_websocket_port)
 }
 
 #[tauri::command]

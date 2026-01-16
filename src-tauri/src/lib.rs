@@ -138,35 +138,35 @@ pub fn run() {
                     Err(_) => return,
                 };
 
+                debug!("Received runtime status update: {:?}", status);
+
                 if status == EnvRuntimeStatus::LairReady
                     && !setup_triggered.swap(true, std::sync::atomic::Ordering::SeqCst)
                 {
-                    info!("Lair is ready, triggering application setup");
-                    let tauri_window_handle = handle.clone();
+                    info!("Lair is ready, triggering application setup (first time)");
+                    let window_handle = handle.clone();
                     tauri::async_runtime::spawn(async move {
                         info!("Starting setup process");
-                        if let Err(err) = utils::tauri::setup(tauri_window_handle.clone()).await {
+                        if let Err(err) = utils::tauri::setup(window_handle.clone()).await {
                             println!("[ERROR] Failed to setup: {err:?}");
                             let error_msg = format!("Failed to setup: {err:?}");
                             error!("{error_msg}");
 
-                            let state_manager = tauri_window_handle.state::<Arc<EnvStatusManager>>();
+                            let state_manager = window_handle.state::<Arc<EnvStatusManager>>();
                             state_manager
                                 .update_status(EnvRuntimeStatus::AppInstallationError(error_msg));
                             return;
                         }
                         info!("Setup completed successfully");
-                    });
 
-                    let unyt_window_handle = handle.clone();
-                    tauri::async_runtime::spawn(async move {
+                        // Open window ONLY after setup (installation/update) is successful
                         debug!("Opening unyt app (the main) window");
-                        if let Err(err) = utils::tauri::open_window(unyt_window_handle.clone()).await {
+                        if let Err(err) = utils::tauri::open_window(window_handle.clone()).await {
                             println!("[ERROR] Failed to open window: {err:?}");
-                            let error_msg = format!("Failed to setup: {err:?}");
+                            let error_msg = format!("Failed to open main window: {err:?}");
                             error!("{error_msg}");
 
-                            let state_manager = unyt_window_handle.state::<Arc<EnvStatusManager>>();
+                            let state_manager = window_handle.state::<Arc<EnvStatusManager>>();
                             state_manager.update_status(EnvRuntimeStatus::Error(error_msg));
                         } else {
                             debug!("Main window opened successfully");
