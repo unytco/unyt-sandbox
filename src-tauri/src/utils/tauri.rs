@@ -57,10 +57,10 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     let state_manager = handle.state::<Arc<EnvStatusManager>>();
     state_manager.update_status(EnvRuntimeStatus::ConductorStarting);
 
-    debug!("setup: Starting application setup");
+    println!("[unyt_tauri] setup: Starting application setup");
     let admin_ws = handle.holochain()?.admin_websocket().await?;
+    println!("[unyt_tauri] setup: Connected to admin websocket");
     state_manager.update_status(EnvRuntimeStatus::AppInstalling);
-    debug!("setup: Connected to admin websocket");
 
     let app_config = AppConfig::new(&handle);
     println!(
@@ -169,13 +169,11 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
             .await?;
         info!("setup: App update check completed");
     }
-
-    // Set status to Ready - Backend initialization is complete.
-    // Handing over to Unyt App to manage peer discovery and global def sync.
-    if let Some(status_manager) = handle.try_state::<Arc<EnvStatusManager>>() {
-        tracing::info!(target: "unyt::network", "System backend initialization complete. Handing over to Unyt App.");
-        status_manager.update_status(EnvRuntimeStatus::Ready);
-    }
+    
+    println!("[unyt_tauri] setup: Waiting for app websocket port...");
+    
+    // Give the conductor a moment to fully initialize listeners
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     // IMPORTANT: In a multi-app scenario, we should filter these auths to find the one matching our app_id.
     // Since we currently only have one primary app, taking the first available port is sufficient.
@@ -188,7 +186,18 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
         .first()
         .map(|auth| auth.app_websocket_port)
         .ok_or(anyhow!("No app websocket port found"))?;
+    
+    println!("[unyt_tauri] setup: Emitting backend-ready on port {}", port);
     let _ = handle.emit("backend-ready", port);
+
+    // Set status to Ready - Backend initialization is complete.
+    // Handing over to Unyt App to manage peer discovery and global def sync.
+    if let Some(status_manager) = handle.try_state::<Arc<EnvStatusManager>>() {
+        tracing::info!(target: "unyt::network", "System backend initialization complete. Handing over to Unyt App.");
+        status_manager.update_status(EnvRuntimeStatus::Ready);
+    }
+
+    crate::utils::holochain::spawn_heartbeat(handle);
 
     Ok(())
 }

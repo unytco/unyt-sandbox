@@ -1,8 +1,16 @@
+extern crate tokio;
+use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
+
 use anyhow::anyhow;
 use log::debug;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_holochain::AppBundle;
 use tauri_plugin_holochain::*;
+use tauri_plugin_holochain::{DnaModifiersOpt, HolochainExt, RoleSettings, RoleSettingsMap};
+use tokio::time::sleep;
+use tracing::error;
 use tracing::info;
 
 pub fn happ_bundle() -> AppBundle {
@@ -290,3 +298,54 @@ pub async fn dna_hash_for_app_bundle_role(
 
 //     Ok(implemented_zome_traits)
 // }
+
+//
+// Very simple setup for now:
+// - On app start, check whether the app is already installed:
+//   - If it's not installed, install it
+//   - If it's installed, check if it's necessary to update the coordinators for our hApp,
+//     and do so if it is
+//
+
+pub fn spawn_heartbeat(handle: AppHandle) {
+    info!("Starting conductor health heartbeat");
+    tauri::async_runtime::spawn(async move {
+        loop {
+            sleep(std::time::Duration::from_secs(120)).await;
+
+            let status_manager = match handle.try_state::<Arc<EnvStatusManager>>() {
+                Some(s) => s,
+                None => break,
+            };
+
+            // Only heartbeat when we are in Ready state
+            if status_manager.get_status() != EnvRuntimeStatus::Ready {
+                continue;
+            }
+
+            match handle.holochain() {
+                Ok(holochain) => {
+                    let admin_ws_res = holochain.admin_websocket().await;
+                    match admin_ws_res {
+                        Ok(mut admin_ws) => {
+                            if let Err(e) = admin_ws.list_app_interfaces().await {
+                                error!(target: "unyt::runtime", "Heartbeat: Admin WebSocket ping failed: {:?}", e);
+                                status_manager.update_status(EnvRuntimeStatus::ConductorCrashed);
+                                let _ = handle.emit("runtime://conductor-disconnected", ());
+                                break;
+                            }
+                            debug!(target: "unyt::runtime", "Heartbeat: Admin WebSocket ping successful");
+                        }
+                        Err(e) => {
+                            error!(target: "unyt::runtime", "Heartbeat: Could not connect to Admin WebSocket: {:?}", e);
+                            status_manager.update_status(EnvRuntimeStatus::ConductorCrashed);
+                            let _ = handle.emit("runtime://conductor-disconnected", ());
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}

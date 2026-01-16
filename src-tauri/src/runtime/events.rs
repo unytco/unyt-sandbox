@@ -6,12 +6,8 @@ use tauri_plugin_holochain::HolochainExt;
 #[tauri::command]
 pub async fn get_app_port(app_handle: AppHandle) -> Option<u16> {
     let holochain = app_handle.holochain().ok()?;
-    let auths = holochain
-        .holochain_runtime
-        .apps_websockets_auths
-        .lock()
-        .await;
-
+    let auths = holochain.holochain_runtime.apps_websockets_auths.lock().await;
+    
     // Note: In a multi-app scenario, we should filter these auths to find the one matching a specific app_id.
     // For now, we assume the first available interface is the one for our primary app.
     auths.first().map(|auth| auth.app_websocket_port)

@@ -116,11 +116,11 @@ pub fn init(app_handle: AppHandle) -> anyhow::Result<()> {
         .with_level(true);
 
     // Combine everything into a single Registry
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(filter) // Logic: What to show
         .with(tauri_log_bridge) // Sink 1: Show in UI
         .with(terminal_layer) // Sink 2: Show in Terminal
-        .init();
+        .try_init();
 
     Ok(())
 }

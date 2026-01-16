@@ -30,7 +30,7 @@ pub fn run() {
     debug!("Building Tauri application with plugins");
 
     let mut builder = tauri::Builder::default()
-        .plugin(runtime::logs::init_legacy_logger())
+        // .plugin(runtime::logs::init_legacy_logger())
         .invoke_handler(tauri::generate_handler![
             runtime::events::get_runtime_status,
             runtime::events::update_runtime_status,
@@ -95,7 +95,7 @@ pub fn run() {
         tauri::async_runtime::spawn(async move {
             // Initial attempt to unlock lair with no password...
             // If this attempt fails, the UI will eventually call `unlock_lair`` again with a password.
-            // Upon success, the `holochain://setup-completed`` listener will trigger the remaining setup.
+            // Upon success, the `LairReady` status update will trigger the remaining setup.
             if let Err(e) = runtime::boot::lair::unlock_lair(handle.clone(), None).await {
                 info!("Lair is locked or awaiting initial password: {}", e);
             }
@@ -129,48 +129,50 @@ pub fn run() {
             debug!("Added updater plugin");
         }
         let handle = app.handle().clone();
-        debug!("Setting up holochain setup-completed event listener");
+        let setup_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         app.handle()
-            .listen("holochain://setup-completed", move |_event| {
-                info!("Received holochain://setup-completed event");
-                let handle2 = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    info!("Starting setup process");
-                    if let Err(err) = utils::tauri::setup(handle2.clone()).await {
-                        println!("[ERROR] Failed to setup: {err:?}");
-                        let error_msg = format!("Failed to setup: {err:?}");
-                        error!("{error_msg}");
+            .listen("runtime://status-update", move |event| {
+                let status: EnvRuntimeStatus = match serde_json::from_str(event.payload()) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
 
-                        let state_manager = handle2.state::<Arc<EnvStatusManager>>();
-                        state_manager
-                            .update_status(EnvRuntimeStatus::AppInstallationError(error_msg));
-                        return;
-                    }
-                    info!("Setup completed successfully");
+                if status == EnvRuntimeStatus::LairReady
+                    && !setup_triggered.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    info!("Lair is ready, triggering application setup");
+                    let tauri_window_handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        info!("Starting setup process");
+                        if let Err(err) = utils::tauri::setup(tauri_window_handle.clone()).await {
+                            println!("[ERROR] Failed to setup: {err:?}");
+                            let error_msg = format!("Failed to setup: {err:?}");
+                            error!("{error_msg}");
 
-                    // todo
-                    // #[cfg(mobile)]
-                    // if let Err(err) =
-                    //     push_notifications::setup_push_notifications(handle2.clone())
-                    // {
-                    //     log::error!("Failed to setup push notifications: {err:?}");
-                    // }
-                });
-                let handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    debug!("Opening main window");
-                    if let Err(err) = utils::tauri::open_window(handle.clone()).await {
-                        println!("[ERROR] Failed to open window: {err:?}");
-                        let error_msg = format!("Failed to setup: {err:?}");
-                        error!("{error_msg}");
+                            let state_manager = tauri_window_handle.state::<Arc<EnvStatusManager>>();
+                            state_manager
+                                .update_status(EnvRuntimeStatus::AppInstallationError(error_msg));
+                            return;
+                        }
+                        info!("Setup completed successfully");
+                    });
 
-                        let state_manager = handle.state::<Arc<EnvStatusManager>>();
-                        state_manager.update_status(EnvRuntimeStatus::Error(error_msg));
-                    } else {
-                        debug!("Main window opened successfully");
-                    }
-                });
+                    let unyt_window_handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        debug!("Opening unyt app (the main) window");
+                        if let Err(err) = utils::tauri::open_window(unyt_window_handle.clone()).await {
+                            println!("[ERROR] Failed to open window: {err:?}");
+                            let error_msg = format!("Failed to setup: {err:?}");
+                            error!("{error_msg}");
+
+                            let state_manager = unyt_window_handle.state::<Arc<EnvStatusManager>>();
+                            state_manager.update_status(EnvRuntimeStatus::Error(error_msg));
+                        } else {
+                            debug!("Main window opened successfully");
+                        }
+                    });
+                }
             });
 
         debug!("Tauri application setup completed");

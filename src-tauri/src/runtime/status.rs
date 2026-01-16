@@ -13,6 +13,7 @@ pub enum EnvRuntimeStatus {
     LairReady,
     ConductorStarting,
     ConductorError(String),
+    ConductorCrashed,
     AppInstalling,
     AppInstallationError(String),
     Syncing {
@@ -43,6 +44,7 @@ impl EnvStatusManager {
             poisoned.into_inner()
         });
         if *status != new_status {
+            tracing::info!(target: "unyt::runtime", "Status update: {:?} -> {:?}", *status, new_status);
             *status = new_status.clone();
             let _ = self.app_handle.emit("runtime://status-update", new_status);
         }

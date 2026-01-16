@@ -49,7 +49,6 @@ pub async fn unlock_lair(
             };
             app_handle.manage(p);
             status_manager.update_status(EnvRuntimeStatus::LairReady);
-            let _ = app_handle.emit("holochain://setup-completed", ());
             Ok(())
         }
         Err(e) => {
