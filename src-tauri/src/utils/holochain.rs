@@ -85,9 +85,11 @@ pub async fn migrate_app(
         let new_role_settings = new_roles_settings.remove(&new_role.name);
 
         if let Some(new_role_settings) = &new_role_settings {
+            #[allow(deprecated)]
             if let RoleSettings::UseExisting { cell_id } = new_role_settings {
                 roles_settings.insert(
                     new_role.name,
+                    #[allow(deprecated)]
                     RoleSettings::UseExisting {
                         cell_id: cell_id.clone(),
                     },
@@ -142,6 +144,7 @@ pub async fn migrate_app(
 
             roles_settings.insert(
                 new_role.name,
+                #[allow(deprecated)]
                 RoleSettings::UseExisting {
                     cell_id: existing_cell.cell_id,
                 },
