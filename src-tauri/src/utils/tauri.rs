@@ -2,7 +2,6 @@ use crate::app_config::{AppConfig, APP_ID_PREFIX};
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use crate::utils::holochain::{happ_bundle, migrate_app};
 use anyhow::anyhow;
-use log::debug;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_holochain::{
@@ -11,7 +10,7 @@ use tauri_plugin_holochain::{
 use tracing::info;
 
 pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
-    debug!("open_window: Creating main window");
+    tracing::debug!(target: "unyt", "open_window: Creating main window");
     let app_config = AppConfig::new(&handle);
     println!(
         "[unyt_tauri] open_window: App config created with app_id: {}",
@@ -27,11 +26,11 @@ pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
             None,
         )
         .await?;
-    debug!("open_window: Window builder created");
+    tracing::debug!(target: "unyt", "open_window: Window builder created");
 
     #[cfg(not(mobile))]
     {
-        debug!("open_window: Configuring desktop window properties");
+        tracing::debug!(target: "unyt", "open_window: Configuring desktop window properties");
         window_builder = window_builder
             .title(app_config.product_name)
             .inner_size(1400.0, 1000.0);
@@ -40,13 +39,13 @@ pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
         );
     }
 
-    debug!("open_window: Building window");
+    tracing::debug!(target: "unyt", "open_window: Building window");
     let window = window_builder.build()?;
 
     // TODO: KEEP?
     window.hide()?; // Ensure it stays hidden until explicitly shown by close_splashscreen
 
-    debug!("open_window: Window built successfully");
+    tracing::debug!(target: "unyt", "open_window: Window built successfully");
     Ok(window)
 }
 
@@ -61,14 +60,12 @@ pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
 pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     let state_manager = handle.state::<Arc<EnvStatusManager>>();
     state_manager.update_status(EnvRuntimeStatus::ConductorStarting);
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     println!("[unyt_tauri] setup: Starting application setup");
     let holochain = handle.holochain()?;
     let admin_ws = holochain.admin_websocket().await?;
     println!("[unyt_tauri] setup: Connected to admin websocket");
     state_manager.update_status(EnvRuntimeStatus::AppInstalling);
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     let app_config = AppConfig::new(&handle);
     println!(
@@ -78,15 +75,13 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
 
     state_manager.update_status(EnvRuntimeStatus::Syncing {
         step: 1,
-        total_steps: 5,
+        total_steps: 8,
         message: String::from("Checking installed applications..."),
     });
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     let installed_apps = admin_ws
         .list_apps(Some(AppStatusFilter::Enabled))
         .await
-        // .map_err(|err| tauri_plugin_holochain::Error::ConductorApiError(err))?;
         .map_err(|err| anyhow!("{err:?}"))?;
     println!(
         "[unyt_tauri] setup: Found {} installed apps",
@@ -103,10 +98,10 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     );
 
     if !app_is_already_installed {
-        debug!("setup: App not installed, checking for previous versions");
+        tracing::debug!(target: "unyt", "setup: App not installed, checking for previous versions");
         state_manager.update_status(EnvRuntimeStatus::Syncing {
             step: 2,
-            total_steps: 5,
+            total_steps: 8,
             message: String::from("Installing application..."),
         });
 
@@ -122,7 +117,7 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
             );
             state_manager.update_status(EnvRuntimeStatus::Syncing {
                 step: 2,
-                total_steps: 5,
+                total_steps: 8,
                 message: format!(
                     "Migrating from previous version {}...",
                     prev_app.installed_app_id
@@ -165,7 +160,7 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 .disable_app(previous_app.installed_app_id.clone())
                 .await
                 .map_err(|err| anyhow!("{err:?}"))?;
-            debug!("setup: Previous app disabled");
+            tracing::debug!(target: "unyt", "setup: Previous app disabled");
         } else {
             println!(
                 "[unyt_tauri] setup: Installing new app: {}",
@@ -186,11 +181,10 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     } else {
         info!("setup: App already installed, checking for updates");
         state_manager.update_status(EnvRuntimeStatus::Syncing {
-            step: 3,
-            total_steps: 5,
+            step: 2,
+            total_steps: 8,
             message: String::from("Checking for application updates..."),
         });
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         holochain
             .update_app_if_necessary(app_config.app_id.clone(), happ_bundle())
             .await?;
@@ -199,11 +193,10 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
 
     // Now that the app is installed/updated, we MUST ensure it's enabled and authorized.
     state_manager.update_status(EnvRuntimeStatus::Syncing {
-        step: 4,
-        total_steps: 5,
+        step: 3,
+        total_steps: 8,
         message: String::from("Authorizing lair connection..."),
     });
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     // We use the plugin's `app_websocket` method which handles:
     // 1. Finding or creating an app interface.
@@ -240,8 +233,8 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     );
 
     state_manager.update_status(EnvRuntimeStatus::Syncing {
-        step: 5,
-        total_steps: 5,
+        step: 3,
+        total_steps: 8,
         message: String::from("Finalizing system initialization..."),
     });
 
@@ -256,7 +249,6 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
     if let Some(status_manager) = handle.try_state::<Arc<EnvStatusManager>>() {
         tracing::info!(target: "unyt::network", "System backend initialization complete. Handing over to Unyt App.");
         status_manager.update_status(EnvRuntimeStatus::Ready);
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
     crate::utils::holochain::spawn_heartbeat(handle);

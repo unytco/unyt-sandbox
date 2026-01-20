@@ -3,7 +3,7 @@ mod consts;
 mod runtime;
 mod utils;
 
-pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR};
+pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR, KEYCHAIN_SALT_USER};
 pub use utils::holochain::migrate_app;
 
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
@@ -20,14 +20,14 @@ mod menu;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    debug!("Starting Tauri application");
+    tracing::debug!(target: "unyt", "Starting Tauri application");
     // check for UNYT_WASM_LOG and set it to debug if it is not set
     if let Ok(wasm_log) = std::env::var("UNYT_WASM_LOG") {
         std::env::set_var("WASM_LOG", wasm_log);
     } else {
         std::env::set_var("WASM_LOG", "debug");
     }
-    debug!("Building Tauri application with plugins");
+    tracing::debug!(target: "unyt", "Building Tauri application with plugins");
 
     let mut builder = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -40,21 +40,21 @@ pub fn run() {
             runtime::boot::lair::unlock_lair
         ]);
 
-    debug!("Added logging plugin and runtime commands");
+    tracing::debug!(target: "unyt", "Added logging plugin and runtime commands");
 
     builder = builder
         // .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init());
-    debug!("Added notification plugin");
+    tracing::debug!(target: "unyt", "Added notification plugin");
 
     builder = builder.plugin(tauri_plugin_process::init());
-    debug!("Added process plugin");
+    tracing::debug!(target: "unyt", "Added process plugin");
 
     builder = builder.plugin(tauri_plugin_dialog::init());
-    debug!("Added dialog plugin");
+    tracing::debug!(target: "unyt", "Added dialog plugin");
 
     builder = builder.plugin(tauri_plugin_http::init());
-    debug!("Added HTTP plugin");
+    tracing::debug!(target: "unyt", "Added HTTP plugin");
 
     // Secure lair keystore with argon2
     builder = builder.plugin(
@@ -63,11 +63,41 @@ pub fn run() {
                 password_hash::{PasswordHasher, SaltString},
                 Argon2,
             };
+            use keyring::Entry;
+            use rand::rngs::OsRng;
 
-            // NB: use the environment variable for the salt (TAURI_LAIR_SALT),
-            // the default should be used as testing fallback only...
-            let salt_str = std::env::var("TAURI_LAIR_SALT")
-                .unwrap_or_else(|_| "u76ByY463Y0vO58yD5S6Vw".to_string());
+            // OS-Level Secret Management (Keychain/Secret Service)
+            // We store a unique salt per-installation in the OS Keychain.
+            // This ensures that even if the app data folder is stolen, the salt
+            // required to crack the password remains in the OS-protected store.
+            let service = IDENTIFIER_DIR;
+            let username = KEYCHAIN_SALT_USER;
+
+            let salt_str = (|| {
+                let entry = Entry::new(service, username).ok()?;
+                if let Ok(s) = entry.get_password() {
+                    return Some(s);
+                }
+
+                // If not in keychain, prioritize the environment variable (for testing/CI)
+                // then fallback to generating a new random salt.
+                let s = std::env::var("TAURI_LAIR_SALT").ok().unwrap_or_else(|| {
+                    tracing::info!(target: "unyt", "Generating new unique salt for Lair keystore");
+                    SaltString::generate(&mut OsRng).to_string()
+                });
+
+                // Try to save the salt to the keychain for future use
+                if let Err(e) = entry.set_password(&s) {
+                    tracing::warn!(target: "unyt", "Failed to persist salt to OS Keychain: {}", e);
+                }
+                Some(s)
+            })()
+            .unwrap_or_else(|| {
+                // Fallback for environments without a Keychain or Env Var (e.g. headless Linux servers)
+                // TODO: Disucss options for this final fallback case...
+                tracing::warn!(target: "unyt", "Keychain unavailable, using default fallback salt");
+                "u76ByY463Y0vO58yD5S6Vw".to_string()
+            });
 
             let salt = SaltString::from_b64(&salt_str).expect("invalid salt");
             Argon2::default()
@@ -80,7 +110,7 @@ pub fn run() {
         })
         .build(),
     );
-    debug!("Enabled argon2-based password hashing for lair keystore");
+    tracing::debug!(target: "unyt", "Enabled native-backed argon2 password hashing for lair keystore");
 
     builder = builder.plugin(tauri_plugin_holochain::plugin_builder().build());
     info!("Added holochain plugin");
@@ -88,51 +118,49 @@ pub fn run() {
     builder = builder.setup(move |app| {
         // Initialize logs and status
         runtime::init(app.handle())?;
-        debug!("Tauri setup initialized");
+        tracing::debug!(target: "unyt", "Tauri setup initialized");
 
         let handle = app.handle().clone();
-        tauri::async_runtime::spawn(async move {
-            // Initial attempt to unlock lair with no password...
-            // If this attempt fails, the UI will eventually call `unlock_lair` again with a password.
-            // Upon success, the `LairReady` status update will trigger the remaining setup.
-            if let Err(e) = runtime::boot::lair::unlock_lair(handle.clone(), None).await {
-                info!("Lair is locked or awaiting initial password: {}", e);
-            }
-        });
 
         #[cfg(mobile)]
         {
-            debug!("Mobile platform detected, adding mobile-specific plugins");
+            tracing::debug!(target: "unyt", "Mobile platform detected, adding mobile-specific plugins");
             app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
-            debug!("Added barcode scanner plugin");
+            tracing::debug!(target: "unyt", "Added barcode scanner plugin");
             app.handle()
                 .plugin(tauri_plugin_safe_area_insets_css::init())?;
-            debug!("Added safe area insets CSS plugin");
+            tracing::debug!(target: "unyt", "Added safe area insets CSS plugin");
         }
 
         #[cfg(not(mobile))]
         {
-            debug!("Desktop platform detected, adding desktop-specific plugins");
+            tracing::debug!(target: "unyt", "Desktop platform detected, adding desktop-specific plugins");
 
-            app.handle()
-                .plugin(tauri_plugin_single_instance::init(move |app, _argv, _cwd| {
-                    info!("Second instance detected, focusing main window");
-                    if let Some(main) = app.get_webview_window("main") {
-                        let _ = main.set_focus();
-                    } else if let Some(splash) = app.get_webview_window("splashscreen") {
-                        let _ = splash.set_focus();
-                    }
-                }))?;
+            let agent_id = std::env::var("AGENT_ID").unwrap_or_else(|_| "".into());
+            if agent_id.is_empty() {
+                app.handle()
+                    .plugin(tauri_plugin_single_instance::init(move |app, _argv, _cwd| {
+                        info!("Second instance detected, focusing main window");
+                        if let Some(main) = app.get_webview_window("main") {
+                            let _ = main.set_focus();
+                        } else if let Some(splash) = app.get_webview_window("splashscreen") {
+                            let _ = splash.set_focus();
+                        }
+                    }))?;
+            } else {
+                tracing::debug!(target: "unyt", "AGENT_ID set, skipping single_instance plugin to allow multiple instances");
+            }
 
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
-            debug!("Added updater plugin");
+            tracing::debug!(target: "unyt", "Added updater plugin");
         }
-        let handle = app.handle().clone();
 
         // Track if setup has been triggered (to prevent multiple setup attempts)
         let setup_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+        let setup_triggered_clone = setup_triggered.clone();
+        let handle_clone = handle.clone();
         app.handle()
             .listen("runtime://status-update", move |event| {
                 let status: EnvRuntimeStatus = match serde_json::from_str(event.payload()) {
@@ -140,14 +168,14 @@ pub fn run() {
                     Err(_) => return,
                 };
 
-                debug!("Received runtime status update: {:?}", status);
+                tracing::debug!(target: "unyt", "Received runtime status update: {:?}", status);
 
                 // Only trigger setup if Lair is ready and we haven't already done so
                 if status == EnvRuntimeStatus::LairReady
-                    && !setup_triggered.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    && !setup_triggered_clone.swap(true, std::sync::atomic::Ordering::SeqCst)
                 {
                     info!("Lair is ready, triggering application setup (first time)");
-                    let window_handle = handle.clone();
+                    let window_handle = handle_clone.clone();
                     tauri::async_runtime::spawn(async move {
                         info!("Starting setup process");
                         if let Err(err) = utils::tauri::setup(window_handle.clone()).await {
@@ -163,7 +191,7 @@ pub fn run() {
                         info!("Setup completed successfully");
 
                         // Open window ONLY after setup (installation/update) is successful
-                        debug!("Opening unyt app (the main) window");
+                        tracing::debug!(target: "unyt", "Opening unyt app (the main) window");
                         if let Err(err) = utils::tauri::open_window(window_handle.clone()).await {
                             println!("[ERROR] Failed to open window: {err:?}");
                             let error_msg = format!("Failed to open main window: {err:?}");
@@ -172,26 +200,51 @@ pub fn run() {
                             let state_manager = window_handle.state::<Arc<EnvStatusManager>>();
                             state_manager.update_status(EnvRuntimeStatus::Error(error_msg));
                         } else {
-                            debug!("Main window opened successfully");
+                            tracing::debug!(target: "unyt", "Main window opened successfully");
                         }
                     });
                 }
             });
 
-        debug!("Tauri application setup completed");
+        // Now that listener is registered, trigger initial unlock attempt
+        let handle_for_unlock = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            // Initial attempt to unlock lair with no password...
+            // If this attempt fails, the UI will eventually call `unlock_lair` again with a password.
+            // Upon success, the `LairReady` status update will trigger the remaining setup.
+            if let Err(e) = runtime::boot::lair::unlock_lair(handle_for_unlock.clone(), None).await {
+                info!("Lair is locked or awaiting initial password: {}", e);
+            }
+        });
+
+        // Proactive check: If we are already in LairReady state, trigger setup..
+        let state_manager = handle.state::<Arc<EnvStatusManager>>();
+        if state_manager.get_status() == EnvRuntimeStatus::LairReady 
+            && !setup_triggered.swap(true, std::sync::atomic::Ordering::SeqCst) 
+        {
+            info!("Proactive check: Lair is already ready, triggering application setup");
+            let window_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = utils::tauri::setup(window_handle.clone()).await {
+                    println!("[ERROR] Failed to setup: {err:?}");
+                }
+            });
+        }
+
+        tracing::debug!(target: "unyt", "Tauri application setup completed");
         Ok(())
     });
 
     #[cfg(not(mobile))]
     {
-        debug!("Adding desktop menu");
+        tracing::debug!(target: "unyt", "Adding desktop menu");
         builder = builder.menu(|handle| menu::build_menu(handle));
-        debug!("Desktop menu added");
+        tracing::debug!(target: "unyt", "Desktop menu added");
     }
 
-    debug!("Starting Tauri application run loop");
+    tracing::debug!(target: "unyt", "Starting Tauri application run loop");
     builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-    debug!("Tauri application has exited");
+    tracing::debug!(target: "unyt", "Tauri application has exited");
 }

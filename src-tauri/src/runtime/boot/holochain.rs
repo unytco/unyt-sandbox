@@ -1,22 +1,36 @@
 use crate::app_config::{get_version, IDENTIFIER_DIR};
 use crate::consts;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tauri_plugin_holochain::{NetworkConfig, ReportConfig};
-use tracing::debug;
+
+static IDENTIFIER: OnceLock<String> = OnceLock::new();
 
 // This function determines the holochain directory path based on the development mode and the app version
 // Returns the path to the holochain directory
 // (Relocated from mod.rs to boot.rs to avoid circular dependencies)
 pub fn holochain_dir() -> PathBuf {
-    debug!("holochain_dir: Determining holochain directory path");
+    tracing::debug!(target: "unyt", "holochain_dir: Determining holochain directory path");
     let use_persistent_dev = std::env::var("UNYT_PERSISTENT_DEV").is_ok();
+
+    let identifier: &'static str = IDENTIFIER.get_or_init(|| {
+        let agent_id = std::env::var("AGENT_ID").unwrap_or_else(|_| "".into());
+        if agent_id.is_empty() {
+            IDENTIFIER_DIR.to_string()
+        } else {
+            format!("{}-{}", IDENTIFIER_DIR, agent_id)
+        }
+    }).as_str();
+
+    let agent_id = std::env::var("AGENT_ID").unwrap_or_else(|_| "".into());
 
     if tauri::is_dev() && cfg!(not(mobile)) && !use_persistent_dev {
         println!(
-            "[unyt_tauri] holochain_dir: Development mode on desktop, creating temporary directory"
+            "[unyt_tauri] holochain_dir: Development mode on desktop, creating temporary directory for agent {}",
+            agent_id
         );
         let tmp_dir =
-            tempdir::TempDir::new(IDENTIFIER_DIR).expect("Could not create temporary directory");
+            tempdir::TempDir::new(identifier).expect("Could not create temporary directory");
         println!(
             "[unyt_tauri] holochain_dir: Temporary directory created: {:?}",
             tmp_dir.path()
@@ -31,19 +45,19 @@ pub fn holochain_dir() -> PathBuf {
         );
         tmp_path
     } else {
-        debug!("holochain_dir: Production mode or mobile, using app data directory");
+        tracing::debug!(target: "unyt", "holochain_dir: Production mode or mobile, using app data directory");
         let version = get_version();
-        debug!("holochain_dir: App version: {}", version);
+        tracing::debug!(target: "unyt", "holochain_dir: App version: {}", version);
 
         let app_root = app_dirs2::app_root(
             app_dirs2::AppDataType::UserData,
             &app_dirs2::AppInfo {
-                name: IDENTIFIER_DIR,
+                name: identifier,
                 author: std::env!("CARGO_PKG_AUTHORS"),
             },
         )
         .expect("Could not get app root");
-        debug!("holochain_dir: App root: {:?}", app_root);
+        tracing::debug!(target: "unyt", "holochain_dir: App root: {:?}", app_root);
 
         let holochain_path = app_root.join(version).join("holochain");
         println!(
@@ -57,7 +71,7 @@ pub fn holochain_dir() -> PathBuf {
 // This function creates the network configuration for the holochain runtime
 // Returns the network configuration
 pub fn network_config() -> NetworkConfig {
-    debug!("network_config: Creating network configuration");
+    tracing::debug!(target: "unyt", "network_config: Creating network configuration");
     let mut network_config = NetworkConfig::default();
 
     // Don't use the bootstrap service on tauri dev mode
@@ -98,7 +112,7 @@ pub fn network_config() -> NetworkConfig {
     );
     match consts::HOLOCHAIN_ARC_FACTOR {
         "0" => {
-            debug!("network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
+            tracing::debug!(target: "unyt", "network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
             network_config.target_arc_factor = 0;
         }
         "" => {
@@ -116,6 +130,6 @@ pub fn network_config() -> NetworkConfig {
         }
     }
 
-    debug!("network_config: Network configuration created successfully");
+    tracing::debug!(target: "unyt", "network_config: Network configuration created successfully");
     network_config
 }

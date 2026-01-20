@@ -17,7 +17,12 @@ To skip the Lair keystore password prompt during development (uses an empty pass
 UNYT_BYPASS_PASSWORD=true yarn network:tauri
 ```
 
-### Production Lair Salt env var
+### Lair Keystore Salt
+The application uses a unique cryptographic salt for hashing the Lair keystore password. By default, this salt is generated on first launch and stored securely in the **OS Keychain** (macOS Keychain, Windows Credential Manager, or Linux Secret Service).
+
+To override this behavior or provide a specific salt (e.g., for automated testing or recovery):
+
 ```bash
-TAURI_LAIR_SALT
+TAURI_LAIR_SALT=your-base64-salt yarn network:tauri
 ```
+*Note: Overriding the salt on an existing installation will prevent the app from unlocking the keystore unless the password is also updated to match the new derivation.*

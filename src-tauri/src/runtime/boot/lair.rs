@@ -6,7 +6,6 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_holochain::{
     launch_holochain_runtime, vec_to_locked, HolochainPlugin, HolochainPluginConfig,
 };
-use tracing::debug;
 use zeroize::Zeroize;
 
 #[tauri::command]
@@ -22,7 +21,7 @@ pub async fn unlock_lair(
     // Trigger password prompt ONLY on initial setup if no password/bypass is provided.
     // Otherwise, fall through to attempt unlock (initial empty-pass attempt happens on subsequent runs).
     if is_initial_setup && password.is_none() && std::env::var("UNYT_BYPASS_PASSWORD").is_err() {
-        debug!("unlock_lair: Initial setup detected, triggering password prompt. Note: Use UNYT_BYPASS_PASSWORD to skip.");
+        tracing::debug!(target: "unyt", "unlock_lair: Initial setup detected, triggering password prompt. Note: Use UNYT_BYPASS_PASSWORD to skip.");
         status_manager.update_status(EnvRuntimeStatus::LairAwaitingPassword { is_initial_setup });
         return Err("Password required (initial setup)".to_string());
     }

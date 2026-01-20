@@ -64,6 +64,8 @@ secrecy = { version = "0.8", features = ["serde"] }
 zeroize = { version = "1.8", features = ["derive"] }
 tauri-plugin-stronghold = "2.0.0"
 argon2 = "0.5"
+keyring = "3"
+rand = "0.8"
 
 # Work around "hyper-tls" not found issue in nix build tauri app
 # TODO: remove this dependency
