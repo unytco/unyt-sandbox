@@ -56,6 +56,15 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_http::init());
     tracing::debug!(target: "unyt", "Added HTTP plugin");
 
+    builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if window.label() == "main" {
+                tracing::info!(target: "unyt", "Main window closed, exiting application");
+                window.app_handle().exit(0);
+            }
+        }
+    });
+
     // Secure lair keystore with argon2
     builder = builder.plugin(
         tauri_plugin_stronghold::Builder::new(|password| {
@@ -244,7 +253,11 @@ pub fn run() {
 
     tracing::debug!(target: "unyt", "Starting Tauri application run loop");
     builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-    tracing::debug!(target: "unyt", "Tauri application has exited");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                std::process::exit(0);
+            }
+        });
 }

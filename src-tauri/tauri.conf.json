@@ -24,14 +24,6 @@
         "center": true,
         "transparent": false,
         "alwaysOnTop": false
-      },
-      {
-        "label": "logs",
-        "title": "Unyt System Logs",
-        "url": "/logs.html",
-        "width": 800,
-        "height": 600,
-        "visible": false
       }
     ]
   },

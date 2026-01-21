@@ -43,7 +43,7 @@ pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
     let window = window_builder.build()?;
 
     // TODO: KEEP?
-    window.hide()?; // Ensure it stays hidden until explicitly shown by close_splashscreen
+    // window.hide()?; // Ensure it stays hidden until explicitly shown by the `close_splashscreen` command.
 
     tracing::debug!(target: "unyt", "open_window: Window built successfully");
     Ok(window)
