@@ -518,6 +518,21 @@
     lodash-es "^4.17.21"
     sort-keys "^5.0.0"
 
+"@holochain/client@0.20.2", "@holochain/client@^0.20.0":
+  version "0.20.2"
+  resolved "https://registry.yarnpkg.com/@holochain/client/-/client-0.20.2.tgz#08166c6dc4411dbb703e256296668d31a4606677"
+  integrity sha512-vT3/NfVXizjtGxj1NZeThaNoM1OvT5OXh7qtYVyppj/PRf5bRzC0q4M5xMrMEKFd6FzVvn4qEGXCr/MV9xHL1g==
+  dependencies:
+    "@bitgo/blake2b" "^3.2.4"
+    "@msgpack/msgpack" "^3.1.2"
+    emittery "^1.2.0"
+    isomorphic-ws "^5.0.0"
+    js-base64 "^3.7.8"
+    js-sha512 "^0.9.0"
+    libsodium-wrappers "^0.8"
+    lodash-es "^4.17.21"
+    ws "^8.18.3"
+
 "@holochain/client@^0.18.0":
   version "0.18.1"
   resolved "https://registry.yarnpkg.com/@holochain/client/-/client-0.18.1.tgz#64f2bb629750fa16a5860407f92374ff9ae9c319"
@@ -532,21 +547,6 @@
     libsodium-wrappers "^0.7.13"
     lodash-es "^4.17.21"
     ws "^8.14.2"
-
-"@holochain/client@^0.20.0", "@holochain/client@^0.20.0-dev.2":
-  version "0.20.2"
-  resolved "https://registry.yarnpkg.com/@holochain/client/-/client-0.20.2.tgz#08166c6dc4411dbb703e256296668d31a4606677"
-  integrity sha512-vT3/NfVXizjtGxj1NZeThaNoM1OvT5OXh7qtYVyppj/PRf5bRzC0q4M5xMrMEKFd6FzVvn4qEGXCr/MV9xHL1g==
-  dependencies:
-    "@bitgo/blake2b" "^3.2.4"
-    "@msgpack/msgpack" "^3.1.2"
-    emittery "^1.2.0"
-    isomorphic-ws "^5.0.0"
-    js-base64 "^3.7.8"
-    js-sha512 "^0.9.0"
-    libsodium-wrappers "^0.8"
-    lodash-es "^4.17.21"
-    ws "^8.18.3"
 
 "@holochain/hc-spin-rust-utils-darwin-arm64@0.600.0":
   version "0.600.0"
