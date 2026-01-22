@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "network:tauri": "concurrently \"cd unyt && yarn network:tauri\" \"yarn launch\"",
-    "launch": "concurrently \"yarn tauri dev --no-watch\" \"yarn tauri dev --no-watch\"",
+    "launch": "concurrently \"AGENT_ID=1 CARGO_TARGET_DIR=target/agent1 yarn tauri dev --port 1420\" \"AGENT_ID=2 CARGO_TARGET_DIR=target/agent2 yarn tauri dev --port 1421\"",
     "launch:android": "yarn tauri android dev",
     "tauri": "tauri"
   },
@@ -19,7 +19,6 @@
     "@tauri-apps/cli": "^2.0.0",
     "get-port-cli": "3.0.0"
   },
-  "resolutions": {},
   "engines": {
     "node": ">=16.0.0"
   }

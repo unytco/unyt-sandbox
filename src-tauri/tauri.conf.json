@@ -1,5 +1,5 @@
 {
-  "version": "0.48.0",
+  "version": "0.49.0-test.4",
   "productName": "Unyt-tx5",
   "identifier": "co.unyt.tx5.sandbox",
   "build": {
@@ -10,8 +10,22 @@
   "app": {
     "withGlobalTauri": false,
     "security": {
-      "capabilities": ["mobile-capability", "main-capability", "desktop-capability"]
-    }
+      "capabilities": ["mobile-capability", "main-capability", "desktop-capability", "splashscreen-capability"]
+    },
+    "windows": [
+      {
+        "label": "splashscreen",
+        "title": "Unyt Loading",
+        "url": "/splashscreen.html",
+        "width": 800,
+        "height": 800,
+        "resizable": true,
+        "decorations": false,
+        "center": true,
+        "transparent": false,
+        "alwaysOnTop": false
+      }
+    ]
   },
   "bundle": {
     "active": true,

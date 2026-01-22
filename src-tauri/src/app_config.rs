@@ -1,9 +1,10 @@
 use log::debug;
 use tauri::AppHandle;
 
-// this is we are setting it the same as the identifier
+// This is for when we are setting it the same as the identifier
 pub const IDENTIFIER_DIR: &'static str = "co.unyt.tx5.sandbox";
 pub const APP_ID_PREFIX: &'static str = "unyt-tx5";
+pub const KEYCHAIN_SALT_USER: &'static str = "lair-salt";
 // todo: when we have a way to get the DNA hash we should include this
 // const DNA_HASH: &'static str = include_str!("../../workdir/unyt-dna_hashes");
 
@@ -20,14 +21,14 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn new<R: tauri::Runtime>(handle: &AppHandle<R>) -> Self {
         // the version number is semantic versioning,
-        // so I want to brek it down and get the first two numbers
-        // and use them as the version number
+        // so I want to break it down and get the first two numbers
+        // and use them as the version number.
         // let version = handle.package_info().version.to_string();
         // let version_parts: Vec<&str> = version.split('.').collect();
         // let major_version = version_parts[0].to_string();
         // let minor_version = version_parts[1].to_string();
-        // // the reason we use the first two numbers is because we will expect a migration to be implemented if the major or minor version is updated
-        // // and we will not expect a migration to be implemented if the patch version is updated
+        // // The reason we use the first two numbers is because we will expect a migration to be implemented if the major or minor version is updated
+        // // and we will not expect a migration to be implemented if the patch version is updated.
         // let version = format!("{}.{}", major_version, minor_version);
         let version = get_version();
         Self {

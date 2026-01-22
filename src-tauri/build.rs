@@ -18,7 +18,7 @@ fn main() {
     );
 
     // Write to a generated file
-    std::fs::write("src/generated_arc_factor.rs", code).expect("Failed to write generated file");
+    std::fs::write("src/consts.rs", code).expect("Failed to write generated file");
 
     // Tell Cargo to rerun this build script if files change
     println!("cargo:rerun-if-env-changed=HOLOCHAIN_ARC_FACTOR");

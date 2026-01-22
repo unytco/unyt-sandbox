@@ -1,9 +1,10 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use log::error;
 mod about;
 
-use crate::holochain_dir;
+use crate::runtime::boot::holochain::holochain_dir;
 
 pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     app_handle.on_menu_event(|app_handle, menu_event| match menu_event.id().as_ref() {
@@ -13,13 +14,13 @@ pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R
                 .app_log_dir()
                 .expect("Could not get app log dir");
             if let Err(err) = opener::reveal(log_folder.clone()) {
-                log::error!("Failed to open log dir at {log_folder:?}: {err:?}");
+                error!("Failed to open log dir at {log_folder:?}: {err:?}");
             }
         }
         "reload" => {
             if let Some(window) = app_handle.get_webview_window("main") {
                 if let Err(err) = window.eval("window.location.reload()") {
-                    log::error!("Failed to reload window: {err:?}");
+                    error!("Failed to reload window: {err:?}");
                 }
             }
         }
@@ -41,7 +42,7 @@ pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R
                 .show(move |result| match result {
                     true => {
                         if let Err(err) = std::fs::remove_dir_all(holochain_dir()) {
-                            log::error!("Failed to perform factory reset: {err:?}");
+                            error!("Failed to perform factory reset: {err:?}");
                         } else {
                             h.restart();
                         }

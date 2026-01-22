@@ -1,9 +1,25 @@
+extern crate tokio;
+use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
+
 use anyhow::anyhow;
-use std::{
-    collections::HashMap,
-    // time::Duration
-};
+use log::debug;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_holochain::AppBundle;
 use tauri_plugin_holochain::*;
+use tauri_plugin_holochain::{DnaModifiersOpt, HolochainExt, RoleSettings, RoleSettingsMap};
+use tokio::time::sleep;
+use tracing::{error, info};
+
+pub fn happ_bundle() -> AppBundle {
+    debug!("Loading happ bundle from workdir/unyt.happ");
+    let bytes = include_bytes!("../../../workdir/unyt.happ");
+    debug!("Happ bundle bytes loaded, size: {} bytes", bytes.len());
+    let bundle = AppBundle::unpack(&bytes[..]).expect("Failed to decode unyt happ");
+    debug!("Happ bundle decoded successfully");
+    bundle
+}
 
 // pub async fn with_retries<T>(
 //     condition: impl AsyncFn() -> anyhow::Result<T>,
@@ -38,10 +54,9 @@ pub async fn migrate_app(
     new_app_bundle: AppBundle,
     new_roles_settings: Option<RoleSettingsMap>,
 ) -> anyhow::Result<AppInfo> {
-    log::info!(
+    info!(
         "Migrating from old app {} to new app {}.",
-        existing_app_id,
-        new_app_id
+        existing_app_id, new_app_id
     );
     let admin_ws = holochain_runtime.admin_websocket().await?;
     let apps = admin_ws.list_apps(None).await?;
@@ -70,9 +85,11 @@ pub async fn migrate_app(
         let new_role_settings = new_roles_settings.remove(&new_role.name);
 
         if let Some(new_role_settings) = &new_role_settings {
+            #[allow(deprecated)]
             if let RoleSettings::UseExisting { cell_id } = new_role_settings {
                 roles_settings.insert(
                     new_role.name,
+                    #[allow(deprecated)]
                     RoleSettings::UseExisting {
                         cell_id: cell_id.clone(),
                     },
@@ -123,10 +140,11 @@ pub async fn migrate_app(
         };
 
         if new_dna_hash.eq(&existing_cell.cell_id.dna_hash()) {
-            log::info!("Reusing role {}.", new_role.name);
+            info!("Reusing role {}.", new_role.name);
 
             roles_settings.insert(
                 new_role.name,
+                #[allow(deprecated)]
                 RoleSettings::UseExisting {
                     cell_id: existing_cell.cell_id,
                 },
@@ -282,3 +300,46 @@ pub async fn dna_hash_for_app_bundle_role(
 
 //     Ok(implemented_zome_traits)
 // }
+
+pub fn spawn_heartbeat(handle: AppHandle) {
+    info!("Starting conductor health heartbeat");
+    tauri::async_runtime::spawn(async move {
+        loop {
+            sleep(std::time::Duration::from_secs(120)).await;
+
+            let status_manager = match handle.try_state::<Arc<EnvStatusManager>>() {
+                Some(s) => s,
+                None => break,
+            };
+
+            // Only heartbeat when we are in Ready state
+            if status_manager.get_status() != EnvRuntimeStatus::Ready {
+                continue;
+            }
+
+            match handle.holochain() {
+                Ok(holochain) => {
+                    let admin_ws_res = holochain.admin_websocket().await;
+                    match admin_ws_res {
+                        Ok(admin_ws) => {
+                            if let Err(e) = admin_ws.list_app_interfaces().await {
+                                error!(target: "unyt::runtime", "Heartbeat: Admin WebSocket ping failed: {:?}", e);
+                                status_manager.update_status(EnvRuntimeStatus::ConductorCrashed);
+                                let _ = handle.emit("runtime://conductor-disconnected", ());
+                                break;
+                            }
+                            debug!(target: "unyt::runtime", "Heartbeat: Admin WebSocket ping successful");
+                        }
+                        Err(e) => {
+                            error!(target: "unyt::runtime", "Heartbeat: Could not connect to Admin WebSocket: {:?}", e);
+                            status_manager.update_status(EnvRuntimeStatus::ConductorCrashed);
+                            let _ = handle.emit("runtime://conductor-disconnected", ());
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
