@@ -19,6 +19,9 @@
     "@tauri-apps/cli": "^2.0.0",
     "get-port-cli": "3.0.0"
   },
+  "resolutions": {
+    "libsodium-wrappers": "0.8"
+  },
   "engines": {
     "node": ">=16.0.0"
   }
