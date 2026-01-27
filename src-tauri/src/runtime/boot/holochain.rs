@@ -83,7 +83,10 @@ pub fn network_config() -> NetworkConfig {
     //     network_config.bootstrap_url =
     //         url2::Url2::parse("https://bootstrap.kitsune-v0-1.kitsune.darksoil-studio.garnix.me");
     // }
+
     network_config.bootstrap_url = url2::Url2::parse("https://dev-test-bootstrap2.holochain.org/");
+    network_config.signal_url = url2::Url2::parse("wss://dev-test-bootstrap2.holochain.org/");
+    network_config.relay_url = url2::Url2::parse("https://use1-1.relay.n0.iroh-canary.iroh.link./");
     println!(
         "[unyt_tauri] network_config: Bootstrap URL set to: {:?}",
         network_config.bootstrap_url
