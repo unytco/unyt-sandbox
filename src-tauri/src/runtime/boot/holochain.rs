@@ -13,14 +13,16 @@ pub fn holochain_dir() -> PathBuf {
     tracing::debug!(target: "unyt", "holochain_dir: Determining holochain directory path");
     let use_persistent_dev = std::env::var("UNYT_PERSISTENT_DEV").is_ok();
 
-    let identifier: &'static str = IDENTIFIER.get_or_init(|| {
-        let agent_id = std::env::var("AGENT_ID").unwrap_or_else(|_| "".into());
-        if agent_id.is_empty() {
-            IDENTIFIER_DIR.to_string()
-        } else {
-            format!("{}-{}", IDENTIFIER_DIR, agent_id)
-        }
-    }).as_str();
+    let identifier: &'static str = IDENTIFIER
+        .get_or_init(|| {
+            let agent_id = std::env::var("AGENT_ID").unwrap_or_else(|_| "".into());
+            if agent_id.is_empty() {
+                IDENTIFIER_DIR.to_string()
+            } else {
+                format!("{}-{}", IDENTIFIER_DIR, agent_id)
+            }
+        })
+        .as_str();
 
     let agent_id = std::env::var("AGENT_ID").unwrap_or_else(|_| "".into());
 
@@ -98,6 +100,8 @@ pub fn network_config() -> NetworkConfig {
         days_retained: 30,
         fetched_op_interval_s: 60,
     };
+
+    network_config.request_timeout_s = 60;
 
     // network_config.advanced = Some(serde_json::json!({
     //     "tx5Transport": {
