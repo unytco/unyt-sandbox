@@ -1,6 +1,6 @@
 [package]
 name = "unyt-tx5-tauri"
-version = "0.49.0-test.8"
+version = "0.49.0-test.9"
 description = "Unyt tx5"
 authors = ["zo-el"]
 license = ""
