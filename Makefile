@@ -39,17 +39,16 @@ package:
 build-android: install
 	yarn tauri android build --debug
 
-
 build-android-release: install
 	yarn tauri android build
 
 build-linux: build-linux-default
 
 build-linux-default: install
-	HOLOCHAIN_ARC_FACTOR="" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox-tx5/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build --bundles deb
+	HOLOCHAIN_ARC_FACTOR="" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build --bundles deb
 
 build-linux-zero: install
-	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox-tx5/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build --bundles deb
+	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build --bundles deb
 
 test-arc-factor: install
 	@echo "Testing default arc factor (empty string):"
@@ -62,18 +61,6 @@ test-original-approach: install
 	HOLOCHAIN_ARC_FACTOR="0" yarn tauri build --bundles deb
 	@echo "Built app should show arc factor in logs when run"
 
-
-build-macos-default: install
-	HOLOCHAIN_ARC_FACTOR="" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox-tx5/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build
-
-build-macos-zero: install
-	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox-tx5/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build
-
-build-windows-default: install
-	HOLOCHAIN_ARC_FACTOR="" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox-tx5/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build
-
-build-windows-zero: install
-	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox-tx5/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build
 
 # Multi-app: prep generates tauri.conf.json and copies icons for the active variant.
 # Set TAURI_APP_VARIANT (unyt-sandbox | holo-hosting) and identity env vars, or use prep-app-* targets.

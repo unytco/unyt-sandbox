@@ -40,8 +40,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2NEE4MDE2OERCREQ3M0EKUldRNjE3Mk5Gb0JLVmlRNzdlVGlQdkNPdG5KWVQyWkhldUdvdXNMbzh0TTlnSG5CdjB5cWVubWUK",
       "endpoints": [
-        "https://github.com/unytco/unyt-sandbox-tx5/releases/latest/download/latest.json",
-        "https://github.com/unytco/unyt-sandbox-tx5/releases/latest/download/latest-zero-arc.json"
+        "https://github.com/unytco/unyt-sandbox/releases/latest/download/latest.json",
+        "https://github.com/unytco/unyt-sandbox/releases/latest/download/latest-zero-arc.json"
       ]
     },
     "deep-link": {

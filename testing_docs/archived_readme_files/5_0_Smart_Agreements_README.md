@@ -1,7 +1,7 @@
 # Unyt Tx5 Releases
 
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/unytco/unyt-sandbox-tx5?style=for-the-badge)
-![GitHub All Releases](https://img.shields.io/github/downloads/unytco/unyt-sandbox-tx5/total?style=for-the-badge)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/unytco/unyt-sandbox?style=for-the-badge)
+![GitHub All Releases](https://img.shields.io/github/downloads/unytco/unyt-sandbox/total?style=for-the-badge)
 
 
 ## Intro
@@ -60,9 +60,9 @@ Select from two versions of apps to download.
 
 ---
 
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_x64_windows.msi)
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_x64_windows.msi)
 
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_x64_windows.exe)
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_x64_windows.exe)
 
 </td>
 <td width="25%" align="center">
@@ -71,9 +71,9 @@ Select from two versions of apps to download.
 
 ---
 
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_aarch64_darwin.dmg)
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_aarch64_darwin.dmg)
 
-[Intel (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_x64_darwin.dmg)
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_x64_darwin.dmg)
 
 </td>
 <td width="25%" align="center">
@@ -82,9 +82,9 @@ Select from two versions of apps to download.
 
 ---
 
-[AppImage](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_amd64_linux.AppImage)
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_amd64_linux.AppImage)
 
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_amd64_linux.deb)
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_zero-arc_0.40.0_amd64_linux.deb)
 
 </td>
 <!-- 
@@ -94,9 +94,9 @@ Select from two versions of apps to download.
 
 ---
 
-[APK](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.0.1/app-universal-release.apk)
+[APK](https://github.com/unytco/unyt-sandbox/releases/download/v0.0.1/app-universal-release.apk)
 
-[AAB Bundle](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.0.1/app-universal-release.aab)
+[AAB Bundle](https://github.com/unytco/unyt-sandbox/releases/download/v0.0.1/app-universal-release.aab)
 
 </td> 
 -->
@@ -117,9 +117,9 @@ Select from two versions of apps to download.
 
 ---
 
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_0.40.0_x64_windows.msi)
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_0.40.0_x64_windows.msi)
 
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_0.40.0_x64_windows.exe)
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_0.40.0_x64_windows.exe)
 
 </td>
 <td width="25%" align="center">
@@ -128,9 +128,9 @@ Select from two versions of apps to download.
 
 ---
 
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_0.40.0_aarch64_darwin.dmg)
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_0.40.0_aarch64_darwin.dmg)
 
-[Intel (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_0.40.0_x64_darwin.dmg)
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_0.40.0_x64_darwin.dmg)
 
 </td>
 <td width="25%" align="center">
@@ -139,15 +139,15 @@ Select from two versions of apps to download.
 
 ---
 
-[AppImage](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_0.40.0_amd64_linux.AppImage)
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_0.40.0_amd64_linux.AppImage)
 
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.40.0/Unyt-tx5_0.40.0_amd64_linux.deb)
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.40.0/Unyt-tx5_0.40.0_amd64_linux.deb)
 
 </tr>
 </table>
 </div>
 
-All available versions can be found in the [Releases](https://github.com/unytco/unyt-sandbox-tx5/releases/)
+All available versions can be found in the [Releases](https://github.com/unytco/unyt-sandbox/releases/)
 
 Once installed, the Unyt software will run locally on your device and connect with others also running the software to operate as a peer-to-peer application.
 
