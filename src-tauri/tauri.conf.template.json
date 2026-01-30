@@ -1,7 +1,7 @@
 {
   "version": "0.50.0-rc.0",
-  "productName": "Unyt Sandbox",
-  "identifier": "co.unyt.unyt.sandbox",
+  "productName": "{{PRODUCT_NAME}}",
+  "identifier": "{{IDENTIFIER}}",
   "build": {
     "beforeBuildCommand": "cd ./unyt && make ci-build-ui",
     "devUrl": "http://localhost:1420",
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "splashscreen",
-        "title": "Unyt Loading",
+        "title": "{{SPLASHSCREEN_TITLE}}",
         "url": "/splashscreen.html",
         "width": 800,
         "height": 800,
@@ -45,9 +45,9 @@
       ]
     },
     "deep-link": {
-      "mobile": [{ "scheme": ["unyt-sandbox"] }],
+      "mobile": [{ "scheme": ["{{DEEP_LINK_SCHEME}}"] }],
       "desktop": {
-        "schemes": ["unyt-sandbox"]
+        "schemes": ["{{DEEP_LINK_SCHEME}}"]
       }
     }
   }

@@ -74,3 +74,24 @@ build-windows-default: install
 
 build-windows-zero: install
 	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox-tx5/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build
+
+# Multi-app: prep generates tauri.conf.json and copies icons for the active variant.
+# Set TAURI_APP_VARIANT (unyt-sandbox | holo-hosting) and identity env vars, or use prep-app-* targets.
+prep-app: install
+	bash scripts/generate-tauri-config.sh
+	bash scripts/copy-app-icons.sh
+
+prep-app-unyt-sandbox: install
+	TAURI_PRODUCT_NAME="Unyt Sandbox" TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox TAURI_DEEP_LINK_SCHEME=unyt-sandbox TAURI_SPLASHSCREEN_TITLE="Unyt Loading" TAURI_APP_VARIANT=unyt-sandbox bash scripts/generate-tauri-config.sh
+	TAURI_APP_VARIANT=unyt-sandbox bash scripts/copy-app-icons.sh
+
+prep-app-holo-hosting: install
+	TAURI_PRODUCT_NAME="Holo Hosting" TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting TAURI_DEEP_LINK_SCHEME=holo-hosting TAURI_SPLASHSCREEN_TITLE="Holo Hosting Loading" TAURI_APP_VARIANT=holo-hosting bash scripts/generate-tauri-config.sh
+	TAURI_APP_VARIANT=holo-hosting bash scripts/copy-app-icons.sh
+
+# Build a specific app variant (prep + tauri build with same identity env).
+build-unyt-sandbox: prep-app-unyt-sandbox
+	TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox yarn tauri build
+
+build-holo-hosting: prep-app-holo-hosting
+	TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting yarn tauri build

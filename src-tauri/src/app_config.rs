@@ -1,9 +1,8 @@
 use log::debug;
 use tauri::AppHandle;
 
-// This is for when we are setting it the same as the identifier
-pub const IDENTIFIER_DIR: &'static str = "co.unyt.tx5.sandbox";
-pub const APP_ID_PREFIX: &'static str = "unyt-tx5";
+use crate::consts::APP_ID_PREFIX;
+
 pub const KEYCHAIN_SALT_USER: &'static str = "lair-salt";
 // todo: when we have a way to get the DNA hash we should include this
 // const DNA_HASH: &'static str = include_str!("../../workdir/unyt-dna_hashes");

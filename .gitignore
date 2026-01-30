@@ -3,3 +3,11 @@ node_modules
 workdir
 .hc*
 .tauri
+
+# Generated icon set at src-tauri/icons root (copied from icons/<variant> by scripts/copy-app-icons.sh).
+# Only icons/<project>/ subdirs are tracked; root-level files are regenerated before build.
+src-tauri/icons/*
+!src-tauri/icons/unyt-sandbox/
+!src-tauri/icons/unyt-sandbox/**
+!src-tauri/icons/holo-hosting/
+!src-tauri/icons/holo-hosting/**
