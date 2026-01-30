@@ -1,4 +1,4 @@
-# Unyt Tx5 Releases
+# Unyt Sandbox Releases
 
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/unytco/unyt-sandbox?style=for-the-badge)
 ![GitHub All Releases](https://img.shields.io/github/downloads/unytco/unyt-sandbox/total?style=for-the-badge)
@@ -164,4 +164,4 @@ When you open Unyt on your operating system for the first time, it will create a
 
 This project is licensed under the terms specified in the [LICENSE](LICENSE) file.
 
-Copyright (C) 2024 - 2025, unyt.co
+Copyright (C) 2024 - 2026, unyt.co
