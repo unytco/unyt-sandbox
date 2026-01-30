@@ -1,7 +1,8 @@
 {
-  "version": "0.50.0-rc.2",
+  "version": "0.50.0-rc.3",
   "productName": "{{PRODUCT_NAME}}",
   "identifier": "{{IDENTIFIER}}",
+  "mainBinaryName": "{{MAIN_BINARY_NAME}}",
   "build": {
     "beforeBuildCommand": "cd ./unyt && make ci-build-ui",
     "devUrl": "http://localhost:1420",

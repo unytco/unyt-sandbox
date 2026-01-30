@@ -34,7 +34,7 @@ app_variants: &app-variant-list
 
 | Field           | Meaning                                                                 | Example                    |
 |----------------|-------------------------------------------------------------------------|----------------------------|
-| `id`           | Short slug; used for `TAURI_APP_VARIANT`, icon dir name, artifact names | `my-new-app`               |
+| `id`           | Short slug; used for `TAURI_APP_VARIANT`, icon dir name, artifact names, and Linux .deb icon/binary name | `my-new-app`               |
 | `product_name` | Display name (window title, about dialog, release assets)              | `My New App`               |
 | `identifier`   | Bundle / app identifier (reverse-DNS); must be unique per variant       | `co.example.mynewapp.sandbox` |
 
@@ -91,6 +91,7 @@ Use the same `TAURI_*` values as in the workflow (`id` → `TAURI_APP_ID_PREFIX`
 
 - **Updater / deep-link:** If this variant needs different updater endpoints or deep-link schemes, they can be set in [`src-tauri/tauri.conf.template.json`](../src-tauri/tauri.conf.template.json) using the same placeholders (`{{IDENTIFIER}}`, `{{DEEP_LINK_SCHEME}}`, etc.). The generator script already substitutes per-variant env.
 - **Rust identity:** [`src-tauri/build.rs`](../src-tauri/build.rs) reads `TAURI_APP_IDENTIFIER` and `TAURI_APP_ID_PREFIX` from the environment; CI and the Makefile set these for each variant, so no code change is needed when adding a variant.
+- **Linux .deb icon name:** `mainBinaryName` in `tauri.conf.json` is set from `TAURI_APP_VARIANT` (i.e. the variant `id`). This makes the Linux binary name and the installed icon filename (e.g. `/usr/share/icons/hicolor/128x128/apps/<id>.png`) unique per variant, so both unyt-sandbox and holo-hosting .deb packages can be installed on the same system without file conflicts.
 
 ---
 
