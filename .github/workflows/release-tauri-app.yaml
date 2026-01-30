@@ -3,7 +3,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-test.*" # Test: v1.0.0-test.0
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.*" # Test: v1.0.0-rc.0
 
 env:
   PRODUCT_NAME: "Unyt-tx5"
