@@ -9,15 +9,6 @@ env:
   REPO_OWNER: ${{ github.repository_owner }}
   REPO_NAME: ${{ github.event.repository.name }}
 
-# App variants: define once, reused in release-tauri-app and release-tauri-android-app matrices
-app_variants: &app-variant-list
-  - id: unyt-sandbox
-    product_name: Unyt Sandbox
-    identifier: co.unyt.unyt.sandbox
-  - id: holo-hosting
-    product_name: Holo Hosting
-    identifier: co.unyt.holo-hosting.sandbox
- 
 jobs:
   publish-happ:
     permissions:
@@ -91,7 +82,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app_variant: *app-variant-list
+        # App variants: defined here once, reused in release-tauri-android-app via *app-variant-list
+        app_variant: &app-variant-list
+          - id: unyt-sandbox
+            product_name: Unyt Sandbox
+            identifier: co.unyt.unyt.sandbox
+          - id: holo-hosting
+            product_name: Holo Hosting
+            identifier: co.unyt.holo-hosting.sandbox
         config:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
