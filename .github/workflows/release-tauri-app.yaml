@@ -17,14 +17,44 @@ jobs:
     outputs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
+      app_variants: ${{ steps.prepare-variants.outputs.app_variants }}
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      # Checks out a copy of your repository on the ubuntu-latest machine
       - uses: actions/checkout@v3
         with:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
           fetch-depth: 0
+
+      # Single source of truth: .github/app-variants.yaml (set enabled: false to exclude)
+      - name: Prepare variant list
+        id: prepare-variants
+        run: |
+          VARIANTS_FILE=".github/app-variants.yaml"
+          # Parse YAML (Ruby built-in), filter enabled != false, output JSON for jq
+          ENABLED=$(ruby -r yaml -r json -e "
+            list = YAML.load_file('$VARIANTS_FILE')
+            list = list.select { |v| v['enabled'] != false }
+            puts list.to_json
+          ")
+          echo "app_variants<<EOF" >> $GITHUB_OUTPUT
+          echo "$ENABLED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "## Unyt network release"
+            echo ""
+            echo "This release builds the following app variants. The **identifier** is the network seed."
+            echo ""
+            echo "| Unyt Network |         Network Seed           |"
+            echo "|--------------|--------------------------------|"
+            echo "$ENABLED" | jq -r '.[] | "| \(.product_name) | `\(.identifier)` |"'
+            echo ""
+            echo "---"
+            echo ""
+          } > variants_note.txt
+          echo "variants_note<<EOF" >> $GITHUB_OUTPUT
+          cat variants_note.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Install nix
         uses: cachix/install-nix-action@v27
         with:
@@ -57,8 +87,9 @@ jobs:
             $0 ~ "^## \\[" ver "\\]" {p=1; next}
             p && /^## \[/ {exit}
             p {print}
-          ' CHANGELOG.md > release_notes.txt
+          ' unyt/CHANGELOG.md > release_notes.txt
           echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ steps.prepare-variants.outputs.variants_note }}" >> $GITHUB_OUTPUT
           cat release_notes.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
@@ -82,14 +113,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # App variants: defined here once, reused in release-tauri-android-app via *app-variant-list
-        app_variant: &app-variant-list
-          - id: unyt-sandbox
-            product_name: Unyt Sandbox
-            identifier: co.unyt.unyt.sandbox
-          - id: holo-hosting
-            product_name: Holo Hosting
-            identifier: co.unyt.holo-hosting.sandbox
+        # From .github/app-variants.yaml (set enabled: false to exclude)
+        app_variant: ${{ fromJson(needs.publish-happ.outputs.app_variants) }}
         config:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
@@ -244,7 +269,7 @@ jobs:
   #   strategy:
   #     fail-fast: false
   #     matrix:
-  #       app_variant: *app-variant-list
+  #       app_variant: ${{ fromJson(needs.publish-happ.outputs.app_variants) }}
   #   env:
   #     PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
   #     TAURI_PRODUCT_NAME: ${{ matrix.app_variant.product_name }}

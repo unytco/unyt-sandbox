@@ -30,26 +30,55 @@ launch:
 	cp -r unyt/workdir/unyt.happ workdir/unyt.happ
 	yarn network:tauri
 
+# Uses current tauri.conf.json and icons. Run prep-app-<variant> first for a specific variant.
 launch-android: install
 	yarn launch:android
 
 package:
 	cd unyt && APP_VERSION=$(jq -r '.version' ./src-tauri/tauri.conf.json) make package
 
+# Uses current tauri.conf.json. Run prep-app-<variant> first, or use build-android-<variant> for full CI-like flow.
 build-android: install
 	yarn tauri android build --debug
 
 build-android-release: install
 	yarn tauri android build
 
+# Android variant build: same sequence as CI (prep → init Android project → cleartext → build).
+# Run from repo root. Requires nix and flake .#androidDev. For release AAB/APK, set up signing in src-tauri/gen/android/key.properties.
+build-android-unyt-sandbox: prep-app-unyt-sandbox
+	rm -rf src-tauri/gen/android
+	nix develop --accept-flake-config .#androidDev --command bash -c "yarn tauri android init"
+	bash scripts/android-uses-cleartext-traffic.sh
+	HOLOCHAIN_ARC_FACTOR=0 TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
+
+build-android-holo-hosting: prep-app-holo-hosting
+	rm -rf src-tauri/gen/android
+	nix develop --accept-flake-config .#androidDev --command bash -c "yarn tauri android init"
+	bash scripts/android-uses-cleartext-traffic.sh
+	HOLOCHAIN_ARC_FACTOR=0 TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
+
+# Signing key: set TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD) or leave unset for unsigned.
+TAURI_SIGNING_PRIVATE_KEY ?= $(CURDIR)/.tauri/test.key
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?=
+
 build-linux: build-linux-default
 
+# Uses current tauri.conf.json. For a specific variant use build-linux-unyt-sandbox or build-linux-holo-hosting.
 build-linux-default: install
-	HOLOCHAIN_ARC_FACTOR="" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build --bundles deb
+	HOLOCHAIN_ARC_FACTOR="" TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
 
 build-linux-zero: install
-	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="/home/zo-el/Documents/git-repo/unyt/release/unyt-sandbox/.tauri/test.key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" yarn tauri build --bundles deb
+	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
 
+# Linux .deb for a specific variant (prep + build with identity env).
+build-linux-unyt-sandbox: prep-app-unyt-sandbox
+	HOLOCHAIN_ARC_FACTOR="" TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
+
+build-linux-holo-hosting: prep-app-holo-hosting
+	HOLOCHAIN_ARC_FACTOR="" TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
+
+# Uses current tauri.conf.json. Run from repo root.
 test-arc-factor: install
 	@echo "Testing default arc factor (empty string):"
 	HOLOCHAIN_ARC_FACTOR="" yarn tauri build --bundles deb
