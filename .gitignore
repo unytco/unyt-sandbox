@@ -11,3 +11,6 @@ src-tauri/icons/*
 !src-tauri/icons/unyt-sandbox/**
 !src-tauri/icons/holo-hosting/
 !src-tauri/icons/holo-hosting/**
+
+# Android project generated from tauri.conf.json (tauri android init). Regenerated per app variant in CI.
+src-tauri/gen/android

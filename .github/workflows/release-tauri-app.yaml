@@ -329,7 +329,7 @@ jobs:
       - name: Regenerate Android project for variant
         run: |
           rm -rf src-tauri/gen/android
-          yarn tauri android init
+          nix develop --accept-flake-config .#androidDev --command bash -c "yarn tauri android init"
 
       - name: Set usesCleartextTraffic to true
         run: |
