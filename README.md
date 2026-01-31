@@ -352,4 +352,4 @@ When you open Unyt on your operating system for the first time, it will create a
 
 This project is licensed under the terms specified in the [LICENSE](LICENSE) file.
 
-Copyright (C) 2024 - 2025, unyt.co
+Copyright (C) 2024 - 2026, unyt.co
