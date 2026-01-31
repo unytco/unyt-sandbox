@@ -29,6 +29,6 @@ else
   exit 1
 fi
 
-# Copy icon set into icons root (no --delete so we keep variant subdirs)
-rsync -a "$SOURCE/" "$ICONS/"
+# Copy icon set into icons root (cp -R works on all runners; rsync often missing on Windows)
+cp -R "$SOURCE"/. "$ICONS/"
 echo "Copied icons from $SOURCE to $ICONS"
