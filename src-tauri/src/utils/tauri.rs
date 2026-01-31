@@ -1,4 +1,5 @@
-use crate::app_config::{AppConfig, APP_ID_PREFIX};
+use crate::app_config::AppConfig;
+use crate::consts::APP_ID_PREFIX;
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use crate::utils::holochain::{happ_bundle, migrate_app};
 use anyhow::anyhow;

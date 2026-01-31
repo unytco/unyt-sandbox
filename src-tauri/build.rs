@@ -5,27 +5,42 @@ fn main() {
     // Read the HOLOCHAIN_ARC_FACTOR environment variable
     let arc_factor = std::env::var("HOLOCHAIN_ARC_FACTOR").unwrap_or_else(|_| "".to_string());
 
+    // App identity: used for multiple app variants (unyt-sandbox, holo-hosting). Fallbacks = current default app.
+    let identifier_dir = std::env::var("TAURI_APP_IDENTIFIER")
+        .unwrap_or_else(|_| "co.unyt.unyt.sandbox".to_string());
+    let app_id_prefix =
+        std::env::var("TAURI_APP_ID_PREFIX").unwrap_or_else(|_| "unyt-sandbox".to_string());
+
+    // Escape for use inside Rust string literals (backslash and quote)
+    let identifier_dir_esc = escape_rust_str(&identifier_dir);
+    let app_id_prefix_esc = escape_rust_str(&app_id_prefix);
+
     // Extract Holochain version from Cargo.lock
     let holochain_version = extract_holochain_version().unwrap_or_else(|| "unknown".to_string());
 
-    // Generate a Rust file with the arc factor value and holochain version
+    // Generate a Rust file with arc factor, holochain version, and app identity
     let code = format!(
         r#"
-        pub const HOLOCHAIN_ARC_FACTOR: &str = "{}";
-        pub const HOLOCHAIN_VERSION: &str = "{}";
-        "#,
-        arc_factor, holochain_version
+pub const HOLOCHAIN_ARC_FACTOR: &str = "{}";
+pub const HOLOCHAIN_VERSION: &str = "{}";
+pub const IDENTIFIER_DIR: &str = "{}";
+pub const APP_ID_PREFIX: &str = "{}";
+"#,
+        arc_factor, holochain_version, identifier_dir_esc, app_id_prefix_esc
     );
 
-    // Write to a generated file
     std::fs::write("src/consts.rs", code).expect("Failed to write generated file");
 
-    // Tell Cargo to rerun this build script if files change
     println!("cargo:rerun-if-env-changed=HOLOCHAIN_ARC_FACTOR");
+    println!("cargo:rerun-if-env-changed=TAURI_APP_IDENTIFIER");
+    println!("cargo:rerun-if-env-changed=TAURI_APP_ID_PREFIX");
     println!("cargo:rerun-if-changed=../Cargo.lock");
 
-    // This is essential for Tauri to work properly
     tauri_build::build()
+}
+
+fn escape_rust_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn extract_holochain_version() -> Option<String> {

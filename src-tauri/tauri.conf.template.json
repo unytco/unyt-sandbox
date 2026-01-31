@@ -1,0 +1,55 @@
+{
+  "version": "0.50.0-rc.4",
+  "productName": "{{PRODUCT_NAME}}",
+  "identifier": "{{IDENTIFIER}}",
+  "mainBinaryName": "{{MAIN_BINARY_NAME}}",
+  "build": {
+    "beforeBuildCommand": "cd ./unyt && make ci-build-ui",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../unyt/ui/white-label/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "security": {
+      "capabilities": ["mobile-capability", "main-capability", "desktop-capability", "splashscreen-capability"]
+    },
+    "windows": [
+      {
+        "label": "splashscreen",
+        "title": "{{SPLASHSCREEN_TITLE}}",
+        "url": "/splashscreen.html",
+        "width": 800,
+        "height": 800,
+        "resizable": true,
+        "decorations": false,
+        "center": true,
+        "transparent": false,
+        "alwaysOnTop": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2NEE4MDE2OERCREQ3M0EKUldRNjE3Mk5Gb0JLVmlRNzdlVGlQdkNPdG5KWVQyWkhldUdvdXNMbzh0TTlnSG5CdjB5cWVubWUK",
+      "endpoints": [
+        "https://github.com/unytco/unyt-sandbox/releases/latest/download/latest.json",
+        "https://github.com/unytco/unyt-sandbox/releases/latest/download/latest-zero-arc.json"
+      ]
+    },
+    "deep-link": {
+      "mobile": [{ "scheme": ["{{DEEP_LINK_SCHEME}}"] }],
+      "desktop": {
+        "schemes": ["{{DEEP_LINK_SCHEME}}"]
+      }
+    }
+  }
+}

@@ -1,5 +1,6 @@
-use crate::app_config::{get_version, IDENTIFIER_DIR};
+use crate::app_config::get_version;
 use crate::consts;
+use crate::consts::IDENTIFIER_DIR;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tauri_plugin_holochain::{NetworkConfig, ReportConfig};
