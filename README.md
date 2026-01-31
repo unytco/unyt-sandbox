@@ -1,4 +1,4 @@
-# Unyt Tx5 Releases
+# Unyt Sandbox Releases
 
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/unytco/unyt-sandbox-tx5?style=for-the-badge)
 ![GitHub All Releases](https://img.shields.io/github/downloads/unytco/unyt-sandbox-tx5/total?style=for-the-badge)
