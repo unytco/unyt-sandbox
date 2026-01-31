@@ -1,7 +1,7 @@
 # Unyt Sandbox Releases
 
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/unytco/unyt-sandbox-tx5?style=for-the-badge)
-![GitHub All Releases](https://img.shields.io/github/downloads/unytco/unyt-sandbox-tx5/total?style=for-the-badge)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/unytco/unyt-sandbox?style=for-the-badge)
+![GitHub All Releases](https://img.shields.io/github/downloads/unytco/unyt-sandbox/total?style=for-the-badge)
 
 ## Intro
 
@@ -142,50 +142,6 @@ Select from two versions of apps to download.
 
 ### Holo Hosting
 
-#### Zero-Arc Releases
-
-<div align="center">
-
-<table>
-<tr>
-<td width="33%" align="center">
-
-##### **Windows**
-
----
-
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_0-arc_x64_windows.msi)
-
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_0-arc_x64_windows.exe)
-
-</td>
-<td width="25%" align="center">
-
-##### **MacOS**
-
----
-
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_0-arc_aarch64_darwin.dmg)
-
-[Intel (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_0-arc_x64_darwin.dmg)
-
-</td>
-<td width="25%" align="center">
-
-##### **Linux**
-
----
-
-[AppImage](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_0-arc_amd64_linux.AppImage)
-
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_0-arc_amd64_linux.deb)
-
-</td>
-</tr>
-</table>
-
-</div>
-
 #### Full-Arc Releases
 
 <div align="center">
@@ -198,9 +154,9 @@ Select from two versions of apps to download.
 
 ---
 
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_default-arc_x64_windows.msi)
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_default-arc_x64_windows.msi)
 
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_default-arc_x64_windows.exe)
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_default-arc_x64_windows.exe)
 
 </td>
 <td width="25%" align="center">
@@ -209,9 +165,9 @@ Select from two versions of apps to download.
 
 ---
 
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_default-arc_aarch64_darwin.dmg)
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_default-arc_aarch64_darwin.dmg)
 
-[Intel (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_default-arc_x64_darwin.dmg)
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_default-arc_x64_darwin.dmg)
 
 </td>
 <td width="25%" align="center">
@@ -220,9 +176,53 @@ Select from two versions of apps to download.
 
 ---
 
-[AppImage](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_default-arc_amd64_linux.AppImage)
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_default-arc_amd64_linux.AppImage)
 
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Holo.Hosting_default-arc_amd64_linux.deb)
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_default-arc_amd64_linux.deb)
+
+</td>
+</tr>
+</table>
+
+</div>
+
+#### Zero-Arc Releases
+
+<div align="center">
+
+<table>
+<tr>
+<td width="33%" align="center">
+
+##### **Windows**
+
+---
+
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_0-arc_x64_windows.msi)
+
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_0-arc_x64_windows.exe)
+
+</td>
+<td width="25%" align="center">
+
+##### **MacOS**
+
+---
+
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_0-arc_aarch64_darwin.dmg)
+
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_0-arc_x64_darwin.dmg)
+
+</td>
+<td width="25%" align="center">
+
+##### **Linux**
+
+---
+
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_0-arc_amd64_linux.AppImage)
+
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Holo.Hosting_0-arc_amd64_linux.deb)
 
 </td>
 </tr>
@@ -234,50 +234,6 @@ Select from two versions of apps to download.
 
 ### Infrastructure Marketplace
 
-#### Zero-Arc Releases
-
-<div align="center">
-
-<table>
-<tr>
-<td width="33%" align="center">
-
-##### **Windows**
-
----
-
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_0-arc_x64_windows.msi)
-
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_0-arc_x64_windows.exe)
-
-</td>
-<td width="25%" align="center">
-
-##### **MacOS**
-
----
-
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_0-arc_aarch64_darwin.dmg)
-
-[Intel (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_0-arc_x64_darwin.dmg)
-
-</td>
-<td width="25%" align="center">
-
-##### **Linux**
-
----
-
-[AppImage](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_0-arc_amd64_linux.AppImage)
-
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_0-arc_amd64_linux.deb)
-
-</td>
-</tr>
-</table>
-
-</div>
-
 #### Full-Arc Releases
 
 <div align="center">
@@ -290,9 +246,9 @@ Select from two versions of apps to download.
 
 ---
 
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_default-arc_x64_windows.msi)
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_default-arc_x64_windows.msi)
 
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_default-arc_x64_windows.exe)
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_default-arc_x64_windows.exe)
 
 </td>
 <td width="25%" align="center">
@@ -301,9 +257,9 @@ Select from two versions of apps to download.
 
 ---
 
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_default-arc_aarch64_darwin.dmg)
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_default-arc_aarch64_darwin.dmg)
 
-[Intel (x64)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_default-arc_x64_darwin.dmg)
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_default-arc_x64_darwin.dmg)
 
 </td>
 <td width="25%" align="center">
@@ -312,9 +268,54 @@ Select from two versions of apps to download.
 
 ---
 
-[AppImage](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_default-arc_amd64_linux.AppImage)
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_default-arc_amd64_linux.AppImage)
 
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox-tx5/releases/download/v0.50.0-rc.4/unyt_0.50.0-rc.4_Infrastructure.Marketplace_default-arc_amd64_linux.deb)
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_default-arc_amd64_linux.deb)
+
+</td>
+</tr>
+</table>
+
+</div>
+
+
+#### Zero-Arc Releases
+
+<div align="center">
+
+<table>
+<tr>
+<td width="33%" align="center">
+
+##### **Windows**
+
+---
+
+[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_0-arc_x64_windows.msi)
+
+[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_0-arc_x64_windows.exe)
+
+</td>
+<td width="25%" align="center">
+
+##### **MacOS**
+
+---
+
+[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_0-arc_aarch64_darwin.dmg)
+
+[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_0-arc_x64_darwin.dmg)
+
+</td>
+<td width="25%" align="center">
+
+##### **Linux**
+
+---
+
+[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_0-arc_amd64_linux.AppImage)
+
+[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.50.0/unyt_0.50.0_Infrastructure.Marketplace_0-arc_amd64_linux.deb)
 
 </td>
 </tr>
@@ -324,7 +325,7 @@ Select from two versions of apps to download.
 
 ---
 
-All available versions can be found in the [Releases](https://github.com/unytco/unyt-sandbox-tx5/releases/)
+All available versions can be found in the [Releases](https://github.com/unytco/unyt-sandbox/releases/)
 
 Once installed, the Unyt software will run locally on your device and connect with others also running the software to operate as a peer-to-peer application.
 
