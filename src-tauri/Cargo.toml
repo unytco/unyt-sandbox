@@ -1,7 +1,7 @@
 [package]
-name = "unyt-tx5-tauri"
-version = "0.50.0-rc.0"
-description = "Unyt tx5"
+name = "unyt-sandbox"
+version = "0.50.0"
+description = "Unyt Sandbox"
 authors = ["zo-el"]
 license = ""
 repository = ""

@@ -1,4 +1,4 @@
-/src/main/java/co/unyt/tx5/sandbox/generated
+/src/main/java/co/unyt/unyt/sandbox/generated
 /src/main/jniLibs/**/*.so
 /src/main/assets/tauri.conf.json
 /tauri.build.gradle.kts

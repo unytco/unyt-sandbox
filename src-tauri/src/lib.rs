@@ -3,7 +3,8 @@ mod consts;
 mod runtime;
 mod utils;
 
-pub use app_config::{get_version, AppConfig, APP_ID_PREFIX, IDENTIFIER_DIR, KEYCHAIN_SALT_USER};
+pub use app_config::{get_version, AppConfig, KEYCHAIN_SALT_USER};
+pub use consts::{APP_ID_PREFIX, IDENTIFIER_DIR};
 pub use utils::holochain::migrate_app;
 
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
