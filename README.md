@@ -9,6 +9,11 @@ Unyt is a Holochain based application for creating p2p credit and payment system
 
 Different groups can each create and run their own Unyt Accounting Application using their own devices.
 
+## Invitation to Play
+
+[Download and install both apps](https://github.com/unytco/unyt-sandbox/tree/develop?tab=readme-ov-file#downloads) and then share your address for each in the [Unyt v0.50 address sheet](
+https://docs.google.com/spreadsheets/d/10CagiEeqKZ9uFCgay5KwdNmALdwU2bi6yC6eoC982TU/edit?gid=0#gid=0) where you can also find the addresses of other people to transact with.
+
 ## This Release
 This release demonstrates **unit bridging and mirroring** between independent Unyt Accounting Apps.
 
