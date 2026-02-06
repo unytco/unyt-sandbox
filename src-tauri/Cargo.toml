@@ -19,7 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.4.0", default-features = false , features = [] }
 
 [dependencies]
-tauri = { version = "2.8", features = ["devtools"] }
+tauri = { version = "2.10", features = ["devtools"] }
 holochain_client = { version = "0.8.1-rc.0" }
 # tauri-plugin-holochain = { git = "https://github.com/darksoil-studio/tauri-plugin-holochain", branch = "main-0.6", default-features = false, features = ["sqlite"] }
 # holochain_client = { git = "https://github.com/holochain/holochain", branch = "chore/downgrade-kitsune2-to-0.3.0-dev.3" }
