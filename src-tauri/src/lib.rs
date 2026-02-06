@@ -57,6 +57,9 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_http::init());
     tracing::debug!(target: "unyt", "Added HTTP plugin");
 
+    builder = builder.plugin(tauri_plugin_shell::init());
+    tracing::debug!(target: "unyt", "Added shell plugin");
+
     builder = builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { .. } = event {
             if window.label() == "main" {

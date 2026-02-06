@@ -10,6 +10,7 @@
     "notification:default",
     "notification:allow-is-permission-granted",
     "deep-link:default",
+    "shell:allow-open",
     "http:default",
     "core:event:default",
     "core:window:default",
