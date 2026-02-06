@@ -1,5 +1,5 @@
 {
-  "version": "0.51.0-rc.1",
+  "version": "0.51.0-rc.2",
   "productName": "{{PRODUCT_NAME}}",
   "identifier": "{{IDENTIFIER}}",
   "mainBinaryName": "{{MAIN_BINARY_NAME}}",
