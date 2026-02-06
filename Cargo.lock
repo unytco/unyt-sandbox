@@ -4313,7 +4313,7 @@ dependencies = [
 [[package]]
 name = "holochain_runtime"
 version = "0.1.0"
-source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6.1#65e2df7c50fd09175f37d93dba5e8834b0a9896a"
+source = "git+https://github.com/unytco/tauri-plugin-holochain/?branch=main-0.6.1#65e2df7c50fd09175f37d93dba5e8834b0a9896a"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -5817,7 +5817,7 @@ dependencies = [
 [[package]]
 name = "kitsune_p2p_mdns"
 version = "0.4.4"
-source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6.1#65e2df7c50fd09175f37d93dba5e8834b0a9896a"
+source = "git+https://github.com/unytco/tauri-plugin-holochain/?branch=main-0.6.1#65e2df7c50fd09175f37d93dba5e8834b0a9896a"
 dependencies = [
  "base64 0.22.1",
  "libmdns",
@@ -10876,7 +10876,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-holochain"
 version = "0.0.0"
-source = "git+https://github.com/zo-el/tauri-plugin-holochain/?branch=main-0.6.1#65e2df7c50fd09175f37d93dba5e8834b0a9896a"
+source = "git+https://github.com/unytco/tauri-plugin-holochain/?branch=main-0.6.1#65e2df7c50fd09175f37d93dba5e8834b0a9896a"
 dependencies = [
  "anyhow",
  "bzip2",
@@ -12060,7 +12060,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "unyt-sandbox"
-version = "0.51.0-rc.2"
+version = "0.51.0-rc.3"
 dependencies = [
  "anyhow",
  "app_dirs2",

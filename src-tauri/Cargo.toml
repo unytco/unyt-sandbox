@@ -1,6 +1,6 @@
 [package]
 name = "unyt-sandbox"
-version = "0.51.0-rc.2"
+version = "0.51.0-rc.3"
 description = "Unyt Sandbox"
 authors = ["zo-el"]
 license = ""
@@ -21,9 +21,8 @@ tauri-build = { version = "2.4.0", default-features = false , features = [] }
 [dependencies]
 tauri = { version = "2.10", features = ["devtools"] }
 holochain_client = { version = "0.8.1-rc.0" }
-# tauri-plugin-holochain = { git = "https://github.com/darksoil-studio/tauri-plugin-holochain", branch = "main-0.6", default-features = false, features = ["sqlite"] }
 # holochain_client = { git = "https://github.com/holochain/holochain", branch = "chore/downgrade-kitsune2-to-0.3.0-dev.3" }
-tauri-plugin-holochain = { git = "https://github.com/zo-el/tauri-plugin-holochain/", branch = "main-0.6.1", default-features = false, features = ["sqlite"] }
+tauri-plugin-holochain = { git = "https://github.com/unytco/tauri-plugin-holochain/", branch = "main-0.6.1", default-features = false, features = ["sqlite"] }
 
 # service_providers_utils = { git = "https://github.com/darksoil-studio/service-providers", branch = "main-0.6" }
 # push_notifications_service_trait = { git = "https://github.com/darksoil-studio/push-notifications-service", branch = "main-0.6" }
