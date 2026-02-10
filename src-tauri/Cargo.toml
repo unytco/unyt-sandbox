@@ -48,6 +48,7 @@ log = "0.4"
 tracing = "0.1"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 
 url2 = "0.0.6"
 app_dirs2 = "2.5.5"
