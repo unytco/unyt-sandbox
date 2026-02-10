@@ -1,6 +1,6 @@
 [package]
 name = "unyt-sandbox"
-version = "0.51.0-rc.6"
+version = "0.51.0-rc.14"
 description = "Unyt Sandbox"
 authors = ["zo-el"]
 license = ""
