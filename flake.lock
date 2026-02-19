@@ -490,13 +490,13 @@
       "locked": {
         "lastModified": 1770681985,
         "narHash": "sha256-BGR5wCxRgv5S11jyl+AGzoeL983b1T201QR9ndWCZQI=",
-        "owner": "zo-el",
+        "owner": "unytco",
         "repo": "tauri-plugin-holochain",
         "rev": "22f1a8900d21acbe7a9e983256e6990e79b40963",
         "type": "github"
       },
       "original": {
-        "owner": "zo-el",
+        "owner": "unytco",
         "ref": "main-0.6.1",
         "repo": "tauri-plugin-holochain",
         "type": "github"
