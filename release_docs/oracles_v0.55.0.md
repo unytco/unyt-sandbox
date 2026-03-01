@@ -1,36 +1,53 @@
-# Unyt Sandbox
+# Oracles Release (v0.55.0)
 
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/unytco/unyt-sandbox?style=for-the-badge)
 ![GitHub All Releases](https://img.shields.io/github/downloads/unytco/unyt-sandbox/total?style=for-the-badge)
 
 ## Intro
 
-Unyt is peer-to-peer accounting infrastructure built on [Holochain](https://holochain.org/). Create currencies, automate economic agreements, bridge value across networks, and trade directly between any units — all without central servers, miners, or platform middlemen.
-
-Every participant runs the application on their own device, maintains their own signed chain of records, and validates peers directly. There is no blockchain consensus, no mining, and no third party holding your funds. Fees are entirely configurable by the community — they can even be set to zero.
-
-Unyt isn't a platform you sign up for. It's a template you customize. Each deployment — called a Unyt Alliance — defines its own currencies, rules, smart agreements, and governance. You can bridge between alliances, connect to EVM blockchains, and trade across currency boundaries with atomic guarantees.
-
-This repository is the Unyt Sandbox — a starting point for building and running your own Unyt Accounting Alliance apps. It ships pre-configured example apps that demonstrate different use cases.
-
-For full documentation, visit [unyt.co/docs](https://unyt.co/docs/).
-
-## Current Release — Oracles (v0.55.0)
+Unyt is a peer-to-peer accounting framework built on Holochain that lets groups define their own economic rules — their own currencies, fee structures, and programmable agreements.
 
 This release brings **configurable pricing oracles** to Unyt apps, allowing communities to securely bring external pricing data — both crypto and fiat — into their peer-to-peer accounting environments. Participants can view price estimates converted to their preferred currency, and dynamic smart agreements can react to external market data.
 
-For full details, see the [Oracles Release Documentation](./release_docs/oracles_v0.55.0.md).
+Also check out the [Oracles: Blockchain Token & Forex Pricing in Unyt Apps](https://unyt.co/blog/oracles:-blockchain-token-and-forex-pricing-in-unyt-apps/) blog post.
 
-Also check out the [Oracles blog post](https://unyt.co/blog/oracles:-blockchain-token-and-forex-pricing-in-unyt-apps/).
+## What's New
 
-## Downloads — v0.55.0
+An oracle is a trusted data bridge that reports external price information into a Unyt app so participants can make decisions based on current market values. This release adds oracle support for both cryptocurrency prices (BTC, ETH, etc.) and forex exchange rates (USD, EUR, TRY, etc.).
 
-The current release ships two pre-configured apps. You can run either or both.
+**How it works:** A designated oracle bot fetches prices from multiple external APIs and publishes them as immutable on-chain price sheets, each valid for a defined time window. Because every peer validates against the same committed data point, determinism is preserved even though the price data originates off-chain. The system uses a multi-source resilience strategy — querying up to three APIs and dropping outliers — so no single API glitch can corrupt pricing.
 
-- **Holo Hosting** — Configured to demonstrate what a Holo Hosting Unyt app might look like. Includes smart agreements for proof-of-service billing, invoicing, and service unit accounting. Also demonstrates bridging to the Infrastructure Marketplace Unyt app, blockchain bridging with HOT (EVM) tokens, multi-currency atomic trades, and cross-network value exchange.
-- **Infrastructure Marketplace** — Configured for trading between monetary currencies from multiple external sources. Bridges to the Holo Hosting Unyt app.
+**What it enables:**
 
-Select from two versions of each app to download.
+- **Preferred currency display** — View transaction values and balances converted to the currency you think in.
+- **Dynamic smart agreements** — Agreements that react to external prices, such as escrow tied to a USD value or billing pegged to a forex rate.
+- **Informed trading** — Recent price estimates during multi-currency trades for quick apples-to-apples comparison.
+
+This implementation of oracles is primarily intended to
+
+1. enable users to be able to see and think about value in whatever units they are most comfortable thinking in and
+2. have pricing information to provide some guidance or sanity around proposed trades.
+
+This is not configured for high frequency trading. For that, you would want to use different data sources and custom validation of the correctness and timeliness of data from those sources.
+
+For the full technical details — including the three-step hybrid architecture, the single/dual/triple source resilience patterns, and considerations around multiple authorized oracles — see the [Oracles blog post](https://unyt.co/blog/oracles:-blockchain-token-and-forex-pricing-in-unyt-apps/).
+
+---
+
+Feel free to join the conversation in the Unyt Thread on the [Holochain DEV.HC Discord](https://discord.com/invite/k55DS5dmPH).
+
+The Unyt Channel is here:
+https://discordapp.com/channels/919686143581253632/1425157240972902430
+
+How to give yourself access?
+
+1. Go to the '#👤・5・select-a-role'' Channel
+2. Assign yourself the ''Access to: Projects'' role
+3. In the category ''Projects'' go to the channel called ''Unyt"
+
+## Downloads
+
+Select from two versions of apps to download.
 
 1. The **Full-Arc** version holds a full copy of the DHT locally, synchronizing all data being published.
 2. The **Zero-Arc** version is lighter weight to run (which will be good for mobile phones, for example) because it only holds your own history, and caches some other network data, but some actions will be slower because you'll need to fetch data from peers on the network.
@@ -233,25 +250,17 @@ To reset completely and start over with a new account: uninstall the app, delete
 
 When you open Unyt on your operating system for the first time, it will create a set of public and private keys for you that you can use to interact with others. These are stored in a private keystore (Lair) on your own machine and are used during future uses. In Unyt we often refer to this public key as "your address" as it is how others can refer to you when sending, receiving or authorizing you to perform particular roles.
 
-## Past Releases
-
-- [Blockchain Bridging — v0.54.0](./release_docs/blockchain_bridging_v0.54.0.md) — Bridge EVM blockchain tokens into Unyt. Lock ERC-20 tokens on-chain and mirror them into a peer-to-peer environment with smart agreements, customizable fees, and direct trading.
-- [Unyt Bridging — v0.50.0](./release_docs/unyt_bridging_v0.50.0.md) — Cross-application bridging and mirroring between independent Unyt Accounting Apps, plus bi-directional multi-unit payments.
-- [Rideshare — v0.42.0](./release_docs/rideshare_v0.42.0.md) — Multi-unit accounting demonstrated through regional rideshare groups with custom price sheets and service unit accounting.
-- [Smart Agreements — v0.40.0](./release_docs/smart_agreements_v0.40.0.md) — Introduction to Unyt's programmable Smart Agreements for automating economic logic.
-
 ## Related Resources
 
+- [Unyt Setup](../README.md)
 - [Unyt Documentation](https://unyt.co/docs/)
-- [Unyt Blog](https://unyt.co/blog/)
-- [Unyt Dictionary](./testing_docs/4_2_unyt-dictionary.md)
-- [Intro to Smart Agreements (Three Layers)](./testing_docs/4_1_intro_to_smart_agreements.md)
-- [Smart Agreement Code Library](https://github.com/unytco/smart_agreement_library)
-- [Holochain DEV.HC Discord](https://discord.com/invite/k55DS5dmPH) — The Unyt channel is under Projects
-- [Feedback / Issues](https://github.com/orgs/unytco/projects/5/views/1)
+- [Unyt Dictionary](../testing_docs/4_2_unyt-dictionary.md)
+- [Intro to Smart Agreements (Three Layers)](../testing_docs/4_1_intro_to_smart_agreements.md)
+- [Templates and Smart Agreements Library Repo](https://github.com/unytco/smart_agreement_library)
+- [Feedback](https://github.com/orgs/unytco/projects/5/views/1)
 
 ## License
 
-This project is licensed under the terms specified in the [LICENSE](LICENSE) file.
+This project is licensed under the terms specified in the [LICENSE](../LICENSE) file.
 
 Copyright (C) 2024 - 2026, unyt.co
