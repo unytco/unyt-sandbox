@@ -7,11 +7,11 @@
 
 Unyt is peer-to-peer accounting infrastructure built on [Holochain](https://holochain.org/). Create currencies, automate economic agreements, bridge value across networks, and trade directly between any units — all without central servers, miners, or platform middlemen.
 
-Every participant runs the application on their own device, maintains their own signed chain of records, and validates peers directly. There is no blockchain consensus, no mining, and no third party holding your funds. Fees are entirely configurable by the community — they can even be set to zero.
+Every participant runs the application on their own device, maintains their own signed chain of records, and (if operating as a full arc node) validates peers directly. There is no blockchain consensus, no mining, and no third party holding your funds. Fees are entirely configurable by the community — they can even be set to zero.
 
 Unyt isn't a platform you sign up for. It's a template you customize. Each deployment — called a Unyt Alliance — defines its own currencies, rules, smart agreements, and governance. You can bridge between alliances, connect to EVM blockchains, and trade across currency boundaries with atomic guarantees.
 
-This repository is the Unyt Sandbox — a starting point for building and running your own Unyt Accounting Alliance apps. It ships pre-configured example apps that demonstrate different use cases.
+This repository is the Unyt Sandbox — a starting point on your journey to building and running your own Unyt Accounting Alliance apps. It ships pre-configured example apps that demonstrate different use cases.
 
 For full documentation, visit [unyt.co/docs](https://unyt.co/docs/).
 

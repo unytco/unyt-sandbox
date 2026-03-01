@@ -118,7 +118,7 @@ Also check out the [Unyt Bridging: Connecting Value Networks](https://unyt.co/bl
 Feel free to join the conversation in the Unyt Thread on the [Holochain DEV.HC Discord](https://discord.com/invite/k55DS5dmPH).
 
 The Unyt Channel is here:
-https://discordapp.com/channels/919686143581253632/1425157240972902430
+https://discord.com/channels/919686143581253632/1473110825345618021
 
 How to give yourself access?
 
