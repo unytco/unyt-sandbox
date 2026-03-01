@@ -3,9 +3,9 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.*" # Test: v1.0.0-rc.0
 
 env:
-  PRODUCT_NAME: "Unyt"
   REPO_OWNER: ${{ github.repository_owner }}
   REPO_NAME: ${{ github.event.repository.name }}
 
@@ -17,14 +17,44 @@ jobs:
     outputs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
+      app_variants: ${{ steps.prepare-variants.outputs.app_variants }}
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      # Checks out a copy of your repository on the ubuntu-latest machine
       - uses: actions/checkout@v3
         with:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
           fetch-depth: 0
+
+      # Single source of truth: .github/app-variants.yaml (set enabled: false to exclude)
+      - name: Prepare variant list
+        id: prepare-variants
+        run: |
+          VARIANTS_FILE=".github/app-variants.yaml"
+          # Parse YAML (Ruby built-in), filter enabled != false, output JSON for jq
+          ENABLED=$(ruby -r yaml -r json -e "
+            list = YAML.load_file('$VARIANTS_FILE')
+            list = list.select { |v| v['enabled'] != false }
+            puts list.to_json
+          ")
+          echo "app_variants<<EOF" >> $GITHUB_OUTPUT
+          echo "$ENABLED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "## Unyt network release"
+            echo ""
+            echo "This release builds the following app variants. The **identifier** is the network seed."
+            echo ""
+            echo "| Unyt Network |         Network Seed           |"
+            echo "|--------------|--------------------------------|"
+            echo "$ENABLED" | jq -r '.[] | "| \(.product_name) | `\(.identifier)` |"'
+            echo ""
+            echo "---"
+            echo ""
+          } > variants_note.txt
+          echo "variants_note<<EOF" >> $GITHUB_OUTPUT
+          cat variants_note.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Install nix
         uses: cachix/install-nix-action@v27
         with:
@@ -57,8 +87,9 @@ jobs:
             $0 ~ "^## \\[" ver "\\]" {p=1; next}
             p && /^## \[/ {exit}
             p {print}
-          ' CHANGELOG.md > release_notes.txt
+          ' unyt/CHANGELOG.md > release_notes.txt
           echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ steps.prepare-variants.outputs.variants_note }}" >> $GITHUB_OUTPUT
           cat release_notes.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
@@ -72,7 +103,7 @@ jobs:
             unyt/dnas/alliance/workdir/alliance.dna
             unyt/dnas/agent_details/workdir/agent_details.dna
           body: ${{ steps.changelog.outputs.notes }}
-          name: ${{ env.PRODUCT_NAME }} v${{ steps.version.outputs.APP_VERSION }}
+          name: Unyt Sandbox v${{ steps.version.outputs.APP_VERSION }}
           tag: v${{ steps.version.outputs.APP_VERSION }}
           prerelease: true
           draft: true
@@ -82,50 +113,49 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Default Arc versions (use Holochain default)
-          - platform: "macos-latest" # for Arm based macs (M1 and above).
+        # From .github/app-variants.yaml (set enabled: false to exclude)
+        app_variant: ${{ fromJson(needs.publish-happ.outputs.app_variants) }}
+        config:
+          - platform: macos-latest
             args: "--target aarch64-apple-darwin"
-            arc_mode: "default"
-            arc_factor: "default"
-          - platform: "macos-latest" # for Intel based macs.
+            arc_factor: default
+          - platform: macos-latest
             args: "--target x86_64-apple-darwin"
-            arc_mode: "default"
-            arc_factor: "default"
-          - platform: "ubuntu-22.04" # for Tauri v1 you could replace this with ubuntu-20.04.
+            arc_factor: default
+          - platform: ubuntu-22.04
             args: "--bundles deb,appimage"
-            arc_mode: "default"
-            arc_factor: "default"
-          - platform: "windows-latest"
+            arc_factor: default
+          - platform: windows-latest
             args: ""
-            arc_mode: "default"
-            arc_factor: "default"
-          # Zero Arc versions
-          - platform: "macos-latest" # for Arm based macs (M1 and above).
+            arc_factor: default
+          - platform: macos-latest
             args: "--target aarch64-apple-darwin"
-            arc_mode: "zero"
             arc_factor: "0"
-          - platform: "macos-latest" # for Intel based macs.
+          - platform: macos-latest
             args: "--target x86_64-apple-darwin"
-            arc_mode: "zero"
             arc_factor: "0"
-          - platform: "ubuntu-22.04" # for Tauri v1 you could replace this with ubuntu-20.04.
+          - platform: ubuntu-22.04
             args: "--bundles deb,appimage"
-            arc_mode: "zero"
             arc_factor: "0"
-          - platform: "windows-latest"
+          - platform: windows-latest
             args: ""
-            arc_mode: "zero"
             arc_factor: "0"
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
-      HOLOCHAIN_ARC_FACTOR: ${{ matrix.arc_factor != 'default' && matrix.arc_factor || '' }}
+      HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
+      PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
+      TAURI_PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
+      TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
+      TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
+      TAURI_DEEP_LINK_SCHEME: ${{ matrix.app_variant.id }}
+      TAURI_SPLASHSCREEN_TITLE: ${{ matrix.app_variant.product_name }} Loading
+      TAURI_APP_VARIANT: ${{ matrix.app_variant.id }}
     permissions: write-all
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.config.platform }}
     steps:
       - name: Support longpaths
-        if: matrix.platform != 'ubuntu-22.04'
+        if: matrix.config.platform != 'ubuntu-22.04'
         run: git config --system core.longpaths true
 
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
@@ -135,6 +165,7 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
           fetch-depth: 0
+
       - name: setup node
         uses: actions/setup-node@v1
         with:
@@ -147,7 +178,7 @@ jobs:
           toolchain: 1.88.0
 
       - name: install x86_64 target
-        if: matrix.args == '--target x86_64-apple-darwin'
+        if: matrix.config.args == '--target x86_64-apple-darwin'
         run: rustup target add x86_64-apple-darwin
 
       - name: install wasm32-unknown-unknown target
@@ -159,7 +190,7 @@ jobs:
           go-version: "stable"
 
       - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.config.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.0-dev \
@@ -179,15 +210,21 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install -y jq
 
+      - name: Install and prepare
+        run: |
+          yarn install
+
+      - name: Prepare app variant (config + icons)
+        run: |
+          chmod +x scripts/generate-tauri-config.sh scripts/copy-app-icons.sh
+          bash scripts/generate-tauri-config.sh
+          bash scripts/copy-app-icons.sh
+
       - name: Retrieve version
         shell: bash
         run: |
           echo "APP_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
         id: version
-
-      - name: Install and prepare
-        run: |
-          yarn install
 
       - name: Download release of the .happ
         uses: robinraju/release-downloader@v1.10
@@ -199,7 +236,7 @@ jobs:
           fileName: "unyt.happ"
           out-file-path: "workdir/"
 
-      - name: build the app (${{ matrix.arc_mode }} arc)
+      - name: build (${{ matrix.config.arc_factor }} arc)
         uses: tauri-apps/tauri-action@v0
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -211,101 +248,162 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
           VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          VITE_COMMIT_SHA: ${{ steps.version.outputs.APP_VERSION }}-iroh # this is the tag that will be added to sentry
+          VITE_COMMIT_SHA: ${{ env.PRODUCT_NAME }}-${{ steps.version.outputs.APP_VERSION }}-sandbox-${{ matrix.config.arc_factor }} # this is the tag that will be added to sentry
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
-          HOLOCHAIN_ARC_FACTOR: ${{ matrix.arc_factor != 'default' && matrix.arc_factor || '' }}
+          HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
+          VITE_IS_RIDESHARE_RELEASE: ${{ matrix.app_variant.id == 'rideshare' && 'true' || 'false' }}
+          VITE_APP_NAME: ${{ matrix.app_variant.product_name }}
+          VITE_IS_CIRCULO_RELEASE: ${{ matrix.app_variant.id == 'circulo' && 'true' || 'false' }}
         with:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           releaseDraft: true
-          includeUpdaterJson: ${{ matrix.arc_mode == 'default' && false || true }} # Upload updater JSON for zero arc
+          includeUpdaterJson: ${{ matrix.config.arc_factor == 'default' && false || true }} # Upload updater JSON for zero arc
           updaterJsonPreferNsis: true
           prerelease: true
-          args: ${{ matrix.args }}
-          assetNamePattern: ${{ matrix.arc_mode == 'default' && '[name]_[version]_[arch]_[platform][ext]' || format('[name]_{0}-arc_[version]_[arch]_[platform][ext]', matrix.arc_mode) }}
+          args: ${{ matrix.config.args }}
+          assetNamePattern: ${{ format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]', matrix.config.arc_factor) }}
 
-  release-tauri-android-app:
-    needs: publish-happ
-    permissions: write-all
+  # release-tauri-android-app:
+  #   needs: publish-happ
+  #   permissions: write-all
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       app_variant: ${{ fromJson(needs.publish-happ.outputs.app_variants) }}
+  #   env:
+  #     PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
+  #     TAURI_PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
+  #     TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
+  #     TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
+  #     TAURI_DEEP_LINK_SCHEME: ${{ matrix.app_variant.id }}
+  #     TAURI_SPLASHSCREEN_TITLE: ${{ matrix.app_variant.product_name }} Loading
+  #     TAURI_APP_VARIANT: ${{ matrix.app_variant.id }}
+  #   runs-on: ubuntu-22.04
+  #   steps:
+  #     - name: Maximize build space
+  #       uses: AdityaGarg8/remove-unwanted-software@v5
+  #       with:
+  #         remove-android: "true"
+  #         remove-dotnet: "true"
+  #         remove-haskell: "true"
+  #         remove-codeql: "true"
+  #         remove-docker-images: "true"
+  #         remove-large-packages: "true"
+  #         remove-cached-tools: "true"
 
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Maximize build space
-        uses: AdityaGarg8/remove-unwanted-software@v5
-        with:
-          remove-android: "true"
-          remove-dotnet: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
-          remove-docker-images: "true"
-          remove-large-packages: "true"
-          remove-cached-tools: "true"
+  #     - uses: actions/checkout@v3
+  #       with:
+  #         token: ${{ secrets.GIT_PAT }}
+  #         submodules: recursive
+  #         fetch-depth: 0
 
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      # Checks out a copy of your repository on the ubuntu-latest machine
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GIT_PAT }}
-          submodules: recursive
-          fetch-depth: 0
+  #     - name: setup node
+  #       uses: actions/setup-node@v1
+  #       with:
+  #         node-version: 20
 
-      - name: Install nix
-        uses: cachix/install-nix-action@v27
-        with:
-          github_access_token: ${{ secrets.GIT_PAT }}
-          nix_path: nixpkgs=channel:nixos-24.05
+  #     - name: Install and prepare
+  #       run: yarn install
 
-      - uses: cachix/cachix-action@v15
-        with:
-          name: holochain-ci
+  #     - name: Prepare app variant (config + icons)
+  #       run: |
+  #         chmod +x scripts/generate-tauri-config.sh scripts/copy-app-icons.sh
+  #         bash scripts/generate-tauri-config.sh
+  #         bash scripts/copy-app-icons.sh
 
-      - uses: cachix/cachix-action@v15
-        with:
-          name: darksoil-studio
+  #     - name: Retrieve version
+  #       run: |
+  #         echo "APP_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
+  #       id: version
 
-      - name: Download release of the .happ
-        uses: robinraju/release-downloader@v1.10
-        env:
-          GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
-        with:
-          token: ${{ secrets.GIT_PAT }}
-          releaseId: ${{ needs.publish-happ.outputs.releaseId }}
-          fileName: "unyt.happ"
-          out-file-path: "workdir/"
+  #     - name: Download release of the .happ
+  #       uses: robinraju/release-downloader@v1.10
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
+  #       with:
+  #         token: ${{ secrets.GIT_PAT }}
+  #         releaseId: ${{ needs.publish-happ.outputs.releaseId }}
+  #         fileName: "unyt.happ"
+  #         out-file-path: "workdir/"
 
-      - name: Retrieve version
-        run: |
-          echo "APP_VERSION=$(cat src-tauri/tauri.conf.json | grep -oP '(?<="version": ")[^"]*')" >> $GITHUB_OUTPUT
-        id: version
+  #     - name: install Rust stable
+  #       uses: actions-rs/toolchain@v1
+  #       with:
+  #         override: true
+  #         toolchain: 1.88.0
 
-      - name: setup Android signing
-        run: |
-          cd src-tauri/gen/android
-          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" > key.properties
-          echo "password=${{ secrets.ANDROID_KEY_PASSWORD }}" >> key.properties
-          base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > $RUNNER_TEMP/keystore.jks
-          echo "storeFile=$RUNNER_TEMP/keystore.jks" >> key.properties
+  #     - name: install Go stable
+  #       uses: actions/setup-go@v4
+  #       with:
+  #         go-version: "stable"
 
-      - name: Install and Build 🔧 (zero arc)
-        env:
-          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          VITE_COMMIT_SHA: ${{ steps.version.outputs.APP_VERSION }}-iroh # this is the tag that will be added to sentry
-          APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
-          HOLOCHAIN_ARC_FACTOR: "0"
-          # VITE_APP_NAME: "Circulo"
-          # VITE_IS_CIRCULO_RELEASE: "true"
-        run: |
-          nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
+  #     - name: Install nix
+  #       uses: cachix/install-nix-action@v27
+  #       with:
+  #         github_access_token: ${{ secrets.GIT_PAT }}
+  #         nix_path: nixpkgs=channel:nixos-24.05
 
-      - name: Upload release aab
-        uses: AButler/upload-release-assets@v3.0
-        with:
-          files: src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-          repo-token: ${{ secrets.GIT_PAT }}
-          release-id: ${{ needs.publish-happ.outputs.releaseId }}
+  #     - uses: cachix/cachix-action@v15
+  #       with:
+  #         name: holochain-ci
 
-      - name: Upload release apk
-        uses: AButler/upload-release-assets@v3.0
-        with:
-          files: src-tauri/gen/android/app/build/outputs/apk/**/**/*.apk
-          repo-token: ${{ secrets.GIT_PAT }}
-          release-id: ${{ needs.publish-happ.outputs.releaseId }}
+  #     - uses: cachix/cachix-action@v15
+  #       with:
+  #         name: darksoil-studio
+
+  #     - name: Regenerate Android project for variant
+  #       run: |
+  #         rm -rf src-tauri/gen/android
+  #         nix develop --accept-flake-config .#androidDev --command bash -c "yarn tauri android init"
+
+  #     - name: Set usesCleartextTraffic to true
+  #       run: |
+  #         chmod +x scripts/android-uses-cleartext-traffic.sh
+  #         bash scripts/android-uses-cleartext-traffic.sh
+
+  #     - name: setup Android signing
+  #       run: |
+  #         cd src-tauri/gen/android
+  #         echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" > key.properties
+  #         echo "password=${{ secrets.ANDROID_KEY_PASSWORD }}" >> key.properties
+  #         base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > $RUNNER_TEMP/keystore.jks
+  #         echo "storeFile=$RUNNER_TEMP/keystore.jks" >> key.properties
+
+  #     - name: Install and Build (zero arc)
+  #       env:
+  #         VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+  #         VITE_COMMIT_SHA: ${{ env.PRODUCT_NAME }}-${{ steps.version.outputs.APP_VERSION }}-android
+  #         APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
+  #         HOLOCHAIN_ARC_FACTOR: "0"
+  #         TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
+  #         TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
+  #       run: |
+  #         nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
+
+  #     - name: Copy AAB for upload (variant-specific name)
+  #       run: |
+  #         mkdir -p upload
+  #         AAB="$(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' 2>/dev/null | head -1)"
+  #         [ -n "$AAB" ] && cp "$AAB" "upload/${{ matrix.app_variant.id }}-${{ steps.version.outputs.APP_VERSION }}.aab"
+
+  #     - name: Upload release aab
+  #       uses: AButler/upload-release-assets@v3.0
+  #       with:
+  #         files: upload/*.aab
+  #         repo-token: ${{ secrets.GIT_PAT }}
+  #         release-id: ${{ needs.publish-happ.outputs.releaseId }}
+
+  #     - name: Copy APK for upload (variant-specific names)
+  #       run: |
+  #         mkdir -p upload-apk
+  #         i=0
+  #         while IFS= read -r f; do
+  #           [ -f "$f" ] && cp "$f" "upload-apk/${{ matrix.app_variant.id }}-${{ steps.version.outputs.APP_VERSION }}-$i.apk" && i=$((i+1))
+  #         done < <(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" 2>/dev/null)
+
+  #     - name: Upload release apk
+  #       uses: AButler/upload-release-assets@v3.0
+  #       with:
+  #         files: upload-apk/*.apk
+  #         repo-token: ${{ secrets.GIT_PAT }}
+  #         release-id: ${{ needs.publish-happ.outputs.releaseId }}

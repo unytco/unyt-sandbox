@@ -1,136 +1,214 @@
-use crate::{app_config::AppConfig, network_config};
+use crate::{
+    app_config::AppConfig, consts::HOLOCHAIN_VERSION,
+    runtime::boot::holochain::network_config,
+};
 use anyhow::anyhow;
 use holochain_client::{AppInfo, CellInfo};
-use tauri::AppHandle;
-use tauri_plugin_dialog::DialogExt;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_holochain::HolochainExt;
+use log::error;
 
 pub async fn about_menu<R: tauri::Runtime>(h: &AppHandle<R>) {
     let app_version = h.package_info().version.to_string();
+    let product_name = AppConfig::new(h).product_name.clone();
 
-    let app_info_message = match get_app_info(h.clone()).await {
-        Ok((_all_apps, expected_app_info)) => {
-            // // create a pretty list of installed apps
-            // let list_of_installed_apps = all_apps
-            //     .iter()
-            //     .map(|app| format!("{:?}", app))
-            //     .collect::<Vec<String>>()
-            //     .join("\n");
-            // let list_of_installed_apps = list_of_installed_apps
-            //     .lines()
-            //     .map(|line| format!("\t\t➤ {}\n", line))
-            //     .collect::<Vec<String>>()
-            //     .join("\n");
-            // create a pretty visual string of the expected_app_info and check if it is installed
-            struct Details {
-                app_name: String,
-                dna_hash: String,
-                network_seed: String,
-                agent_pub_key: String,
-                status: String,
-            }
-            let message = match expected_app_info {
-                Some(app_info) => {
-                    let existing_cells = app_info.cell_info.get("alliance");
+    // Build clean sections - Essential info first, technical details last
+    let mut sections = Vec::new();
 
-                    let existing_cell = existing_cells
-                        .cloned()
-                        .unwrap_or_default()
-                        .iter()
-                        .find_map(|c| match c {
-                            CellInfo::Provisioned(c) => Some(c.clone()),
-                            _ => None,
-                        });
+    // 1. VERSION INFORMATION (Most important - always first)
+    sections.push(format!(
+        "━━━ VERSION INFORMATION ━━━\n\n{} Version: v{}\nHolochain Version: {}",
+        product_name, app_version, HOLOCHAIN_VERSION
+    ));
 
-                    let details = Details {
-                        app_name: app_info.installed_app_id.as_str().to_string(),
-                        dna_hash: if let Some(cell) = existing_cell.clone() {
-                            cell.cell_id.dna_hash().to_string()
-                        } else {
-                            "not found".to_string()
-                        },
-                        network_seed: if let Some(cell) = existing_cell.clone() {
-                            cell.dna_modifiers.network_seed.to_string()
-                        } else {
-                            "not found".to_string()
-                        },
-                        agent_pub_key: format!("{:?}", app_info.agent_pub_key),
-                        status: format!("{:?}", app_info.status),
-                    };
-                    format!(
-                        "\t\t➤ Name:  {:?}\n\t\t➤ dna hash: {:?}\n\t\t➤ network seed: {:?}\n\t\t➤ agent pub key: {:?}\n\t\t➤ status: {:?}",
-                        details.app_name,
-                        details.dna_hash,
-                        details.network_seed,
-                        details.agent_pub_key,
-                        details.status
-                    )
-                }
-                None => "App that is expected to be installed is not installed".to_string(),
-            };
-            message
-            // let app_name = expected_app_info
-            //     .iter()
-            //     .map(|app| app.installed_app_id.as_str())
-            //     .collect::<Vec<&str>>()
-            //     .join("\n");
-            // let app_name = app_name
-            //     .lines()
-            //     .map(|line| format!("\t\t➤ {}\n", line))
-            //     .collect::<Vec<String>>()
-            //     .join("\n");
-            // let app_name = if app_name.is_empty() {
-            //     "\tUnable to find app".to_string()
-            // } else {
-            //     app_name
-            // };
-            // format!(
-            //     "\tExpected App Info:\n{}\n",
-            //     list_of_installed_apps, expected_app_info
-            // )
-        }
-        Err(e) => format!("Error getting app info: {:?}", e),
-    };
+    // 2. APP INFORMATION (Important for users)
+    if let Ok(app_info) = get_app_info(h.clone()).await {
+        sections.push(format_app_info(app_info));
+    }
 
+    // 3. NETWORK CONFIGURATION (Technical - for debugging)
     let network_config = network_config();
+    let mut network_info = String::from("━━━ NETWORK CONFIGURATION ━━━\n");
 
-    let product_name = AppConfig::new(h).product_name;
-    let about_message = format!(
-        "{} Version: v{}\n\n---\n\nApp Info:\n{}\n\n---\n\n{:#?}",
-        product_name, app_version, app_info_message, network_config,
+    // Bootstrap URL
+    network_info.push_str(&format!(
+        "\nBootstrap URL: {}",
+        network_config.bootstrap_url
+    ));
+
+    // Signal URL
+    network_info.push_str(&format!(
+        "\nSignal URL: {}",
+        network_config.signal_url.to_string()
+    ));
+
+    // Target Arc Factor
+    network_info.push_str(&format!(
+        "\nTarget Arc Factor: {}",
+        if network_config.target_arc_factor == 0 {
+            "0 (Zero Arc Mode)".to_string()
+        } else {
+            format!("{}", network_config.target_arc_factor)
+        }
+    ));
+
+    // Base64 Auth Material
+    if let Some(auth) = &network_config.base64_auth_material {
+        let auth_display = if auth.len() > 20 {
+            format!("{}...{}", &auth[..10], &auth[auth.len() - 10..])
+        } else {
+            auth.clone()
+        };
+        network_info.push_str(&format!("\nAuth Material: {}", auth_display));
+    } else {
+        network_info.push_str("\nAuth Material: None");
+    }
+
+    // WebRTC Configuration
+    if let Some(webrtc) = &network_config.webrtc_config {
+        network_info.push_str("\n\nWebRTC Config:");
+        network_info.push_str(&format!(
+            "\n{}",
+            serde_json::to_string_pretty(webrtc).unwrap_or_default()
+        ));
+    } else {
+        network_info.push_str("\n\nWebRTC Config: None");
+    }
+
+    // Report Configuration
+    network_info.push_str(&format!(
+        "\n\nReport Config:\n{}",
+        serde_json::to_string_pretty(&network_config.report)
+            .unwrap_or_else(|_| "Unable to serialize".to_string())
+    ));
+
+    // Advanced Configuration
+    if let Some(advanced) = &network_config.advanced {
+        network_info.push_str("\n\nAdvanced Config:");
+        network_info.push_str(&format!(
+            "\n{}",
+            serde_json::to_string_pretty(advanced).unwrap_or_default()
+        ));
+    } else {
+        network_info.push_str("\n\nAdvanced Config: None");
+    }
+
+    sections.push(network_info);
+
+    // 4. NETWORK BACKEND STATS (Very technical - always last)
+    if let Ok(backend) = get_network_dump(h.clone()).await {
+        if !backend.is_empty() {
+            sections.push(format!("━━━ NETWORK BACKEND STATS ━━━\n\n{}", backend));
+        }
+    }
+
+    let about_message = sections.join("\n\n");
+    let clipboard_message = format!(
+        "{}\n\n(Click 'Copy' to copy this information to clipboard)",
+        about_message
     );
 
+    let message_for_clipboard = about_message.clone();
+    let handle = h.clone();
+
     h.dialog()
-        .message(about_message)
+        .message(clipboard_message)
         .title(format!("About {}", product_name))
-        .show(|_| {})
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Copy".to_string(),
+            "Close".to_string(),
+        ))
+        .show(move |result| {
+            if result {
+                // User clicked "Copy" button
+                if let Some(window) = handle.get_webview_window("main") {
+                    let msg = message_for_clipboard.clone();
+                    let js_code = format!(
+                        "navigator.clipboard.writeText({}).then(() => console.log('Copied to clipboard'), (err) => console.error('Failed to copy:', err))",
+                        serde_json::to_string(&msg).unwrap_or_default()
+                    );
+                    if let Err(e) = window.eval(&js_code) {
+                        error!("Failed to copy to clipboard: {:?}", e);
+                    }
+                }
+            }
+        })
 }
 
-async fn get_app_info<R: tauri::Runtime>(
-    handle: AppHandle<R>,
-) -> anyhow::Result<(Vec<AppInfo>, Option<AppInfo>)> {
-    match handle.holochain() {
-        Ok(holochain_client) => {
-            match holochain_client.admin_websocket().await {
-                Ok(admin_ws) => {
-                    // Check if the expected app is installed
-                    let installed_apps = admin_ws
-                        .list_apps(None)
-                        .await
-                        .map_err(|err| tauri_plugin_holochain::Error::ConductorApiError(err))?;
-                    let handle = handle.clone();
-                    let expected_app_info = installed_apps.clone().into_iter().find(|app| {
-                        app.installed_app_id
-                            .as_str()
-                            .eq(&AppConfig::new(&handle).app_id)
-                    });
+fn format_app_info(app_info: Option<AppInfo>) -> String {
+    match app_info {
+        Some(info) => {
+            let mut output = String::from("━━━ APPLICATION INFORMATION ━━━\n");
 
-                    // Check if an old version is still installed
-                    return Ok((installed_apps.clone(), expected_app_info));
+            // Status and App ID (most important first)
+            output.push_str(&format!("\nStatus: {:?}", info.status));
+            output.push_str(&format!("\nApp ID: {}", info.installed_app_id));
+
+            // Agent Public Key
+            let agent_key = format!("{:?}", info.agent_pub_key);
+            let short_agent_key = if agent_key.len() > 50 {
+                format!(
+                    "{}...{}",
+                    &agent_key[..24],
+                    &agent_key[agent_key.len() - 24..]
+                )
+            } else {
+                agent_key
+            };
+            output.push_str(&format!("\nAgent: {}", short_agent_key));
+
+            // DNA Information from alliance cell
+            if let Some(cells) = info.cell_info.get("alliance") {
+                if let Some(cell) = cells.iter().find_map(|c| match c {
+                    CellInfo::Provisioned(c) => Some(c),
+                    _ => None,
+                }) {
+                    let dna_hash = cell.cell_id.dna_hash().to_string();
+                    let short_dna = if dna_hash.len() > 50 {
+                        format!("{}...{}", &dna_hash[..24], &dna_hash[dna_hash.len() - 24..])
+                    } else {
+                        dna_hash
+                    };
+                    output.push_str(&format!("\nDNA Hash: {}", short_dna));
+                    output.push_str(&format!(
+                        "\nNetwork Seed: {}",
+                        cell.dna_modifiers.network_seed
+                    ));
                 }
-                Err(e) => return Err(anyhow!("Error getting Holochain client: {:?}", e)),
             }
+
+            output
         }
-        Err(e) => return Err(anyhow!("Error getting Holochain client: {:?}", e)),
+        None => String::from("━━━ APPLICATION INFORMATION ━━━\n\nApp not installed or not running"),
     }
+}
+
+async fn get_app_info<R: tauri::Runtime>(handle: AppHandle<R>) -> anyhow::Result<Option<AppInfo>> {
+    let holochain_client = handle.holochain()?;
+    let admin_ws = holochain_client.admin_websocket().await?;
+
+    let installed_apps = admin_ws
+        .list_apps(None)
+        .await
+        .map_err(|err| anyhow!("Failed to list apps: {:?}", err))?;
+
+    let app_config = AppConfig::new(&handle);
+    let expected_app_info = installed_apps
+        .into_iter()
+        .find(|app| app.installed_app_id.as_str() == app_config.app_id);
+
+    Ok(expected_app_info)
+}
+
+async fn get_network_dump<R: tauri::Runtime>(handle: AppHandle<R>) -> anyhow::Result<String> {
+    let holochain_client = handle.holochain()?;
+    let admin_ws = holochain_client.admin_websocket().await?;
+
+    let data = admin_ws
+        .dump_network_stats()
+        .await
+        .map_err(|err| anyhow!("Failed to dump network stats: {:?}", err))?;
+
+    Ok(data.transport_stats.backend)
 }

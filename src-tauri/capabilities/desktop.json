@@ -1,6 +1,19 @@
 {
-	"identifier": "desktop-capability",
-	"platforms": ["macOS", "windows", "linux"],
-	"windows": ["main"],
-	"permissions": ["core:default", "process:default", "updater:default"]
+  "identifier": "desktop-capability",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main", "splashscreen", "logs"],
+  "permissions": [
+    "core:default",
+    "process:default",
+    "updater:default",
+    "http:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://nominatim.openstreetmap.org/**" },
+        { "url": "https://router.project-osrm.org/**" },
+        { "url": "https://*.tile.openstreetmap.org/**" }
+      ]
+    }
+  ]
 }

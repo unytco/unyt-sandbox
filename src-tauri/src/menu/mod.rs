@@ -1,9 +1,10 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use log::error;
 mod about;
 
-use crate::holochain_dir;
+use crate::runtime::boot::holochain::holochain_dir;
 
 pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     app_handle.on_menu_event(|app_handle, menu_event| match menu_event.id().as_ref() {
@@ -13,8 +14,21 @@ pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R
                 .app_log_dir()
                 .expect("Could not get app log dir");
             if let Err(err) = opener::reveal(log_folder.clone()) {
-                log::error!("Failed to open log dir at {log_folder:?}: {err:?}");
+                error!("Failed to open log dir at {log_folder:?}: {err:?}");
             }
+        }
+        "reload" => {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                if let Err(err) = window.eval("window.location.reload()") {
+                    error!("Failed to reload window: {err:?}");
+                }
+            }
+        }
+        "restart" => {
+            app_handle.restart();
+        }
+        "quit" => {
+            app_handle.exit(0);
         }
         "factory-reset" => {
             let h = app_handle.clone();
@@ -28,7 +42,7 @@ pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R
                 .show(move |result| match result {
                     true => {
                         if let Err(err) = std::fs::remove_dir_all(holochain_dir()) {
-                            log::error!("Failed to perform factory reset: {err:?}");
+                            error!("Failed to perform factory reset: {err:?}");
                         } else {
                             h.restart();
                         }
@@ -50,34 +64,12 @@ pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R
                 app_handle,
                 "File",
                 true,
-                &[
-                    &MenuItem::with_id(
-                        app_handle,
-                        "open-logs-folder",
-                        "Open Logs Folder",
-                        true,
-                        None::<&str>,
-                    )?,
-                    &MenuItem::with_id(
-                        app_handle,
-                        "factory-reset",
-                        "Factory Reset",
-                        true,
-                        None::<&str>,
-                    )?,
-                    &PredefinedMenuItem::close_window(app_handle, None)?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app_handle,
-                "Help",
-                true,
                 &[&MenuItem::with_id(
                     app_handle,
-                    "about",
-                    "About",
+                    "quit",
+                    "Quit",
                     true,
-                    None::<&str>,
+                    Some("CmdOrCtrl+Q"),
                 )?],
             )?,
             &Submenu::with_items(
@@ -94,6 +86,59 @@ pub fn build_menu<R: Runtime>(app_handle: &AppHandle<R>) -> tauri::Result<Menu<R
                     &PredefinedMenuItem::separator(app_handle)?,
                     &PredefinedMenuItem::select_all(app_handle, None)?,
                 ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "View",
+                true,
+                &[&MenuItem::with_id(
+                    app_handle,
+                    "reload",
+                    "Reload",
+                    true,
+                    Some("CmdOrCtrl+R"),
+                )?],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "Advanced",
+                true,
+                &[
+                    &MenuItem::with_id(
+                        app_handle,
+                        "restart",
+                        "Restart Application",
+                        true,
+                        None::<&str>,
+                    )?,
+                    &MenuItem::with_id(
+                        app_handle,
+                        "open-logs-folder",
+                        "Open Logs Folder",
+                        true,
+                        None::<&str>,
+                    )?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &MenuItem::with_id(
+                        app_handle,
+                        "factory-reset",
+                        "Factory Reset",
+                        true,
+                        None::<&str>,
+                    )?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "Help",
+                true,
+                &[&MenuItem::with_id(
+                    app_handle,
+                    "about",
+                    "About",
+                    true,
+                    None::<&str>,
+                )?],
             )?,
         ],
     )

@@ -2,13 +2,14 @@
 
 #### links to related docs
 
-- [Test Plan](./1_0_testing_plan.md)
+- [Invitation to Play](./1_0_invite.md)
 - [Unyt Setup](../README.md)
-- [Testing Documentation, Phase 4](./4_0_phase_4_testing_details.md)
+- [Detailed Documentation](./5_0_phase_5_testing_details.md)
 - [Unyt Dictionary](./4_2_unyt-dictionary.md)
 - [Intro to Smart Agreements (Three Layers)](./4_1_intro_to_smart_agreements.md)
 - [Templates and Smart Agreements Library Repo](https://github.com/unytco/smart_agreement_library)
 - [Feedback](https://github.com/orgs/unytco/projects/5/views/1)
+
 
 ## A glossary of terms related to Unyt
 

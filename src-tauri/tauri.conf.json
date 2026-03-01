@@ -1,7 +1,8 @@
 {
-  "version": "0.39.0",
-  "productName": "Unyt",
+  "version": "0.55.0",
+  "productName": "Unyt Sandbox",
   "identifier": "co.unyt.unyt.sandbox",
+  "mainBinaryName": "unyt-sandbox",
   "build": {
     "beforeBuildCommand": "cd ./unyt && make ci-build-ui",
     "devUrl": "http://localhost:1420",
@@ -10,8 +11,22 @@
   "app": {
     "withGlobalTauri": false,
     "security": {
-      "capabilities": ["mobile-capability", "main-capability", "desktop-capability"]
-    }
+      "capabilities": ["mobile-capability", "main-capability", "desktop-capability", "splashscreen-capability"]
+    },
+    "windows": [
+      {
+        "label": "splashscreen",
+        "title": "Unyt Loading",
+        "url": "/splashscreen.html",
+        "width": 800,
+        "height": 800,
+        "resizable": true,
+        "decorations": false,
+        "center": true,
+        "transparent": false,
+        "alwaysOnTop": false
+      }
+    ]
   },
   "bundle": {
     "active": true,
@@ -20,20 +35,20 @@
     "macOS": {
       "entitlements": "entitlements.plist"
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": false
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2NEE4MDE2OERCREQ3M0EKUldRNjE3Mk5Gb0JLVmlRNzdlVGlQdkNPdG5KWVQyWkhldUdvdXNMbzh0TTlnSG5CdjB5cWVubWUK",
       "endpoints": [
-        "https://github.com/unytco/shipyard-domino/releases/latest/download/latest.json",
-        "https://github.com/unytco/shipyard-domino/releases/latest/download/latest-zero-arc.json"
+        "https://github.com/unytco/unyt-sandbox/releases/latest/download/latest.json",
+        "https://github.com/unytco/unyt-sandbox/releases/latest/download/latest-zero-arc.json"
       ]
     },
     "deep-link": {
-      "mobile": [{ "scheme": ["unyt"] }],
+      "mobile": [{ "scheme": ["unyt-sandbox"] }],
       "desktop": {
-        "schemes": ["unyt"]
+        "schemes": ["unyt-sandbox"]
       }
     }
   }

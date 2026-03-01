@@ -1,7 +1,7 @@
 use jni::objects::JClass;
 use jni::JNIEnv;
-use notifications_zome_trait::GetNotificationInput;
-use push_notifications_service_trait::*;
+// use notifications_zome_trait::GetNotificationInput;
+// use push_notifications_service_trait::*;
 use service_providers_utils::make_service_request;
 use tauri::{AppHandle, Listener, Manager};
 use tauri_plugin_holochain::*;

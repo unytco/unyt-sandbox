@@ -1,14 +1,23 @@
 {
-	"$schema": "../gen/schemas/mobile-schema.json",
-	"identifier": "mobile-capability",
-	"windows": ["main"],
-	"platforms": ["iOS", "android"],
-	"permissions": [
-		"barcode-scanner:allow-check-permissions",
-		"barcode-scanner:allow-open-app-settings",
-		"barcode-scanner:allow-request-permissions",
-		"barcode-scanner:allow-scan",
-		"barcode-scanner:allow-cancel",
-		"safe-area-insets-css:default"
-	]
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile-capability",
+  "windows": ["main",  "splashscreen", "  logs"],
+  "platforms": ["iOS", "android"],
+  "permissions": [
+    "barcode-scanner:allow-check-permissions",
+    "barcode-scanner:allow-open-app-settings",
+    "barcode-scanner:allow-request-permissions",
+    "barcode-scanner:allow-scan",
+    "barcode-scanner:allow-cancel",
+    "safe-area-insets-css:default",
+    "http:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://nominatim.openstreetmap.org/**" },
+        { "url": "https://router.project-osrm.org/**" },
+        { "url": "https://*.tile.openstreetmap.org/**" }
+      ]
+    }
+  ]
 }

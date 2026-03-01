@@ -2,15 +2,15 @@
   description = "Flake for Holochain app development";
 
   inputs = {
-    tauri-plugin-holochain.url = "github:zo-el/tauri-plugin-holochain/main-0.6";
-    holonix.url = "github:holochain/holonix/main";
+    tauri-plugin-holochain.url = "github:unytco/tauri-plugin-holochain/main-0.6.1";
+    holonix.url = "github:holochain/holonix/main-0.6";
     
     nixpkgs.follows = "holonix/nixpkgs";
     rust-overlay.follows = "holonix/rust-overlay";
     crane.follows = "holonix/crane";
 
     flake-parts.follows = "holonix/flake-parts";
-    playground.url = "github:darksoil-studio/holochain-playground?ref=main-0.5";
+    # playground.url = "github:darksoil-studio/holochain-playground?ref=main-0.5";
   };
 
   outputs = inputs@{ flake-parts, ... }: flake-parts.lib.mkFlake { inherit inputs; } {
@@ -20,10 +20,10 @@
       # packages.rust = inputs.holonix.packages.${system}.rust;
 
       # Custom rust version
-      packages.rust = let
-        overlays = [ (import inputs.rust-overlay) ];
-        pkgs = import inputs.nixpkgs { inherit system overlays; };
-      in pkgs.rust-bin.stable."1.88.0".minimal;
+      # packages.rust = let
+      #   overlays = [ (import inputs.rust-overlay) ];
+      #   pkgs = import inputs.nixpkgs { inherit system overlays; };
+      # in pkgs.rust-bin.stable."1.88.0".minimal;
 
       formatter = pkgs.nixpkgs-fmt;
 
@@ -34,8 +34,9 @@
         packages = (with pkgs; [
           nodejs_20
           binaryen
-          inputs'.playground.packages.hc-playground
+          # inputs'.playground.packages.hc-playground
           yarn
+          go_1_24
           
         ]);
 
@@ -50,8 +51,9 @@
         packages = (with pkgs; [
           nodejs_20
           binaryen
-          inputs'.playground.packages.hc-playground
+          # inputs'.playground.packages.hc-playground
           yarn
+          go_1_24
           
         ]);
 
