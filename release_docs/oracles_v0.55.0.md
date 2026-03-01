@@ -52,6 +52,8 @@ Select from two versions of apps to download.
 1. The **Full-Arc** version holds a full copy of the DHT locally, synchronizing all data being published.
 2. The **Zero-Arc** version is lighter weight to run (which will be good for mobile phones, for example) because it only holds your own history, and caches some other network data, but some actions will be slower because you'll need to fetch data from peers on the network.
 
+After you are done, drop your agent address(es) into [this spreadsheet](https://docs.google.com/spreadsheets/d/1N8zF0AmmebDfSz3hck-Y28IXdgCS_7nepjbYf3lGN5o/edit?gid=0#gid=0) and find others to test alongside.
+
 ---
 
 ### Holo Hosting
