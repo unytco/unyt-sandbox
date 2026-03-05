@@ -130,16 +130,16 @@ jobs:
             arc_factor: default
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
-            arc_factor: "0"
+            arc_factor: "zero"
           - platform: macos-latest
             args: "--target x86_64-apple-darwin"
-            arc_factor: "0"
+            arc_factor: "zero"
           - platform: ubuntu-22.04
             args: "--bundles deb,appimage"
-            arc_factor: "0"
+            arc_factor: "zero"
           - platform: windows-latest
             args: ""
-            arc_factor: "0"
+            arc_factor: "zero"
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
       HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}

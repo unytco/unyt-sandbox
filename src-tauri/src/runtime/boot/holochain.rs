@@ -119,7 +119,7 @@ pub fn network_config() -> NetworkConfig {
         consts::HOLOCHAIN_ARC_FACTOR
     );
     match consts::HOLOCHAIN_ARC_FACTOR {
-        "0" => {
+        "0" | "zero" => {
             tracing::debug!(target: "unyt", "network_config: Zero arc mode enabled (HOLOCHAIN_ARC_FACTOR=0)");
             network_config.target_arc_factor = 0;
         }
