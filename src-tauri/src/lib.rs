@@ -1,5 +1,6 @@
 mod app_config;
 mod consts;
+mod joining;
 mod runtime;
 mod utils;
 
@@ -38,7 +39,12 @@ pub fn run() {
             runtime::boot::progenitor::is_authorized_progenitor,
             runtime::events::close_splashscreen,
             runtime::events::show_logs,
-            runtime::boot::lair::unlock_lair
+            runtime::boot::lair::unlock_lair,
+            joining::generate_agent_key,
+            joining::get_joining_config,
+            joining::install_with_proofs,
+            joining::complete_joining_setup,
+            joining::reset_joining_state,
         ]);
 
     tracing::debug!(target: "unyt", "Added logging plugin and runtime commands");
@@ -131,6 +137,7 @@ pub fn run() {
     builder = builder.setup(move |app| {
         // Initialize logs and status
         runtime::init(app.handle())?;
+        joining::init(app.handle());
         tracing::debug!(target: "unyt", "Tauri setup initialized");
 
         let handle = app.handle().clone();
@@ -203,6 +210,16 @@ pub fn run() {
                         }
                         info!("Setup completed successfully");
 
+                        // Check if setup returned because joining is required.
+                        // In that case we still need to open the window so the
+                        // frontend can show the joining wizard, but we skip
+                        // treating it as fully "ready".
+                        let state_manager = window_handle.state::<Arc<EnvStatusManager>>();
+                        let is_joining = matches!(
+                            state_manager.get_status(),
+                            EnvRuntimeStatus::JoiningRequired { .. }
+                        );
+
                         // Open window ONLY after setup (installation/update) is successful
                         tracing::debug!(target: "unyt", "Opening unyt app (the main) window");
                         if let Err(err) = utils::tauri::open_window(window_handle.clone()).await {
@@ -214,6 +231,9 @@ pub fn run() {
                             state_manager.update_status(EnvRuntimeStatus::Error(error_msg));
                         } else {
                             tracing::debug!(target: "unyt", "Main window opened successfully");
+                            if is_joining {
+                                info!("Window opened for joining flow — waiting for frontend to complete joining");
+                            }
                         }
                     });
                 }

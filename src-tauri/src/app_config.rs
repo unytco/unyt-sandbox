@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub product_name: String,
     pub app_id: String,
     pub network_seed: String,
+    pub joining_service_url: Option<String>,
 }
 
 impl AppConfig {
@@ -42,6 +43,7 @@ impl AppConfig {
             app_id: format!("{APP_ID_PREFIX}-{}", version.to_string()),
             // app_id: format!("{APP_ID_PREFIX}-{}", DNA_HASH.trim()),
             network_seed: format!("{}-{}", handle.config().identifier, version),
+            joining_service_url: std::env::var("JOINING_SERVICE_URL").ok(),
         }
     }
 }

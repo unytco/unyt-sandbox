@@ -1,5 +1,6 @@
 use crate::app_config::AppConfig;
 use crate::consts::APP_ID_PREFIX;
+use crate::joining::SharedJoiningState;
 use crate::runtime::status::{EnvRuntimeStatus, EnvStatusManager};
 use crate::utils::holochain::{happ_bundle, migrate_app};
 use anyhow::anyhow;
@@ -162,6 +163,36 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 .await
                 .map_err(|err| anyhow!("{err:?}"))?;
             tracing::debug!(target: "unyt", "setup: Previous app disabled");
+        } else if let Some(joining_url) = &app_config.joining_service_url {
+            // Joining service configured: generate an agent key and hand off
+            // to the frontend to drive the joining flow.
+            info!(
+                "setup: Joining service configured at {}, deferring install to joining flow",
+                joining_url
+            );
+
+            let agent_pub_key = admin_ws
+                .generate_agent_pub_key()
+                .await
+                .map_err(|e| anyhow!("Failed to generate agent key: {e:?}"))?;
+
+            let agent_key_b64 = format!("{}", agent_pub_key);
+
+            // Persist the generated key so install_with_proofs can use it later
+            let joining_state = handle.state::<SharedJoiningState>();
+            {
+                let mut state = joining_state.lock().await;
+                state.agent_key = Some(agent_pub_key);
+            }
+
+            state_manager.update_status(EnvRuntimeStatus::JoiningRequired {
+                agent_key: agent_key_b64,
+                joining_service_url: joining_url.clone(),
+            });
+
+            // Return early -- the frontend will call install_with_proofs and
+            // complete_joining_setup after the joining flow completes.
+            return Ok(());
         } else {
             println!(
                 "[unyt_tauri] setup: Installing new app: {}",

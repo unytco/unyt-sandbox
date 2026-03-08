@@ -16,6 +16,10 @@ pub enum EnvRuntimeStatus {
     ConductorCrashed,
     AppInstalling,
     AppInstallationError(String),
+    JoiningRequired {
+        agent_key: String,
+        joining_service_url: String,
+    },
     Syncing {
         step: u8,
         total_steps: u8,

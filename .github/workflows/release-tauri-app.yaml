@@ -254,6 +254,7 @@ jobs:
           VITE_IS_RIDESHARE_RELEASE: ${{ matrix.app_variant.id == 'rideshare' && 'true' || 'false' }}
           VITE_APP_NAME: ${{ matrix.app_variant.product_name }}
           VITE_IS_CIRCULO_RELEASE: ${{ matrix.app_variant.id == 'circulo' && 'true' || 'false' }}
+          JOINING_SERVER_SIGNER: "uhCAk_Jbtn_3RR-VCLPtJdhcQvVrpM7Vw5vHGog8_CwW5tO0_Cf37"
         with:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           releaseDraft: true

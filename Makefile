@@ -21,14 +21,13 @@ install:
 	fi
 
 setup: 
-	git submodule update --init
-	cd unyt && git submodule update --init
+	git submodule update --init --recursive
 
 launch:
 	cd unyt && yarn build:happ
 	mkdir -p workdir
 	cp -r unyt/workdir/unyt.happ workdir/unyt.happ
-	yarn network:tauri
+	JOINING_SERVICE_URL=http://localhost:3000 yarn network:tauri
 
 # Uses current tauri.conf.json and icons. Run prep-app-<variant> first for a specific variant.
 launch-android: install
@@ -36,6 +35,40 @@ launch-android: install
 
 package:
 	cd unyt && APP_VERSION=$(jq -r '.version' ./src-tauri/tauri.conf.json) make package
+
+# Signing key: set TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD) or leave unset for unsigned.
+TAURI_SIGNING_PRIVATE_KEY ?= $(CURDIR)/.tauri/test.key
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?=
+
+build-linux: build-linux-default
+
+# Uses current tauri.conf.json. For a specific variant use build-linux-unyt-sandbox or build-linux-holo-hosting.
+build-linux-default: install
+	HOLOCHAIN_ARC_FACTOR="" make build-unyt-sandbox
+
+build-linux-zero: install
+	HOLOCHAIN_ARC_FACTOR="0" make build-unyt-sandbox
+
+# Multi-app: prep generates tauri.conf.json and copies icons for the active variant.
+# Set TAURI_APP_VARIANT (unyt-sandbox | holo-hosting) and identity env vars, or use prep-app-* targets.
+prep-app: install
+	bash scripts/generate-tauri-config.sh
+	bash scripts/copy-app-icons.sh
+
+prep-app-unyt-sandbox: install
+	TAURI_PRODUCT_NAME="Unyt Sandbox" TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox TAURI_DEEP_LINK_SCHEME=unyt-sandbox TAURI_SPLASHSCREEN_TITLE="Unyt Loading" TAURI_APP_VARIANT=unyt-sandbox bash scripts/generate-tauri-config.sh
+	TAURI_APP_VARIANT=unyt-sandbox bash scripts/copy-app-icons.sh
+
+prep-app-holo-hosting: install
+	TAURI_PRODUCT_NAME="Holo Hosting" TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting TAURI_DEEP_LINK_SCHEME=holo-hosting TAURI_SPLASHSCREEN_TITLE="Holo Hosting Loading" TAURI_APP_VARIANT=holo-hosting bash scripts/generate-tauri-config.sh
+	TAURI_APP_VARIANT=holo-hosting bash scripts/copy-app-icons.sh
+
+# Build a specific app variant (prep + tauri build with same identity env).
+build-unyt-sandbox: prep-app-unyt-sandbox
+	TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
+
+build-holo-hosting: prep-app-holo-hosting
+	TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
 
 # Uses current tauri.conf.json. Run prep-app-<variant> first, or use build-android-<variant> for full CI-like flow.
 build-android: install
@@ -57,57 +90,3 @@ build-android-holo-hosting: prep-app-holo-hosting
 	nix develop --accept-flake-config .#androidDev --command bash -c "yarn tauri android init"
 	bash scripts/android-uses-cleartext-traffic.sh
 	HOLOCHAIN_ARC_FACTOR=0 TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
-
-# Signing key: set TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD) or leave unset for unsigned.
-TAURI_SIGNING_PRIVATE_KEY ?= $(CURDIR)/.tauri/test.key
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?=
-
-build-linux: build-linux-default
-
-# Uses current tauri.conf.json. For a specific variant use build-linux-unyt-sandbox or build-linux-holo-hosting.
-build-linux-default: install
-	HOLOCHAIN_ARC_FACTOR="" TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
-
-build-linux-zero: install
-	HOLOCHAIN_ARC_FACTOR="0" TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
-
-# Linux .deb for a specific variant (prep + build with identity env).
-build-linux-unyt-sandbox: prep-app-unyt-sandbox
-	HOLOCHAIN_ARC_FACTOR="" TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
-
-build-linux-holo-hosting: prep-app-holo-hosting
-	HOLOCHAIN_ARC_FACTOR="" TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting TAURI_SIGNING_PRIVATE_KEY="$(TAURI_SIGNING_PRIVATE_KEY)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" yarn tauri build --bundles deb
-
-# Uses current tauri.conf.json. Run from repo root.
-test-arc-factor: install
-	@echo "Testing default arc factor (empty string):"
-	HOLOCHAIN_ARC_FACTOR="" yarn tauri build --bundles deb
-	@echo "Testing zero arc factor:"
-	HOLOCHAIN_ARC_FACTOR="0" yarn tauri build --bundles deb
-
-test-original-approach: install
-	@echo "Testing original approach with environment variable at runtime:"
-	HOLOCHAIN_ARC_FACTOR="0" yarn tauri build --bundles deb
-	@echo "Built app should show arc factor in logs when run"
-
-
-# Multi-app: prep generates tauri.conf.json and copies icons for the active variant.
-# Set TAURI_APP_VARIANT (unyt-sandbox | holo-hosting) and identity env vars, or use prep-app-* targets.
-prep-app: install
-	bash scripts/generate-tauri-config.sh
-	bash scripts/copy-app-icons.sh
-
-prep-app-unyt-sandbox: install
-	TAURI_PRODUCT_NAME="Unyt Sandbox" TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox TAURI_DEEP_LINK_SCHEME=unyt-sandbox TAURI_SPLASHSCREEN_TITLE="Unyt Loading" TAURI_APP_VARIANT=unyt-sandbox bash scripts/generate-tauri-config.sh
-	TAURI_APP_VARIANT=unyt-sandbox bash scripts/copy-app-icons.sh
-
-prep-app-holo-hosting: install
-	TAURI_PRODUCT_NAME="Holo Hosting" TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting TAURI_DEEP_LINK_SCHEME=holo-hosting TAURI_SPLASHSCREEN_TITLE="Holo Hosting Loading" TAURI_APP_VARIANT=holo-hosting bash scripts/generate-tauri-config.sh
-	TAURI_APP_VARIANT=holo-hosting bash scripts/copy-app-icons.sh
-
-# Build a specific app variant (prep + tauri build with same identity env).
-build-unyt-sandbox: prep-app-unyt-sandbox
-	TAURI_APP_IDENTIFIER=co.unyt.unyt.sandbox TAURI_APP_ID_PREFIX=unyt-sandbox yarn tauri build
-
-build-holo-hosting: prep-app-holo-hosting
-	TAURI_APP_IDENTIFIER=co.unyt.holo-hosting.sandbox TAURI_APP_ID_PREFIX=holo-hosting yarn tauri build
