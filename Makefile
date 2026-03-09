@@ -27,7 +27,9 @@ launch:
 	cd unyt && yarn build:happ
 	mkdir -p workdir
 	cp -r unyt/workdir/unyt.happ workdir/unyt.happ
-	JOINING_SERVICE_URL=http://localhost:3000 yarn network:tauri
+	yarn network:tauri
+
+#JOINING_SERVICE_URL=http://localhost:3000 
 
 # Uses current tauri.conf.json and icons. Run prep-app-<variant> first for a specific variant.
 launch-android: install

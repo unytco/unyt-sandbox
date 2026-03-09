@@ -19,6 +19,12 @@ pub async fn open_window(handle: AppHandle) -> anyhow::Result<WebviewWindow> {
         app_config.app_id
     );
 
+    // Always pass the app_id so main_window_builder sets up the app websocket
+    // interface (with AllowedOrigins::Any in dev mode) and injects the port,
+    // auth token, and app_id into __HC_LAUNCHER_ENV__. This is needed even for
+    // NetworkSetupRequired/JoiningRequired flows where the app isn't installed
+    // yet -- the interface is created eagerly and the frontend will use these
+    // credentials once the app is installed.
     let mut window_builder = handle
         .holochain()?
         .main_window_builder(
@@ -163,13 +169,10 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
                 .await
                 .map_err(|err| anyhow!("{err:?}"))?;
             tracing::debug!(target: "unyt", "setup: Previous app disabled");
-        } else if let Some(joining_url) = &app_config.joining_service_url {
-            // Joining service configured: generate an agent key and hand off
-            // to the frontend to drive the joining flow.
-            info!(
-                "setup: Joining service configured at {}, deferring install to joining flow",
-                joining_url
-            );
+        } else {
+            // No previous app exists. Defer to the frontend Network Dashboard
+            // so the user can choose to create or join a network before we install.
+            info!("setup: No app installed, deferring to Network Dashboard");
 
             let agent_pub_key = admin_ws
                 .generate_agent_pub_key()
@@ -178,36 +181,20 @@ pub async fn setup(handle: AppHandle) -> anyhow::Result<()> {
 
             let agent_key_b64 = format!("{}", agent_pub_key);
 
-            // Persist the generated key so install_with_proofs can use it later
             let joining_state = handle.state::<SharedJoiningState>();
             {
                 let mut state = joining_state.lock().await;
                 state.agent_key = Some(agent_pub_key);
             }
 
-            state_manager.update_status(EnvRuntimeStatus::JoiningRequired {
+            let joining_service_url = app_config.joining_service_url.clone().unwrap_or_default();
+
+            state_manager.update_status(EnvRuntimeStatus::NetworkSetupRequired {
                 agent_key: agent_key_b64,
-                joining_service_url: joining_url.clone(),
+                joining_service_url,
             });
 
-            // Return early -- the frontend will call install_with_proofs and
-            // complete_joining_setup after the joining flow completes.
             return Ok(());
-        } else {
-            println!(
-                "[unyt_tauri] setup: Installing new app: {}",
-                app_config.app_id
-            );
-            holochain
-                .install_app(
-                    app_config.app_id.clone(),
-                    happ_bundle(),
-                    Some(roles_settings),
-                    None,
-                    None,
-                )
-                .await?;
-            info!("setup: New app installed successfully");
         }
         info!("setup: Fresh installation completed");
     } else {

@@ -20,6 +20,10 @@ pub enum EnvRuntimeStatus {
         agent_key: String,
         joining_service_url: String,
     },
+    NetworkSetupRequired {
+        agent_key: String,
+        joining_service_url: String,
+    },
     Syncing {
         step: u8,
         total_steps: u8,

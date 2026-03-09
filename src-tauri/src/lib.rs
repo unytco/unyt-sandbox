@@ -45,6 +45,7 @@ pub fn run() {
             joining::install_with_proofs,
             joining::complete_joining_setup,
             joining::reset_joining_state,
+            joining::list_app_cells,
         ]);
 
     tracing::debug!(target: "unyt", "Added logging plugin and runtime commands");
@@ -210,14 +211,15 @@ pub fn run() {
                         }
                         info!("Setup completed successfully");
 
-                        // Check if setup returned because joining is required.
+                        // Check if setup returned because joining or network setup is required.
                         // In that case we still need to open the window so the
-                        // frontend can show the joining wizard, but we skip
-                        // treating it as fully "ready".
+                        // frontend can show the joining wizard or network dashboard,
+                        // but we skip treating it as fully "ready".
                         let state_manager = window_handle.state::<Arc<EnvStatusManager>>();
                         let is_joining = matches!(
                             state_manager.get_status(),
                             EnvRuntimeStatus::JoiningRequired { .. }
+                                | EnvRuntimeStatus::NetworkSetupRequired { .. }
                         );
 
                         // Open window ONLY after setup (installation/update) is successful
@@ -232,7 +234,10 @@ pub fn run() {
                         } else {
                             tracing::debug!(target: "unyt", "Main window opened successfully");
                             if is_joining {
-                                info!("Window opened for joining flow — waiting for frontend to complete joining");
+                                info!("Window opened for joining/network-setup flow — closing splashscreen");
+                                if let Some(splashscreen) = window_handle.get_webview_window("splashscreen") {
+                                    let _ = splashscreen.close();
+                                }
                             }
                         }
                     });

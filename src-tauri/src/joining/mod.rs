@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_holochain::{
-    AgentPubKey, DnaModifiersOpt, HolochainExt, RoleSettings, RoleSettingsMap, YamlProperties,
+    AgentPubKey, AppStatusFilter, DnaModifiersOpt, HolochainExt, RoleSettings, RoleSettingsMap,
+    YamlProperties,
 };
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
@@ -124,13 +125,14 @@ pub async fn install_with_proofs(
     if let Err(ref err_msg) = result {
         error!("[joining] Installation failed: {}", err_msg);
         let app_config = AppConfig::new(&app_handle);
+        let joining_service_url = app_config.joining_service_url.unwrap_or_default();
         info!(
-            "[joining] Reverting status to JoiningRequired for agent {}…",
+            "[joining] Reverting status to NetworkSetupRequired for agent {}…",
             &agent_key_b64[..20]
         );
-        state_manager.update_status(EnvRuntimeStatus::JoiningRequired {
+        state_manager.update_status(EnvRuntimeStatus::NetworkSetupRequired {
             agent_key: agent_key_b64,
-            joining_service_url: app_config.joining_service_url.unwrap_or_default(),
+            joining_service_url,
         });
     }
 
@@ -245,7 +247,7 @@ async fn do_install(
 
     info!("[joining] Calling install_app for '{}'…", app_config.app_id);
     let holochain = app_handle.holochain().map_err(|e| format!("{e:?}"))?;
-    holochain
+    if let Err(e) = holochain
         .install_app(
             app_config.app_id.clone(),
             bundle,
@@ -254,7 +256,14 @@ async fn do_install(
             None,
         )
         .await
-        .map_err(|e| format!("Failed to install app: {e:?}"))?;
+    {
+        let err_str = format!("{e:?}");
+        if err_str.contains("AppAlreadyInstalled") {
+            info!("[joining] App already installed, skipping install");
+            return Ok(());
+        }
+        return Err(format!("Failed to install app: {e:?}"));
+    }
 
     info!(
         "[joining] App installed successfully: {}",
@@ -288,6 +297,98 @@ pub async fn reset_joining_state(app_handle: AppHandle) -> Result<GenerateAgentK
         &result.agent_key[..20]
     );
     Ok(result)
+}
+
+/// Serializable cell entry for the frontend dashboard.
+/// Hashes are encoded as base64 strings (same format the JS client uses via `Display`).
+#[derive(Serialize)]
+pub struct AppCellEntry {
+    pub cell_type: String,
+    pub dna_hash: String,
+    pub agent_pub_key: String,
+    pub name: String,
+    pub network_seed: String,
+    pub clone_id: Option<String>,
+    pub enabled: bool,
+    pub properties: Option<String>,
+}
+
+/// Response from list_app_cells containing the cells under the "alliance" role.
+#[derive(Serialize)]
+pub struct ListAppCellsResponse {
+    pub installed: bool,
+    pub cells: Vec<AppCellEntry>,
+}
+
+/// Return the installed app's cell info via the admin websocket.
+/// The frontend uses this to reliably list all provisioned and cloned cells
+/// (networks) even when the AppWebsocket connection isn't fully established yet.
+#[tauri::command]
+pub async fn list_app_cells(app_handle: AppHandle) -> Result<ListAppCellsResponse, String> {
+    let holochain = app_handle.holochain().map_err(|e| format!("{e:?}"))?;
+    let admin_ws = holochain
+        .admin_websocket()
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    let app_config = AppConfig::new(&app_handle);
+
+    let apps = admin_ws
+        .list_apps(Some(AppStatusFilter::Enabled))
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+
+    let app_info = match apps
+        .into_iter()
+        .find(|a| a.installed_app_id == app_config.app_id)
+    {
+        Some(info) => info,
+        None => {
+            return Ok(ListAppCellsResponse {
+                installed: false,
+                cells: vec![],
+            });
+        }
+    };
+
+    let role_cells = app_info.cell_info.get("alliance");
+    let mut entries = Vec::new();
+
+    if let Some(cells) = role_cells {
+        for cell in cells {
+            match cell {
+                tauri_plugin_holochain::CellInfo::Provisioned(p) => {
+                    entries.push(AppCellEntry {
+                        cell_type: "provisioned".into(),
+                        dna_hash: format!("{}", p.cell_id.dna_hash()),
+                        agent_pub_key: format!("{}", p.cell_id.agent_pubkey()),
+                        name: p.name.clone(),
+                        network_seed: p.dna_modifiers.network_seed.clone(),
+                        clone_id: None,
+                        enabled: true,
+                        properties: serde_json::to_string(&p.dna_modifiers.properties).ok(),
+                    });
+                }
+                tauri_plugin_holochain::CellInfo::Cloned(c) => {
+                    entries.push(AppCellEntry {
+                        cell_type: "cloned".into(),
+                        dna_hash: format!("{}", c.cell_id.dna_hash()),
+                        agent_pub_key: format!("{}", c.cell_id.agent_pubkey()),
+                        name: c.name.clone(),
+                        network_seed: c.dna_modifiers.network_seed.clone(),
+                        clone_id: Some(format!("{}", c.clone_id)),
+                        enabled: c.enabled,
+                        properties: serde_json::to_string(&c.dna_modifiers.properties).ok(),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(ListAppCellsResponse {
+        installed: true,
+        cells: entries,
+    })
 }
 
 /// Finalize setup after the app has been installed via the joining flow.
