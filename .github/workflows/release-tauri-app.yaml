@@ -200,6 +200,7 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
           JOINING_SERVER_SIGNER: "uhCAk_Jbtn_3RR-VCLPtJdhcQvVrpM7Vw5vHGog8_CwW5tO0_Cf37"
+          JOINING_SERVICE_URL: "https://joining.unyt.dev"
         with:
           projectPath: unyt
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
@@ -354,4 +355,3 @@ jobs:
   #         files: upload-apk/*.apk
   #         repo-token: ${{ secrets.GIT_PAT }}
   #         release-id: ${{ needs.publish-happ.outputs.releaseId }}
-
