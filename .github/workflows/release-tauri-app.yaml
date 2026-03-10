@@ -3,11 +3,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-rc.*" # Test: v1.0.0-rc.0
-
-env:
-  REPO_OWNER: ${{ github.repository_owner }}
-  REPO_NAME: ${{ github.event.repository.name }}
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.*"
 
 jobs:
   publish-happ:
@@ -17,43 +13,12 @@ jobs:
     outputs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
-      app_variants: ${{ steps.prepare-variants.outputs.app_variants }}
     steps:
       - uses: actions/checkout@v3
         with:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
           fetch-depth: 0
-
-      # Single source of truth: .github/app-variants.yaml (set enabled: false to exclude)
-      - name: Prepare variant list
-        id: prepare-variants
-        run: |
-          VARIANTS_FILE=".github/app-variants.yaml"
-          # Parse YAML (Ruby built-in), filter enabled != false, output JSON for jq
-          ENABLED=$(ruby -r yaml -r json -e "
-            list = YAML.load_file('$VARIANTS_FILE')
-            list = list.select { |v| v['enabled'] != false }
-            puts list.to_json
-          ")
-          echo "app_variants<<EOF" >> $GITHUB_OUTPUT
-          echo "$ENABLED" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          {
-            echo "## Unyt network release"
-            echo ""
-            echo "This release builds the following app variants. The **identifier** is the network seed."
-            echo ""
-            echo "| Unyt Network |         Network Seed           |"
-            echo "|--------------|--------------------------------|"
-            echo "$ENABLED" | jq -r '.[] | "| \(.product_name) | `\(.identifier)` |"'
-            echo ""
-            echo "---"
-            echo ""
-          } > variants_note.txt
-          echo "variants_note<<EOF" >> $GITHUB_OUTPUT
-          cat variants_note.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Install nix
         uses: cachix/install-nix-action@v27
@@ -69,14 +34,14 @@ jobs:
         with:
           name: darksoil-studio
 
-      - name: Install and test
+      - name: Build happ
         run: |
           nix-store --gc
-          nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
+          cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
 
       - name: Retrieve version
         run: |
-          echo "APP_VERSION=$(cat src-tauri/tauri.conf.json | grep -oP '(?<="version": ")[^"]*')" >> $GITHUB_OUTPUT
+          echo "APP_VERSION=$(jq -r '.version' unyt/src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
         id: version
 
       - name: Get Changelog Content
@@ -89,7 +54,6 @@ jobs:
             p {print}
           ' unyt/CHANGELOG.md > release_notes.txt
           echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "${{ steps.prepare-variants.outputs.variants_note }}" >> $GITHUB_OUTPUT
           cat release_notes.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
@@ -113,8 +77,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # From .github/app-variants.yaml (set enabled: false to exclude)
-        app_variant: ${{ fromJson(needs.publish-happ.outputs.app_variants) }}
         config:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
@@ -143,13 +105,6 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
       HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
-      PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
-      TAURI_PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
-      TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
-      TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
-      TAURI_DEEP_LINK_SCHEME: ${{ matrix.app_variant.id }}
-      TAURI_SPLASHSCREEN_TITLE: ${{ matrix.app_variant.product_name }} Loading
-      TAURI_APP_VARIANT: ${{ matrix.app_variant.id }}
     permissions: write-all
 
     runs-on: ${{ matrix.config.platform }}
@@ -158,8 +113,6 @@ jobs:
         if: matrix.config.platform != 'ubuntu-22.04'
         run: git config --system core.longpaths true
 
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      # Checks out a copy of your repository on the ubuntu-latest machine
       - uses: actions/checkout@v3
         with:
           token: ${{ secrets.GIT_PAT }}
@@ -211,19 +164,14 @@ jobs:
         run: choco install -y jq
 
       - name: Install and prepare
+        working-directory: unyt
         run: |
           yarn install
-
-      - name: Prepare app variant (config + icons)
-        run: |
-          chmod +x scripts/generate-tauri-config.sh scripts/copy-app-icons.sh
-          bash scripts/generate-tauri-config.sh
-          bash scripts/copy-app-icons.sh
 
       - name: Retrieve version
         shell: bash
         run: |
-          echo "APP_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
+          echo "APP_VERSION=$(jq -r '.version' unyt/src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
         id: version
 
       - name: Download release of the .happ
@@ -234,7 +182,7 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           fileName: "unyt.happ"
-          out-file-path: "workdir/"
+          out-file-path: "unyt/workdir/"
 
       - name: build (${{ matrix.config.arc_factor }} arc)
         uses: tauri-apps/tauri-action@v0
@@ -248,17 +196,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
           VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          VITE_COMMIT_SHA: ${{ env.PRODUCT_NAME }}-${{ steps.version.outputs.APP_VERSION }}-sandbox-${{ matrix.config.arc_factor }} # this is the tag that will be added to sentry
+          VITE_COMMIT_SHA: Unyt-Sandbox-${{ steps.version.outputs.APP_VERSION }}-${{ matrix.config.arc_factor }}-arc
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
-          VITE_IS_RIDESHARE_RELEASE: ${{ matrix.app_variant.id == 'rideshare' && 'true' || 'false' }}
-          VITE_APP_NAME: ${{ matrix.app_variant.product_name }}
-          VITE_IS_CIRCULO_RELEASE: ${{ matrix.app_variant.id == 'circulo' && 'true' || 'false' }}
           JOINING_SERVER_SIGNER: "uhCAk_Jbtn_3RR-VCLPtJdhcQvVrpM7Vw5vHGog8_CwW5tO0_Cf37"
         with:
+          projectPath: unyt
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           releaseDraft: true
-          includeUpdaterJson: ${{ matrix.config.arc_factor == 'default' && false || true }} # Upload updater JSON for zero arc
+          includeUpdaterJson: ${{ matrix.config.arc_factor == 'default' && false || true }}
           updaterJsonPreferNsis: true
           prerelease: true
           args: ${{ matrix.config.args }}
@@ -408,3 +354,4 @@ jobs:
   #         files: upload-apk/*.apk
   #         repo-token: ${{ secrets.GIT_PAT }}
   #         release-id: ${{ needs.publish-happ.outputs.releaseId }}
+

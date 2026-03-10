@@ -3,14 +3,3 @@ node_modules
 workdir
 .hc*
 .tauri
-
-# Generated icon set at src-tauri/icons root (copied from icons/<variant> or icons/default by scripts/copy-app-icons.sh).
-# Only icons/<variant>/ and icons/default/ are tracked; root-level files are regenerated before build.
-src-tauri/icons/*
-!src-tauri/icons/default/
-!src-tauri/icons/default/**
-!src-tauri/icons/circulo/
-!src-tauri/icons/circulo/**
-
-# Android project generated from tauri.conf.json (tauri android init). Regenerated per app variant in CI.
-src-tauri/gen/android
