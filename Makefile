@@ -27,7 +27,7 @@ launch:
 	cd unyt && yarn build:happ
 	mkdir -p workdir
 	cp -r unyt/workdir/unyt.happ workdir/unyt.happ
-	JOINING_SERVICE_URL=http://localhost:3000 yarn network:tauri
+	yarn network:tauri
 
  
 
