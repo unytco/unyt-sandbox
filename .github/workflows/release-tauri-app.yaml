@@ -128,7 +128,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           override: true
-          toolchain: 1.88.0
+          toolchain: 1.89.0
 
       - name: install x86_64 target
         if: matrix.config.args == '--target x86_64-apple-darwin'
@@ -278,7 +278,7 @@ jobs:
   #       uses: actions-rs/toolchain@v1
   #       with:
   #         override: true
-  #         toolchain: 1.88.0
+  #         toolchain: 1.89.0
 
   #     - name: install Go stable
   #       uses: actions/setup-go@v4
