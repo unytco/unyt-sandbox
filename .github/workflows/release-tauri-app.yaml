@@ -85,7 +85,7 @@ jobs:
             args: "--target x86_64-apple-darwin"
             arc_factor: default
           - platform: ubuntu-22.04
-            args: "--bundles deb,appimage"
+            args: "--bundles deb,appimage,rpm,flatpak"
             arc_factor: default
           - platform: windows-latest
             args: ""
@@ -97,7 +97,7 @@ jobs:
             args: "--target x86_64-apple-darwin"
             arc_factor: "zero"
           - platform: ubuntu-22.04
-            args: "--bundles deb,appimage"
+            args: "--bundles deb,appimage,rpm,flatpak"
             arc_factor: "zero"
           - platform: windows-latest
             args: ""
