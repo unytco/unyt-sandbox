@@ -14,11 +14,11 @@ jobs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install nix
         uses: cachix/install-nix-action@v27
@@ -36,7 +36,6 @@ jobs:
 
       - name: Build happ
         run: |
-          nix-store --gc
           cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
 
       - name: Retrieve version
@@ -105,6 +104,8 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
       HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_LTO: "false"
     permissions: write-all
 
     runs-on: ${{ matrix.config.platform }}
@@ -113,34 +114,25 @@ jobs:
         if: matrix.config.platform != 'ubuntu-22.04'
         run: git config --system core.longpaths true
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: setup node
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: install Rust stable
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          override: true
           toolchain: 1.89.0
 
       - name: install x86_64 target
         if: matrix.config.args == '--target x86_64-apple-darwin'
         run: rustup target add x86_64-apple-darwin
-
-      - name: install wasm32-unknown-unknown target
-        run: rustup target add wasm32-unknown-unknown
-
-      - name: install Go stable
-        uses: actions/setup-go@v4
-        with:
-          go-version: "stable"
 
       - name: install dependencies (ubuntu only)
         if: matrix.config.platform == 'ubuntu-22.04'
@@ -239,7 +231,7 @@ jobs:
   #         remove-large-packages: "true"
   #         remove-cached-tools: "true"
 
-  #     - uses: actions/checkout@v3
+  #     - uses: actions/checkout@v4
   #       with:
   #         token: ${{ secrets.GIT_PAT }}
   #         submodules: recursive
