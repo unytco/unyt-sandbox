@@ -187,7 +187,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
-          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_COMMIT_SHA: Unyt-Sandbox-${{ steps.version.outputs.APP_VERSION }}-${{ matrix.config.arc_factor }}-arc
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
