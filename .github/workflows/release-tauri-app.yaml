@@ -89,21 +89,22 @@ jobs:
           - platform: windows-latest
             args: ""
             arc_factor: default
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-            arc_factor: "zero"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
-            arc_factor: "zero"
-          - platform: ubuntu-22.04
-            args: "--bundles deb,appimage"
-            arc_factor: "zero"
-          - platform: windows-latest
-            args: ""
-            arc_factor: "zero"
+          # - platform: macos-latest
+          #   args: "--target aarch64-apple-darwin"
+          #   arc_factor: "zero"
+          # - platform: macos-latest
+          #   args: "--target x86_64-apple-darwin"
+          #   arc_factor: "zero"
+          # - platform: ubuntu-22.04
+          #   args: "--bundles deb,appimage"
+          #   arc_factor: "zero"
+          # - platform: windows-latest
+          #   args: ""
+          #   arc_factor: "zero"
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
-      HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
+      HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
+        matrix.config.arc_factor || '' }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       CARGO_PROFILE_RELEASE_LTO: "false"
     permissions: write-all
@@ -188,9 +189,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
           # VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          VITE_COMMIT_SHA: Unyt-Sandbox-${{ steps.version.outputs.APP_VERSION }}-${{ matrix.config.arc_factor }}-arc
+          VITE_COMMIT_SHA: Unyt-Sandbox-${{ steps.version.outputs.APP_VERSION }}-${{
+            matrix.config.arc_factor }}-arc
           APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
-          HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' && matrix.config.arc_factor || '' }}
+          HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
+            matrix.config.arc_factor || '' }}
           UNYT_JOINING_SERVICE_URL: https://joining.unyt.dev
           VITE_CENTRALIZED_CONFIG_URL: https://unyt-config-worker.artbrock.workers.dev
         with:
@@ -201,8 +204,9 @@ jobs:
           updaterJsonPreferNsis: true
           prerelease: true
           args: ${{ matrix.config.args }}
-          assetNamePattern: ${{ format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]', matrix.config.arc_factor) }}
-
+          assetNamePattern: ${{
+            format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
+            matrix.config.arc_factor) }}
   # release-tauri-android-app:
   #   needs: publish-happ
   #   permissions: write-all
