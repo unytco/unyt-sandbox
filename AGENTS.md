@@ -59,9 +59,3 @@ NOT need to touch this file.
 - **Pointer bumps to `unyt/`** are how new app builds are recorded
   here. The corresponding app commit must already be on the inner
   repo's tracked branch before bumping the pointer.
-
-## Lessons learned
-
-_Append entries here whenever an agent (or human) loses time to
-something a guardrail would have prevented. Keep each entry: date,
-short symptom, concrete fix._
