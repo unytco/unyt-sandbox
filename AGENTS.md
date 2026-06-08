@@ -1,15 +1,10 @@
 # unyt-sandbox — Agent Instructions
 
+> **This repo follows the workshop root's patterns — it does not define its own.** Development workflow, process, changelog conventions, and spec/feature-doc discipline live in the workshop: [`CLAUDE.md`](../CLAUDE.md), [`AGENTS.md`](../AGENTS.md), [`documentation/DEVELOPMENT_WORKFLOW.md`](../documentation/DEVELOPMENT_WORKFLOW.md). Below is only what's specific to THIS repo.
+
 ## Purpose
 
-Outer wrapper repo for the Unyt application. Holds release docs,
-testing docs, the project README, and **the actual app as a nested
-submodule** at [`unyt/`](unyt/). No application source code lives at
-this level.
-
-## Classification
-
-`release` — the deployment target is the nested `unyt/` repo.
+`release` (deployment target is the nested `unyt/` repo) — outer wrapper for the Unyt application. Holds release docs, testing docs, the project README, and **the actual app as a nested submodule** at [`unyt/`](unyt/). No application source code lives at this level.
 
 ## Stack
 
@@ -34,28 +29,7 @@ This wrapper has no build, format, or test of its own.
 Deployment is the nested `unyt` app. See
 [`unyt/AGENTS.md`](unyt/AGENTS.md) for release packaging.
 
-## Related repos in workshop
-
-- Contains [`unyt`](unyt/) as a nested submodule (`unytco/unyt`) — the
-  actual Tauri app.
-- Workshop AGENTS.md describes the nested-submodule workflow gap (this
-  wrapper's pointer-to-`unyt` is what `make open-prs` picks up; edits
-  inside `unyt/` need their own commit + PR first). See
-  [workshop AGENTS.md § Nested submodule note](../AGENTS.md#nested-submodule-note-unyt-sandboxunyt).
-
-## Changelog
-
-File: [`./CHANGELOG.md`](./CHANGELOG.md). Format: [Keep a Changelog
-1.1.0](https://keepachangelog.com/en/1.1.0/) with `## [Unreleased]` at
-the top. Entries here are limited to wrapper-level changes — README,
-release docs, testing docs. App-level entries belong in
-[`unyt/CHANGELOG.md`](unyt/CHANGELOG.md). Most agent sessions will
-NOT need to touch this file.
-
 ## Repo-specific rules
 
-- **Never edit application source from this directory.** All app code
-  lives in `unyt/`. Treat this wrapper as docs-only.
-- **Pointer bumps to `unyt/`** are how new app builds are recorded
-  here. The corresponding app commit must already be on the inner
-  repo's tracked branch before bumping the pointer.
+- **All app work happens in [`unyt/`](unyt/); follow [`unyt/AGENTS.md`](unyt/AGENTS.md).** This wrapper is docs-only — never edit application source from this directory. Changelog entries here are wrapper-level (README, release/testing docs); app-level entries belong in [`unyt/CHANGELOG.md`](unyt/CHANGELOG.md).
+- **Pointer bumps to `unyt/`** are how new app builds are recorded here. The corresponding app commit must already be on the inner repo's tracked branch before bumping the pointer. See [workshop AGENTS.md § Nested submodule note](../AGENTS.md#nested-submodule-note-unyt-sandboxunyt).
