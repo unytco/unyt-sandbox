@@ -194,7 +194,7 @@ jobs:
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
             matrix.config.arc_factor || '' }}
           UNYT_JOINING_SERVICE_URL: https://joining.unyt.dev
-          VITE_CENTRALIZED_CONFIG_URL: https://unyt-config-worker.artbrock.workers.dev
+          VITE_CENTRALIZED_CONFIG_URL: https://config.unyt.dev
         with:
           projectPath: unyt
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
