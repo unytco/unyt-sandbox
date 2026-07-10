@@ -224,8 +224,6 @@ jobs:
           projectPath: unyt
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           releaseDraft: true
-          includeUpdaterJson: ${{ matrix.config.arc_factor == 'default' && false || true }}
-          updaterJsonPreferNsis: true
           prerelease: true
           args: ${{ matrix.config.args }}
           assetNamePattern: ${{
