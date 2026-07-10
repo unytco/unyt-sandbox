@@ -34,14 +34,15 @@ jobs:
         with:
           name: darksoil-studio
 
+      - name: Assert version contract (tag == src-tauri Cargo.toml == tauri.conf.json)
+        id: version
+        run: |
+          APP_VERSION="$(bash scripts/check-version-contract.sh "${{ github.ref_name }}")"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build happ
         run: |
           cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
-
-      - name: Retrieve version
-        run: |
-          echo "APP_VERSION=$(jq -r '.version' unyt/src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
-        id: version
 
       - name: Get Changelog Content
         id: changelog
@@ -60,11 +61,13 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
+          # Fail the release if any declared artifact is missing — keeps the manifest honest so a
+          # declared-but-unbuilt artifact (e.g. a DNA the repo no longer produces) can't slip through.
+          artifactErrorsFailBuild: true
           artifacts: |
             unyt/workdir/unyt.happ
             unyt/workdir/unyt.webhapp
             unyt/dnas/alliance/workdir/alliance.dna
-            unyt/dnas/agent_details/workdir/agent_details.dna
           body: ${{ steps.changelog.outputs.notes }}
           name: Unyt Sandbox v${{ steps.version.outputs.APP_VERSION }}
           tag: v${{ steps.version.outputs.APP_VERSION }}
@@ -107,6 +110,12 @@ jobs:
         matrix.config.arc_factor || '' }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       CARGO_PROFILE_RELEASE_LTO: "false"
+      # The base URL of the migration router the shipped app polls for BOTH update channels
+      # (mandatory migration banner + dismissible build-update notice). Vite embeds it at build
+      # time (VITE_ prefix → import.meta.env); empty → every check short-circuits to "unreachable"
+      # and neither channel can ever appear. Defined here so the guard step can assert it and the
+      # build step passes it through. A public HTTPS endpoint, not a credential.
+      VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
     permissions: write-all
 
     runs-on: ${{ matrix.config.platform }}
@@ -161,12 +170,6 @@ jobs:
         run: |
           yarn install
 
-      - name: Retrieve version
-        shell: bash
-        run: |
-          echo "APP_VERSION=$(jq -r '.version' unyt/src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
-        id: version
-
       - name: Download release of the .happ
         uses: robinraju/release-downloader@v1.10
         env:
@@ -176,6 +179,14 @@ jobs:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           fileName: "unyt.happ"
           out-file-path: "unyt/workdir/"
+
+      - name: Assert migration-service URL is set (no silently un-updatable build)
+        shell: bash
+        run: |
+          [ -n "$VITE_MIGRATION_SERVICE_URL" ] || {
+            echo "::error::VITE_MIGRATION_SERVICE_URL is empty — a shipped build without it can never check for updates (both channels short-circuit to 'unreachable')."
+            exit 1
+          }
 
       - name: build (${{ matrix.config.arc_factor }} arc)
         uses: tauri-apps/tauri-action@v0
@@ -188,13 +199,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
-          VITE_COMMIT_SHA: Unyt-Sandbox-${{ steps.version.outputs.APP_VERSION }}-${{
+          VITE_COMMIT_SHA: Unyt-Sandbox-${{ needs.publish-happ.outputs.appVersion }}-${{
             matrix.config.arc_factor }}-arc
-          APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
+          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
             matrix.config.arc_factor || '' }}
           UNYT_JOINING_SERVICE_URL: https://joining.unyt.dev
           VITE_CENTRALIZED_CONFIG_URL: https://config.unyt.dev
+          VITE_MIGRATION_SERVICE_URL: ${{ env.VITE_MIGRATION_SERVICE_URL }}
         with:
           projectPath: unyt
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
