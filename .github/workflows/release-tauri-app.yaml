@@ -18,7 +18,9 @@ jobs:
         with:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
-          fetch-depth: 1
+          # Full history so a UI (patch) release can read the parent tag's submodule pointer and
+          # diff the DNA source between the parent commit and this one (scripts/inherit-ui-release.sh).
+          fetch-depth: 0
 
       - name: Install nix
         uses: cachix/install-nix-action@v27
@@ -40,9 +42,20 @@ jobs:
           APP_VERSION="$(bash scripts/check-version-contract.sh "${{ github.ref_name }}")"
           echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build happ
+      - name: Resolve release kind (tag patch → migration | UI)
+        id: kind
+        run: bash scripts/release-kind.sh "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build DNA + happ (migration release, vM.m.0)
+        if: steps.kind.outputs.kind == 'migration'
         run: |
           cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
+
+      - name: Inherit lineage happ + repack UI (UI release, vM.m.p)
+        if: steps.kind.outputs.kind == 'ui'
+        env:
+          GH_TOKEN: ${{ secrets.GIT_PAT }}
+        run: bash scripts/inherit-ui-release.sh "${{ github.ref_name }}" "${{ steps.kind.outputs.parent_tag }}"
 
       - name: Get Changelog Content
         id: changelog
