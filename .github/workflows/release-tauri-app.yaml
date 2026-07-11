@@ -82,8 +82,11 @@ jobs:
             unyt/workdir/unyt.webhapp
             unyt/dnas/alliance/workdir/alliance.dna
           body: ${{ steps.changelog.outputs.notes }}
-          name: Unyt Sandbox v${{ steps.version.outputs.APP_VERSION }}
-          tag: v${{ steps.version.outputs.APP_VERSION }}
+          # Tag the release with the EXACT pushed tag so an -rc.* push stays an RC release (never the
+          # stable vM.m.p shape the router accepts); the version contract already asserts its core
+          # equals Cargo.toml. APP_VERSION (the stripped core) still names the changelog + assets.
+          name: Unyt Sandbox ${{ github.ref_name }}
+          tag: ${{ github.ref_name }}
           prerelease: true
           draft: true
 
