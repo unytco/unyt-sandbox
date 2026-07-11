@@ -38,13 +38,17 @@ jobs:
 
       - name: Assert version contract (tag == src-tauri Cargo.toml == tauri.conf.json)
         id: version
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          APP_VERSION="$(bash scripts/check-version-contract.sh "${{ github.ref_name }}")"
+          APP_VERSION="$(bash scripts/check-version-contract.sh "$TAG")"
           echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Resolve release kind (tag patch → migration | UI)
         id: kind
-        run: bash scripts/release-kind.sh "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/release-kind.sh "$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build DNA + happ (migration release, vM.m.0)
         if: steps.kind.outputs.kind == 'migration'
@@ -55,7 +59,9 @@ jobs:
         if: steps.kind.outputs.kind == 'ui'
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
-        run: bash scripts/inherit-ui-release.sh "${{ github.ref_name }}" "${{ steps.kind.outputs.parent_tag }}"
+          TAG: ${{ github.ref_name }}
+          PARENT_TAG: ${{ steps.kind.outputs.parent_tag }}
+        run: bash scripts/inherit-ui-release.sh "$TAG" "$PARENT_TAG"
 
       - name: Get Changelog Content
         id: changelog

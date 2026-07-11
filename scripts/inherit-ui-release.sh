@@ -27,6 +27,9 @@ tmp="$(mktemp -d)"
 gh release download "$PARENT_TAG" --repo "$REPO" --dir "$tmp" --pattern unyt.happ --pattern alliance.dna ||
   fail "could not download unyt.happ / alliance.dna from parent release $PARENT_TAG (a UI release never rebuilds the DNA)"
 [ -f "$tmp/unyt.happ" ] || fail "parent release $PARENT_TAG has no unyt.happ asset"
+# `gh release download` succeeds if only ONE --pattern matches, so check alliance.dna explicitly —
+# a UI release must republish it byte-identical, and it is a declared release artifact.
+[ -f "$tmp/alliance.dna" ] || fail "parent release $PARENT_TAG has no alliance.dna asset"
 
 # 2. Digest guard — release assets are mutable (allowUpdates), so the trusted digest is the committed
 #    one. A mismatch means a mutated or wrong-tag asset.
