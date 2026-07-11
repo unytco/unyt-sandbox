@@ -34,21 +34,27 @@ got_sha="$(sha256sum "$tmp/unyt.happ" | awk '{print $1}')"
 [ "$got_sha" = "$expected_sha" ] ||
   fail "inherited unyt.happ sha256 $got_sha != committed lineage.json $expected_sha (mutated or wrong-tag release asset)"
 
-# 3. Source-diff guard — the DNA source must be identical to the parent tag; a zome change that would
-#    silently not ship requires a NEW lineage (a vM.m+1.0 migration release), not a UI patch. Compare
-#    the two pinned inner-app commits' dnas/ trees — NOT the submodule pointer, which changes on every
-#    UI release.
+# 3. Source-diff guard — a change that would alter the BUILT DNA requires a NEW lineage (a vM.m+1.0
+#    migration release), not a UI patch. The DNA wasm compiles `crates/rave_engine` + `dnas/*/zomes/*`
+#    (`yarn build:zomes` = cargo build --workspace, excluding only unyt-sandbox / unyt_cli / sweettest),
+#    with every dep version pinned by the workspace manifest + lockfile — so DNA-affecting source lives
+#    OUTSIDE dnas/ too. Diff ALL of those inputs between the two pinned inner-app commits (NOT the
+#    submodule pointer, which changes on every UI release). Keep DNA_SOURCE in step with build:zomes if
+#    a new wasm-compiled crate is ever added under crates/. (smart_agreement_library is runtime
+#    agreement data, not compiled into the DNA, so it is deliberately not here.)
 parent_inner="$(git -C "$ROOT" ls-tree "$PARENT_TAG" unyt | awk '{print $3}')"
 current_inner="$(git -C "$ROOT/unyt" rev-parse HEAD)"
 [ -n "$parent_inner" ] || fail "could not read the unyt submodule pointer at $PARENT_TAG (is the outer checkout fetch-depth 0?)"
 git -C "$ROOT/unyt" cat-file -e "${parent_inner}^{commit}" 2>/dev/null ||
   git -C "$ROOT/unyt" fetch --depth 1 origin "$parent_inner" 2>/dev/null ||
   fail "cannot resolve the parent inner-app commit $parent_inner — fetch it (the inner submodule needs its history)"
-if ! git -C "$ROOT/unyt" diff --quiet "$parent_inner" "$current_inner" -- dnas/; then
+DNA_SOURCE=(dnas crates/rave_engine Cargo.toml Cargo.lock)
+if ! git -C "$ROOT/unyt" diff --quiet "$parent_inner" "$current_inner" -- "${DNA_SOURCE[@]}"; then
   {
-    echo "DNA source changed between $PARENT_TAG and $TAG — a change under dnas/ requires a NEW LINEAGE"
-    echo "(a vM.m+1.0 migration release), not a UI patch. Offending files:"
-    git -C "$ROOT/unyt" diff --stat "$parent_inner" "$current_inner" -- dnas/
+    echo "DNA source changed between $PARENT_TAG and $TAG — a change under the DNA build inputs"
+    echo "(${DNA_SOURCE[*]}) requires a NEW LINEAGE (a vM.m+1.0 migration release), not a UI patch."
+    echo "Offending files:"
+    git -C "$ROOT/unyt" diff --stat "$parent_inner" "$current_inner" -- "${DNA_SOURCE[@]}"
   } >&2
   exit 1
 fi
