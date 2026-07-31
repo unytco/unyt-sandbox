@@ -14,7 +14,7 @@ Application-level changes belong in
 
 ### Added
 
-- **Release pipeline: tag-derived release kinds + `.happ` inheritance (release-patterns UNYT-948).** The release kind is derived from the pushed tag — `vM.m.0` builds the DNA from source (migration release, a new lineage), while `vM.m.p` with `p>0` inherits its lineage's `unyt.happ` + `alliance.dna` byte-for-byte from the parent `vM.m.0` release and repacks only the UI into `unyt.webhapp` (UI release: one lineage, one DNA, one `app_id`). Three guards keep it safe: the inherited happ's sha256 must match the committed `lineage.json`; the DNA source (`dnas/`, `crates/rave_engine`, and the workspace `Cargo.toml`/`Cargo.lock` — the full set `yarn build:zomes` compiles into the DNA) must be identical between the parent and current inner-app commits (a zome or workspace-dep change fails, naming a new lineage as the correct kind); and a missing parent release, or one missing the `unyt.happ`/`alliance.dna` assets, fails rather than rebuilding. New `scripts/release-kind.sh`, `scripts/inherit-ui-release.sh`, and the `lineage.json` pin.
+- **Release pipeline: tag-derived release kinds + `.happ` inheritance (release-patterns UNYT-948).** `vM.m.0` builds the DNA; `vM.m.p` inherits it and repacks only the UI.
 - **Release pipeline: a version contract (release-patterns UNYT-946).** `unyt/src-tauri/Cargo.toml` is the single source of truth for the version; a pushed tag or a `tauri.conf.json` that disagrees fails the release before any artifact is built (new `scripts/check-version-contract.sh`). The shipped app build now receives `VITE_MIGRATION_SERVICE_URL` (the update router the app polls), with a guard step that fails an empty value — no more installers that can never check for updates.
 
 ### Changed
