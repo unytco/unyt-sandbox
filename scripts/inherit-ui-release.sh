@@ -44,9 +44,11 @@ got_sha="$(sha256sum "$tmp/unyt.happ" | awk '{print $1}')"
 
 # 3. Place the inherited artifacts + repack ONLY the UI. hc web-app pack consumes the inherited
 #    ./unyt.happ (never repacks the DNA) and the freshly built ../ui/white-label/dist.zip.
+#    NOT --recursive: that makes hc ignore the pre-built ./unyt.happ and rebuild the whole chain from
+#    the manifests down to the zome wasm, which a UI release never compiles.
 cp "$tmp/unyt.happ" "$ROOT/unyt/workdir/unyt.happ"
 [ -f "$tmp/alliance.dna" ] && cp "$tmp/alliance.dna" "$ROOT/unyt/dnas/alliance/workdir/alliance.dna"
 ( cd "$ROOT/unyt" && nix develop --no-update-lock-file --accept-flake-config --command bash -c \
-  "yarn install --frozen-lockfile && yarn workspace white-label package && hc web-app pack workdir --recursive" )
+  "yarn install --frozen-lockfile && yarn workspace white-label package && hc web-app pack workdir" )
 
 echo "inherit: UI release $TAG built on inherited $PARENT_TAG DNA (unyt.happ sha256 $got_sha) — DNA not rebuilt."
