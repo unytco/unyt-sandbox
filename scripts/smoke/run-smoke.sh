@@ -24,10 +24,18 @@ if [ "${1:-}" = "--print-computed-depends" ]; then
   shift
 fi
 
-DEB="${1:?usage: run-smoke.sh [--print-computed-depends] <artifact.deb> [image ...]}"
+DEB="${1:?usage: run-smoke.sh [--print-computed-depends] <artifact.deb|artifact.AppImage> [image ...]}"
 shift || true
 [ -f "$DEB" ] || { echo "::error::artifact not found: $DEB" >&2; exit 1; }
 DEB="$(cd "$(dirname "$DEB")" && pwd)/$(basename "$DEB")"
+
+# The two Linux bundles need different sequences: a .deb declares dependencies
+# that apt must resolve, an AppImage declares nothing and bundles them instead.
+case "$DEB" in
+  *.deb)      DRIVER=container-checks.sh ;;
+  *.AppImage) DRIVER=container-checks-appimage.sh ;;
+  *) echo "::error::unsupported artifact '$DEB' (expected .deb or .AppImage)" >&2; exit 1 ;;
+esac
 
 IMAGES=("$@")
 [ ${#IMAGES[@]} -gt 0 ] || IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:12)
@@ -37,6 +45,7 @@ command -v docker >/dev/null || { echo "::error::docker not found" >&2; exit 1; 
 # Regeneration path for expected-deb-depends.txt: install into a throwaway
 # container and print what dpkg-shlibdeps computes, nothing else.
 if [ -n "$PRINT_COMPUTED" ]; then
+  [ "$DRIVER" = container-checks.sh ] || { echo "::error::--print-computed-depends applies to a .deb only" >&2; exit 1; }
   docker run --rm \
     -v "$DEB:/artifact/$(basename "$DEB"):ro" \
     -v "$here:/smoke:ro" \
@@ -67,7 +76,7 @@ for image in "${IMAGES[@]}"; do
   out="$(docker run --rm --shm-size=1g \
     -v "$DEB:/artifact/$(basename "$DEB"):ro" \
     -v "$here:/smoke:ro" \
-    "$image" bash "/smoke/container-checks.sh" "/artifact/$(basename "$DEB")" 2>&1)"
+    "$image" bash "/smoke/$DRIVER" "/artifact/$(basename "$DEB")" 2>&1)"
   echo "$out"
 
   # container-checks.sh ends with `name|result` lines on stdout.
