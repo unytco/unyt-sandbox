@@ -1,0 +1,107 @@
+name: "release-smoke"
+
+# Does the artifact a release shipped actually work on a user's machine?
+#
+# Everything runs in PRISTINE distro containers (ubuntu:22.04, ubuntu:24.04,
+# debian:12), not on the runner. A GitHub runner is a build image carrying
+# hundreds of preinstalled libraries, so a package that under-declares its
+# dependencies installs and runs there while a real user's machine fails — the
+# exact bug class this exists to catch would be invisible. Containers are both
+# more faithful and runnable on a laptop, so the whole thing iterates locally:
+#
+#   scripts/smoke/run-smoke.sh <artifact.deb>
+#
+# The checks themselves live in scripts/smoke/ and are documented there.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release id (e.g. 368727714) or tag (e.g. v0.100.0)"
+        required: true
+        type: string
+      report_only:
+        description: "Report failures without failing the run"
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      release:
+        required: true
+        type: string
+      report_only:
+        required: false
+        default: true
+        type: boolean
+
+# macOS and Windows are separate lanes: neither has an equivalent of dpkg's
+# dependency metadata, so they need their own answer rather than a matrix row.
+jobs:
+  linux:
+    name: "linux install smoke"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Report-only covers the WHOLE job: the release must not go red because a
+    # container pull or the GitHub API hiccuped. The summary always says what
+    # actually happened, and the annotations survive a green job.
+    continue-on-error: ${{ inputs.report_only == true }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GIT_PAT }}
+          fetch-depth: 1
+
+      - name: Download the released .deb
+        id: download
+        env:
+          GH_TOKEN: ${{ secrets.GIT_PAT }}
+        run: |
+          deb="$(bash scripts/smoke/download-release-asset.sh \
+            "${{ inputs.release }}" linux.deb "$RUNNER_TEMP/artifacts")"
+          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+
+      # Docker is preinstalled on the ubuntu runners; the containers are what the
+      # checks actually run in, so the runner's own image never matters.
+      - name: Run the smoke in pristine containers
+        id: smoke
+        continue-on-error: true
+        run: |
+          bash scripts/smoke/run-smoke.sh "${{ steps.download.outputs.deb }}" \
+            | tee "$RUNNER_TEMP/smoke.log"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Summary
+        if: always()
+        env:
+          SMOKE: ${{ steps.smoke.outcome || 'did not run' }}
+        run: |
+          {
+            echo "### Release smoke — \`${{ inputs.release }}\`"
+            echo ""
+            echo '```'
+            sed -n '/^# summary/,$p' "$RUNNER_TEMP/smoke.log" 2>/dev/null || echo "(no summary — the run did not get that far)"
+            echo '```'
+            echo ""
+            echo "Report-only: \`${{ inputs.report_only }}\`. Full output is in the \`release-smoke-log\` artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Annotate, so a report-only failure is visible on the run page without
+          # anyone opening the summary of a green job.
+          if [ "$SMOKE" != success ]; then
+            echo "::error title=Release smoke failed::see the job summary for which check failed on which distro"
+          fi
+
+      - name: Upload the smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-log
+          path: ${{ runner.temp }}/smoke.log
+          if-no-files-found: warn
+
+      # Report-only is the release's contract, not the dispatcher's: a hand-run
+      # smoke must be able to go red so it can be iterated on.
+      - name: Fail on a failed check
+        if: ${{ always() && inputs.report_only != true }}
+        run: '[ "${{ steps.smoke.outcome }}" = success ]'

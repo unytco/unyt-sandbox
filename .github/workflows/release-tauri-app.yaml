@@ -238,6 +238,20 @@ jobs:
           assetNamePattern: ${{
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
+
+  # Install what was just built and prove the app starts — see release-smoke.yaml.
+  # Called directly (not via `workflow_run`, which only fires for workflow files
+  # on the DEFAULT branch and so would silently never run on a release branch),
+  # and report-only: a smoke failure surfaces in the job summary without failing
+  # the release that produced the artifacts.
+  smoke-test:
+    needs: [publish-happ, release-tauri-app]
+    uses: ./.github/workflows/release-smoke.yaml
+    with:
+      release: ${{ needs.publish-happ.outputs.releaseId }}
+      report_only: true
+    secrets: inherit
+
   # release-tauri-android-app:
   #   needs: publish-happ
   #   permissions: write-all
