@@ -77,14 +77,28 @@ for image in "${IMAGES[@]}"; do
     -v "$DEB:/artifact/$(basename "$DEB"):ro" \
     -v "$here:/smoke:ro" \
     "$image" bash "/smoke/$DRIVER" "/artifact/$(basename "$DEB")" 2>&1)"
+  docker_rc=$?
   echo "$out"
 
   # container-checks.sh ends with `name|result` lines on stdout.
+  rows=0
   while IFS='|' read -r name result; do
     [ -n "${result:-}" ] || continue
+    rows=$((rows + 1))
     summary+=("$image|$name|$result")
     [ "$result" = pass ] || overall=1
   done < <(printf '%s\n' "$out" | grep -E '\|(pass|FAIL)$')
+
+  # A container that never ran reports NOTHING, and a verdict read only from the
+  # rows would then be "no failures" — printing "All checks passed" for an image
+  # that was never pulled, a dead daemon, or an OOM kill. Both guards are needed:
+  # docker's own status, AND at least one result row, since the driver can also
+  # die mid-way after emitting some.
+  if [ "$docker_rc" -ne 0 ] || [ "$rows" -eq 0 ]; then
+    echo "::error::the checks did not complete on $image (docker exit $docker_rc, $rows result rows)" >&2
+    summary+=("$image|CHECKS DID NOT RUN|FAIL")
+    overall=1
+  fi
 done
 
 echo ""

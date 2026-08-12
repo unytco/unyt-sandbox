@@ -43,20 +43,43 @@ UNYT_MAX_GLIBC="2.35"
 # — a struct variant prints `Name { field: … }`, a tuple variant `Name(…)`, and a
 # unit variant just `Name`. Matching them uniformly is how a state silently stops
 # being detected, so each group below is anchored to its own shape.
+#
+# ANCHORED to `Status update:`. The oracle greps the MERGED log — the app's own
+# lines plus holochain, kitsune2 and lair at RUST_LOG=info — where "-> Ready" and
+# the like occur in unrelated subsystem output. Unanchored, any of those declared
+# the app healthy.
 # shellcheck disable=SC2034  # read by the scripts that source this file
-UNYT_RE_HEALTHY='UI ready: webview mounted the root element|-> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|-> Ready\b'
+UNYT_RE_HEALTHY='UI ready: webview mounted the root element|Status update: .* -> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|Status update: .* -> Ready\b'
 
 # Terminal failures. `ConductorDisconnected` is deliberately NOT here — it is the
 # transient first step of the heartbeat's reconnect backoff (5s -> 60s;
 # unyt/src-tauri/src/utils/holochain.rs) and only becomes `ConductorCrashed`
 # after ~5 minutes of consecutive failures.
 # shellcheck disable=SC2034  # read by the scripts that source this file
-UNYT_RE_FAILED='panicked at|-> (ConductorError|AppInstallationError|Error)\(|-> (ConductorCrashed|HcAuthFailed|LairInvalidPassword|NetworkUnreachable)\b'
+UNYT_RE_FAILED='panicked at|Status update: .* -> (ConductorError|AppInstallationError|Error)\(|Status update: .* -> (ConductorCrashed|HcAuthFailed|LairInvalidPassword|NetworkUnreachable)\b'
 
 # Watched separately, with a bounded tolerance rather than an open-ended wait: a
 # conductor that keeps dropping is a wedged app even though no single drop is fatal.
 # shellcheck disable=SC2034  # read by the scripts that source this file
-UNYT_RE_DISCONNECTED='-> ConductorDisconnected'
+UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
+
+# ── the matchers ─────────────────────────────────────────────────────────────
+# The ONLY place these patterns are applied. Both launch-and-assert.sh and
+# test-oracle.sh go through these functions, so the regression test exercises the
+# real call sites rather than a copy of them — which is the whole point, since
+# every oracle bug so far has been in the invocation, not the pattern:
+#   - a pattern starting with "-" parsed as grep OPTIONS (needs -e)
+#   - an alternation matched against the merged log, so an unrelated subsystem
+#     line satisfied it (needs the `Status update:` anchor)
+# All read the log on stdin.
+# The `(...)` around the pattern before appending `.*` is load-bearing: `A|B.*`
+# binds the `.*` to B alone, so a match on any earlier alternative was reported
+# truncated at the alternative's own end.
+smoke_match_healthy()      { grep -qE -e "$UNYT_RE_HEALTHY"; }
+smoke_first_healthy()      { grep -oE -e "($UNYT_RE_HEALTHY).*" | head -1; }
+smoke_match_failed()       { grep -qE -e "$UNYT_RE_FAILED"; }
+smoke_first_failures()     { grep -oE -e "($UNYT_RE_FAILED).*" | head -3; }
+smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
 
 # The app's rolling log dir inside a smoke sandbox ($1 = sandbox root; the smoke
 # scripts point XDG_DATA_HOME at <sandbox>/data). Files are named

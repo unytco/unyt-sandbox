@@ -124,14 +124,14 @@ deadline=$(( $(date +%s) + TIMEOUT ))
 reached=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
   logs="$(smoke_all_logs "$SANDBOX")"
-  if printf '%s' "$logs" | grep -qE -e "$UNYT_RE_FAILED"; then
+  if printf '%s' "$logs" | smoke_match_failed; then
     echo "::error::the app reached a FAILURE state:" >&2
-    printf '%s' "$logs" | grep -oE -e "$UNYT_RE_FAILED.*" | head -3 | sed 's/^/  /' >&2
+    printf '%s' "$logs" | smoke_first_failures | sed 's/^/  /' >&2
     dump_logs
     exit 1
   fi
-  if printf '%s' "$logs" | grep -qE -e "$UNYT_RE_HEALTHY"; then
-    reached="$(printf '%s' "$logs" | grep -oE -e "$UNYT_RE_HEALTHY.*" | head -1)"
+  if printf '%s' "$logs" | smoke_match_healthy; then
+    reached="$(printf '%s' "$logs" | smoke_first_healthy)"
     break
   fi
   if ! alive; then
@@ -153,7 +153,7 @@ echo "OK: reached a healthy state -> ${reached}" >&2
 # Bounded by construction (a fixed window, never "wait until healthy again"), so
 # a permanently flapping conductor fails instead of hanging the job.
 echo "Watching ${SETTLE}s for a wedged conductor..." >&2
-before_drops="$(smoke_all_logs "$SANDBOX" | grep -cE -e "$UNYT_RE_DISCONNECTED" || true)"
+before_drops="$(smoke_all_logs "$SANDBOX" | smoke_count_disconnects)"
 settle_end=$(( $(date +%s) + SETTLE ))
 while [ "$(date +%s)" -lt "$settle_end" ]; do
   if ! alive; then
@@ -162,16 +162,16 @@ while [ "$(date +%s)" -lt "$settle_end" ]; do
     exit 1
   fi
   logs="$(smoke_all_logs "$SANDBOX")"
-  if printf '%s' "$logs" | grep -qE -e "$UNYT_RE_FAILED"; then
+  if printf '%s' "$logs" | smoke_match_failed; then
     echo "::error::the app failed after reaching a healthy state:" >&2
-    printf '%s' "$logs" | grep -oE -e "$UNYT_RE_FAILED.*" | head -3 | sed 's/^/  /' >&2
+    printf '%s' "$logs" | smoke_first_failures | sed 's/^/  /' >&2
     dump_logs
     exit 1
   fi
   sleep 3
 done
 
-after_drops="$(smoke_all_logs "$SANDBOX" | grep -cE -e "$UNYT_RE_DISCONNECTED" || true)"
+after_drops="$(smoke_all_logs "$SANDBOX" | smoke_count_disconnects)"
 new_drops=$(( after_drops - before_drops ))
 # One drop inside the window is the heartbeat's normal transient (it reconnects
 # with backoff); repeated drops are a conductor that never settles.
