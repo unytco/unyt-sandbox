@@ -77,10 +77,21 @@ jobs:
           done < <(bash scripts/smoke/run-smoke.sh --print-images)
           json="$json]"
 
-          # AN EMPTY MATRIX RUNS ZERO JOBS AND THE WORKFLOW GOES GREEN — the same
-          # shape as every "nothing was scanned" bug this suite has already been
-          # bitten by, one level up in the workflow. If the list cannot be read,
-          # say so here rather than reporting a clean release nobody tested.
+          # AN EMPTY MATRIX RUNS ZERO JOBS AND THE WORKFLOW GOES GREEN.
+          #
+          # DO NOT REMOVE THIS AS DEFENSIVE CLUTTER. It is the same family as the
+          # guards inside the checks themselves — "the sweep found no violations
+          # because it examined nothing" — reappearing one level further out, in
+          # the workflow rather than in a script. That family has now produced a
+          # real defect at three separate levels of this suite, every time
+          # looking like a clean pass. A matrix that reads as empty is the
+          # workflow's version of it: four jobs that never exist, and a green
+          # run that tested no Linux at all.
+          #
+          # (A FAILING setup job is different and safe: it fails this job, which
+          # fails the run — verified against this repo's own history, where a
+          # failed job with a skipped dependent concluded `failure`. The danger
+          # is only an empty list that succeeds.)
           if [ "$count" -eq 0 ]; then
             echo "::error::read no distro images from run-smoke.sh — the matrix would be empty and every Linux job would silently not exist"
             exit 1
