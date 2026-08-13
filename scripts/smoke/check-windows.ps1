@@ -29,6 +29,14 @@
   output is empty; the app's log file under
   %LOCALAPPDATA%\co.unyt.unyt.sandbox\logs is the only readable record.
 
+  WHAT THIS DELIBERATELY DOES NOT COVER: whether the app LAUNCHES on a machine
+  that has never had a build on it. A runner is a build image with years of
+  redistributables already on it, and the three failure modes that only a clean
+  machine shows — a missing WebView2 runtime (loaded through COM, so no import
+  check can see it), SmartScreen, and a runtime the build machine had — are
+  checked by hand once per release instead. The procedure is
+  docs/windows-clean-machine-check.md.
+
   Every check must be ABLE to fail — test-windows-checks.ps1 drives the decision
   functions below against fixtures, including deliberately broken ones. Nine
   defects in this suite made a check silently pass, and all nine were found that
