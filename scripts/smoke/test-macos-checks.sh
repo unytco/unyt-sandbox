@@ -376,6 +376,20 @@ case "${STUB_BREAK:-}" in
   syspolicy_partial)
     echo "Codesign check passed."
     exit 0 ;;
+  # A PASSING report that mentions errors only to count zero of them. The fail
+  # vocabulary is deliberately broad, so without the zero-count exclusion this
+  # reds a build that is fine — the kind of noise that teaches people to ignore
+  # the row.
+  syspolicy_verbose_pass)
+    echo "App passed all pre-distribution checks and is ready for distribution."
+    echo "0 errors, 0 warnings"
+    exit 0 ;;
+  # And the other direction: zero-counts present AND a real failure. Dropping
+  # the count lines must not drop the finding with them.
+  syspolicy_zero_and_fatal)
+    echo "0 warnings"
+    echo "Notary Ticket Missing"
+    exit 0 ;;
 esac
 echo "App passed all pre-distribution checks and is ready for distribution."
 exit 0
@@ -757,6 +771,24 @@ expect_only_failure "passes Apple's own distribution assessment" \
   "a lone per-check 'passed' is not a distribution verdict"
 expect_err "matched no known pass or fail wording" "a partial report is reported as unreadable"
 
+# The cost of a broad fail vocabulary, and the bound on it. A passing report that
+# counts ZERO errors must not be red — that is the noise that teaches people to
+# ignore the row — while zero-counts sitting beside a real failure must not
+# smuggle it past.
+run_scenario syspolicy-verbose-pass STUB_BREAK=syspolicy_verbose_pass
+expect_row "passes Apple's own distribution assessment" pass \
+  "'0 errors, 0 warnings' in a passing report is not a failure"
+expect_rc zero "a verbose passing report leaves the run green"
+
+run_scenario break-syspolicy-zero-and-fatal STUB_BREAK=syspolicy_zero_and_fatal
+expect_only_failure "passes Apple's own distribution assessment" \
+  "dropping the zero-count lines must not drop the real failure with them"
+# WHICH branch: the failure one. An over-greedy exclusion that ate the finding
+# along with the counts still reds this row — via "cannot tell" — so without
+# pinning the branch, a filter wide enough to swallow real findings passes
+# unnoticed. Mutation testing showed exactly that.
+expect_err "not ready for distribution" "the finding survives the filter, not just the row"
+
 # ── 9. deployment target ──────────────────────────────────────────────────────
 # The documented real-world failure: a bundled dependency built against a newer
 # deployment target than the app claims. It launches on the OS the Info.plist
@@ -892,8 +924,8 @@ echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 255 ]; then
-  echo "::error::only $pass assertions ran; expected at least 255 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 268 ]; then
+  echo "::error::only $pass assertions ran; expected at least 268 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

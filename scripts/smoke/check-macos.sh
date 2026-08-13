@@ -609,7 +609,7 @@ run_check "the notarization ticket is stapled" check_stapled
 # passing — and a usage error is reported as such so nobody debugs the artifact
 # when the invocation is what is wrong.
 check_syspolicy() {
-  local out rc
+  local out rc scan
   if ! command -v syspolicy_check >/dev/null 2>&1; then
     echo "::error::syspolicy_check not found — it ships with macOS 14+, so this runner is older" >&2
     echo "  than the lane expects and the assessment could not be made." >&2
@@ -642,8 +642,20 @@ check_syspolicy() {
   # failure regardless of how many individual checks passed, and only "ready for
   # distribution" is success. A wrong guess about the wording is then a false RED
   # that says so, never a false green.
+  # A line that says ZERO of something is not a failure. A verbose report's
+  # `0 errors, 0 warnings` would otherwise trip the `error` token and red a build
+  # that passed — and a row that cries wolf on wording is the row people learn to
+  # ignore. Dropped before the scan, so the vocabulary itself stays broad.
+  #
+  # ANCHORING THE FAIL WORDS TO LINE STARTS WAS CONSIDERED AND IS WRONG. Of the
+  # three documented failure lines, only `Severity: Fatal` begins with its
+  # significant word; `Notary Ticket Missing` and `Type: Distribution Error` both
+  # carry it at the END. Anchoring would stop matching two of the three and
+  # reopen the false green this pattern exists to close — cheap to type, and a
+  # regression.
+  scan="$(printf '%s' "$out" | grep -viE '(^|[^0-9])0 (errors?|warnings?|issues?|problems?)')"
   if [ "$rc" -ne 0 ] ||
-    printf '%s' "$out" | grep -qiE 'fail|missing|error|fatal|severity|rejected|unacceptable|denied|not (notarized|signed|accepted|ready)'; then
+    printf '%s' "$scan" | grep -qiE 'fail|missing|error|fatal|severity|rejected|unacceptable|denied|not (notarized|signed|accepted|ready)'; then
     echo "::error::syspolicy_check says this build is not ready for distribution (exit $rc)" >&2
     return 1
   fi
