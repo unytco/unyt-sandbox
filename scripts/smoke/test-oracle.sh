@@ -180,10 +180,22 @@ one_case() { # <declared> <expected-finding-prefix> <description>
   df="$(mktemp)"; cf="$(mktemp)"
   printf '%s\n' "$1" >"$df"; printf 'libc6 (>= 2.34)\n' >"$cf"
   out="$(smoke_depends_gaps "$df" "$cf")"
-  case "$out" in
-    "$2"*) pass=$((pass + 1)) ;;
-    *) fail=$((fail + 1)); printf 'FAIL  %-58s got: %s\n' "$3" "${out:-<no finding>}" >&2 ;;
-  esac
+  if [ -z "$2" ]; then
+    # AN EMPTY EXPECTATION MEANS NO FINDING AT ALL, and it needs its own branch:
+    # `case "$out" in "$2"*)` expands to `*)`, which matches ANY output. Every
+    # "must not fire" case below therefore passed unconditionally — including if
+    # the comparison started reporting TOOLOW or BADVERSION against a perfectly
+    # valid declaration, which is the exact regression those cases exist to
+    # catch. They are the fixtures added to stop an over-eager fix reporting
+    # everything, and they could not have caught one.
+    if [ -z "$out" ]; then pass=$((pass + 1)); else
+      fail=$((fail + 1)); printf 'FAIL  %-58s expected NO finding, got: %s\n' "$3" "$out" >&2; fi
+  else
+    case "$out" in
+      "$2"*) pass=$((pass + 1)) ;;
+      *) fail=$((fail + 1)); printf 'FAIL  %-58s got: %s\n' "$3" "${out:-<no finding>}" >&2 ;;
+    esac
+  fi
   rm -f "$df" "$cf"
 }
 one_case 'libc6 (<= 2.40)'            NOFLOOR    "an upper bound accepted as a floor"
@@ -258,6 +270,41 @@ if command -v objdump >/dev/null 2>&1 && [ -x "$(command -v ls || true)" ]; then
     printf '      output was: %s\n' "${out:-<empty>}" >&2
   fi
   rm -rf "$appdir"
+
+  # ── the ceiling must cover EVERY bundled ELF, not just the app's own ────────
+  # A helper in usr/bin that is NOT the .desktop Exec target is exactly where a
+  # too-new-glibc dependency arrives, and it was invisible: the scan fed itself
+  # one binary plus *.so* files, so a helper requiring GLIBC_9.99 left the gate
+  # green. The bundle's ceiling is a property of the WHOLE bundle — the Exec
+  # binary names the app, it does not bound the bundle.
+  #
+  # The fixture patches a real ELF's version string in place (same length, so
+  # every offset survives) rather than trying to build one that genuinely needs
+  # a nonexistent glibc.
+  appdir2="$(mktemp -d)"
+  mkdir -p "$appdir2/usr/bin"
+  printf '[Desktop Entry]\nExec=app\n' >"$appdir2/app.desktop"
+  cp "$real_elf" "$appdir2/usr/bin/app"
+  cp "$real_elf" "$appdir2/usr/bin/helper"
+  LC_ALL=C sed -i 's/GLIBC_2\.34/GLIBC_9.99/' "$appdir2/usr/bin/helper" 2>/dev/null || true
+  if objdump -T "$appdir2/usr/bin/helper" 2>/dev/null | grep -q 'GLIBC_9\.99'; then
+    if out2="$(bash "$here/check-appimage.sh" "$appdir2" 2>&1)"; then
+      fail=$((fail + 1))
+      echo "FAIL  a non-Exec helper requiring GLIBC_9.99 left the ceiling GREEN" >&2
+    else
+      pass=$((pass + 1))
+    fi
+    if printf '%s' "$out2" | grep -q 'helper'; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      echo "FAIL  the too-new helper was not named as the worst offender" >&2
+      printf '      output was: %s\n' "$out2" >&2
+    fi
+  else
+    # The patch is the whole fixture; if it did not take, the case proves nothing
+    # and must say so rather than counting as covered.
+    echo "SKIP  bundle-wide ceiling regression (could not patch a GLIBC version)" >&2
+  fi
+  rm -rf "$appdir2"
 else
   echo "SKIP  N1 bundle-scan regression (no objdump)" >&2
 fi

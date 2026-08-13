@@ -304,12 +304,68 @@ try {
   # NotSigned is our builds' CURRENT state, and it must be a failure: the whole
   # point of gating it is that the day a certificate is wired in, this turns
   # green with no edit.
-  Assert-True 'a valid signature passes' (Test-SignatureVerdict -Status 'Valid' -SignerSubject 'CN=Unyt').Ok
-  Assert-False 'an unsigned installer FAILS' (Test-SignatureVerdict -Status 'NotSigned').Ok
-  Assert-True 'and says so plainly' ((Test-SignatureVerdict -Status 'NotSigned').Message -match 'NO Authenticode')
-  Assert-False 'a tampered signature fails' (Test-SignatureVerdict -Status 'HashMismatch').Ok
-  Assert-False 'an untrusted signer fails' (Test-SignatureVerdict -Status 'UnknownError').Ok
-  Assert-False 'an empty status fails' (Test-SignatureVerdict -Status '').Ok
+  # FOUR OUTCOMES, all pinned. The signing state is a DECLARED expectation now,
+  # not a permanent red — amber while reality matches what we declared, red the
+  # moment they diverge in either direction. The row that matters most is
+  # signed-but-invalid: a plain skip would have silently lost it, and it is a
+  # real defect no declaration excuses.
+  Assert-That 'signed and trusted -> pass' `
+  (Test-SignatureVerdict -Status 'Valid' -SignerSubject 'CN=Unyt').Result 'pass'
+  Assert-That 'unsigned + we expect unsigned -> warn (today)' `
+  (Test-SignatureVerdict -Status 'NotSigned' -ExpectSigned $false).Result 'warn'
+  Assert-That 'unsigned + we expect SIGNED -> FAIL (signing broke)' `
+  (Test-SignatureVerdict -Status 'NotSigned' -ExpectSigned $true).Result 'FAIL'
+  Assert-That 'signed but tampered -> FAIL even when we expect unsigned' `
+  (Test-SignatureVerdict -Status 'HashMismatch' -ExpectSigned $false).Result 'FAIL'
+  Assert-That 'signed but untrusted -> FAIL even when we expect unsigned' `
+  (Test-SignatureVerdict -Status 'NotTrusted' -ExpectSigned $false).Result 'FAIL'
+  Assert-That 'an unknown status -> FAIL' `
+  (Test-SignatureVerdict -Status 'UnknownError' -ExpectSigned $false).Result 'FAIL'
+  Assert-That 'an empty status -> FAIL' (Test-SignatureVerdict -Status '').Result 'FAIL'
+  # A signed build is good news even while we declare we expect none — it must
+  # not be reported as a surprise failure.
+  Assert-That 'signed while expecting unsigned is still a pass' `
+  (Test-SignatureVerdict -Status 'Valid' -SignerSubject 'CN=Unyt' -ExpectSigned $false).Result 'pass'
+  Assert-True 'the warn says what it costs the user' `
+  ((Test-SignatureVerdict -Status 'NotSigned').Message -match 'SmartScreen')
+  Assert-True 'the broken-chain message says it is signed but untrusted' `
+  ((Test-SignatureVerdict -Status 'NotTrusted').Message -match 'will not trust')
+  # The diagnosis, not just the colour: this row and the broken-chain row are
+  # both FAIL, so without pinning the message they are interchangeable — and the
+  # actionable difference is that one means "signing broke" and the other means
+  # "signing works but produces something users reject".
+  Assert-True 'the expect-signed failure says signing has broken' `
+  ((Test-SignatureVerdict -Status 'NotSigned' -ExpectSigned $true).Message -match 'signing has broken')
+
+  # The declaration ships as "expect unsigned", so today's real state is amber.
+  Assert-False 'the shipped declaration expects unsigned' $script:ExpectWindowsSigned
+
+  # ── the three-verdict machinery ─────────────────────────────────────────────
+  # 'warn' has to reach the row without failing the job, and must not become a
+  # loophole: anything that is not a bool or the literal 'warn' is still broken.
+  $script:Results.Clear()
+  Invoke-Check 'warns' { 'warn' }
+  Invoke-Check 'passes' { $true }
+  Invoke-Check 'fails' { $false }
+  Invoke-Check 'returns some other string' { 'probably-fine' }
+  Assert-That "a 'warn' body records warn" $script:Results[0].Verdict 'warn'
+  Assert-That 'a true body still passes' $script:Results[1].Verdict 'pass'
+  Assert-That 'a false body still fails' $script:Results[2].Verdict 'FAIL'
+  Assert-That 'any other string is still broken, not a warn' $script:Results[3].Verdict 'FAIL'
+  $script:Results.Clear()
+
+  # THE CENTRAL CLAIM OF THE DECLARED-STATE DESIGN: a warn is visible but does
+  # not fail the job, while a FAIL anywhere still does — including alongside a
+  # warn, so the amber row can never mask a red one.
+  $rowP = [PSCustomObject]@{ Name = 'p'; Verdict = 'pass' }
+  $rowW = [PSCustomObject]@{ Name = 'w'; Verdict = 'warn' }
+  $rowF = [PSCustomObject]@{ Name = 'f'; Verdict = 'FAIL' }
+  Assert-That 'all passing -> exit 0' (Get-OverallStatus -Results @($rowP, $rowP)) 0
+  Assert-That 'a warn alone -> exit 0 (the job stays green)' (Get-OverallStatus -Results @($rowP, $rowW)) 0
+  Assert-That 'warns only -> exit 0' (Get-OverallStatus -Results @($rowW, $rowW)) 0
+  Assert-That 'a FAIL -> exit 1' (Get-OverallStatus -Results @($rowP, $rowF)) 1
+  Assert-That 'a warn does not mask a FAIL' (Get-OverallStatus -Results @($rowW, $rowF)) 1
+  Assert-That 'no rows at all -> exit 0' (Get-OverallStatus -Results @()) 0
 
   # ── Get-ArtifactVersion / Get-InstallerKind ─────────────────────────────────
   Assert-That 'the version comes out of a release asset name' `
@@ -463,8 +519,8 @@ Write-Output "windows check regression: $script:Pass passed, $script:Fail failed
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding
 # assertions.
-if ($script:Pass -lt 84) {
-  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 84 — the test file is truncated or a block was skipped")
+if ($script:Pass -lt 100) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 100 — the test file is truncated or a block was skipped")
   exit 1
 }
 if ($script:Fail -gt 0) { exit 1 }

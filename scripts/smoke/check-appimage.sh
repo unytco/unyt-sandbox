@@ -58,11 +58,36 @@ if [ -z "$desktop_exec" ] || [ ! -x "$inner" ]; then
   exit 1
 fi
 
-# Every ELF in the bundle, each reduced to the highest GLIBC_ it imports; the
-# bundle's ceiling is the max over all of them.
+# EVERY ELF IN THE BUNDLE, found by MAGIC BYTES rather than by name.
+#
+# `*.so*` plus one binary was the old shape, and it does not match what the
+# header and the gate below both promise. It misses a bundled EXECUTABLE — and a
+# usr/bin helper is precisely where a too-new-glibc dependency arrives: a helper
+# built on a newer host requiring GLIBC_2.38 breaks the AppImage on the oldest
+# supported distro while this check stays green, because the maximum it did look
+# at came from libwebkit2gtk either way.
+#
+# Note what this file's own header already said — find order is not an answer to
+# "which file do I want" — and note that the fix for that became "only the Exec
+# binary matters", which is a different wrong answer to the same question. The
+# right answer is that for the CEILING no single file matters: all of them do.
+# The .desktop Exec still names the app, but only for the two app-specific
+# reports below (its own version, and what it wants from the host).
+#
+# Reading four bytes of every file is affordable: the v0.100.0 bundle has 235.
 elf_list="$(mktemp)"
 trap 'rm -f "$elf_list" "$elf_list.versions"' EXIT
-{ printf '%s\n' "$inner"; find "$APPDIR" -name '*.so*' -type f; } >"$elf_list"
+while IFS= read -r f; do
+  case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in
+    7f454c46) printf '%s\n' "$f" ;;
+  esac
+done < <(find "$APPDIR" -type f -print) >"$elf_list"
+
+if ! grep -q . "$elf_list"; then
+  echo "::error::no ELF files anywhere under $APPDIR — is this really an extracted AppDir?" >&2
+  exit 1
+fi
+echo "--- $(grep -c . "$elf_list") ELF file(s) in the bundle ---" >&2
 
 while read -r f; do
   # `|| true`: most files here import no GLIBC_ symbols at all, and under

@@ -333,31 +333,67 @@ function Test-IsVcRuntime {
   return ($Dll -match '^(vcruntime|msvcp|concrt|vcomp)\d*.*\.dll$')
 }
 
+# ── the signing declaration ───────────────────────────────────────────────────
+# WHAT WE EXPECT TODAY, and the one line to change when it stops being true.
+# Our Windows builds are NOT code-signed: docs/signing.md records an Apple
+# Developer ID and no Windows certificate, and release-tauri-app.yaml passes no
+# Windows signing credentials. That is a real, deferred, user-facing cost — every
+# user meets a SmartScreen "unknown publisher" block — but it is a KNOWN state
+# rather than a regression, and a check that is permanently red is a check people
+# learn to scroll past.
+#
+# So it is a declared-state tripwire rather than a permanent failure: amber while
+# reality matches the declaration, red the moment they diverge in either
+# direction. Set this to $true the day a certificate is wired into the release
+# workflow, and the check turns from warn to pass with nothing else to change —
+# and if the signing then silently stops working, it goes red instead of quietly
+# returning to amber.
+#
+# NOT A SKIP, deliberately. A skip would also throw away the case a skip cannot
+# see: signed but with a broken or untrusted chain, which is a genuine defect and
+# still fails below.
+$script:ExpectWindowsSigned = $false
+
 # The verdict on an Authenticode signature, from whatever the platform reported.
 # Kept separate from the tools that produce it so both paths (signtool and
 # Get-AuthenticodeSignature) land on one rule, and so the rule itself is
 # testable off Windows.
+#
+# Four outcomes, and only one of them is silence:
+#   signed and trusted                  -> pass
+#   unsigned, and we expected unsigned  -> warn   (declared state, job stays green)
+#   unsigned, but we expected signed    -> FAIL   (signing broke, or the cert lapsed)
+#   signed but invalid / untrusted      -> FAIL   (always — this is never expected)
 function Test-SignatureVerdict {
   param(
     [Parameter(Mandatory)][AllowEmptyString()][string]$Status,
-    [AllowEmptyString()][string]$SignerSubject = ''
+    [AllowEmptyString()][string]$SignerSubject = '',
+    [bool]$ExpectSigned = $false
   )
-  # `Valid` is the only status that means a user's machine will trust it.
-  # NotSigned is our current state; HashMismatch/NotTrusted are worse.
-  $ok = ($Status -eq 'Valid')
+  # `Valid` is the only status meaning a user's machine will trust it. Anything
+  # that is neither Valid nor NotSigned — HashMismatch, NotTrusted, UnknownError
+  # — is a broken signature, which no declaration excuses.
+  if ($Status -eq 'Valid') {
+    return [PSCustomObject]@{
+      Result = 'pass'; Status = $Status; Signer = $SignerSubject
+      Message = "signed by $SignerSubject"
+    }
+  }
+  if ($Status -eq 'NotSigned') {
+    if ($ExpectSigned) {
+      return [PSCustomObject]@{
+        Result = 'FAIL'; Status = $Status; Signer = $SignerSubject
+        Message = 'NO Authenticode signature, but this build is declared as signed — signing has broken'
+      }
+    }
+    return [PSCustomObject]@{
+      Result = 'warn'; Status = $Status; Signer = $SignerSubject
+      Message = 'no Authenticode signature — expected, and every user meets a SmartScreen "unknown publisher" block'
+    }
+  }
   return [PSCustomObject]@{
-    Ok      = $ok
-    Status  = $Status
-    Signer  = $SignerSubject
-    Message = if ($ok) {
-      "signed by $SignerSubject"
-    }
-    elseif ($Status -eq 'NotSigned') {
-      'the installer carries NO Authenticode signature'
-    }
-    else {
-      "the Authenticode signature is $Status"
-    }
+    Result = 'FAIL'; Status = $Status; Signer = $SignerSubject
+    Message = "the Authenticode signature is $Status — signed, but a user's machine will not trust it"
   }
 }
 
@@ -481,6 +517,18 @@ function Get-UninstallCommand {
 # to be able to drive.
 $script:Results = [System.Collections.Generic.List[object]]::new()
 function Add-Result { param([string]$Name, [string]$Verdict) $script:Results.Add([PSCustomObject]@{ Name = $Name; Verdict = $Verdict }) }
+
+# The job's exit status from the rows. ONLY 'FAIL' is fatal: 'warn' is a state we
+# declared we expect, so it must be visible without turning the lane red — and
+# 'pass' obviously is not fatal either. Separated from Write-SummaryAndExit,
+# which ends in `exit` and therefore cannot be driven by the regression test,
+# because "a warn does not fail the job" is the whole claim of the declared-state
+# design and an untested claim is how it quietly becomes a skip.
+function Get-OverallStatus {
+  param([object[]]$Results = @())
+  foreach ($r in $Results) { if ($r.Verdict -eq 'FAIL') { return 1 } }
+  return 0
+}
 function Invoke-Check {
   param([string]$Name, [scriptblock]$Body)
   Write-Note ''
@@ -493,11 +541,15 @@ function Invoke-Check {
     # which is this suite's defining bug class. A body that returns no verdict
     # is a broken check, and a broken check is a failure, not a pass.
     $emitted = @(& $Body)
-    if ($emitted.Count -eq 0 -or -not ($emitted[-1] -is [bool])) {
-      Write-Note "::error::$Name returned no true/false verdict — the check is broken, not passing"
+    $last = if ($emitted.Count) { $emitted[-1] } else { $null }
+    # 'warn' is a THIRD verdict, not a pass: the row shows it and the job stays
+    # green, which is only ever right for a state we have declared we expect.
+    if ($last -is [string] -and $last -eq 'warn') { $ok = 'warn' }
+    elseif ($last -is [bool]) { $ok = $last }
+    else {
+      Write-Note "::error::$Name returned no true/false/warn verdict — the check is broken, not passing"
       $ok = $false
     }
-    else { $ok = $emitted[-1] }
   }
   catch {
     # An exception is a FAILED check, never a skipped one. A check that threw
@@ -505,7 +557,15 @@ function Invoke-Check {
     Write-Note "::error::$Name threw: $($_.Exception.Message)"
     $ok = $false
   }
-  Add-Result -Name $Name -Verdict $(if ($ok) { 'pass' } else { 'FAIL' })
+  # `-is [string]` FIRST, and it is not decoration: `$true -eq 'warn'` is TRUE in
+  # PowerShell, because the string coerces to a boolean and any non-empty string
+  # is $true. Without the type test every passing check was recorded as a warn.
+  # Same family as the array-nesting defect — a silent coercion doing something
+  # reasonable-looking and wrong.
+  Add-Result -Name $Name -Verdict $(
+    if ($ok -is [string] -and $ok -eq 'warn') { 'warn' }
+    elseif ($ok -is [bool] -and $ok) { 'pass' }
+    else { 'FAIL' })
 }
 
 # Run a command and REFUSE TO WAIT FOREVER. An installer that puts a dialog up —
@@ -554,7 +614,7 @@ function Write-SummaryAndExit {
   $arch = if ($env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE }
   else { [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture }
   $label = "windows-$([System.Environment]::OSVersion.Version.Build)/$arch"
-  $overall = 0
+  $overall = Get-OverallStatus -Results @($script:Results)
   Write-Output ''
   Write-Output '############################################################'
   Write-Output '# summary'
@@ -562,9 +622,13 @@ function Write-SummaryAndExit {
   Write-Output ('{0,-18} {1,-52} {2}' -f 'IMAGE', 'CHECK', 'RESULT')
   foreach ($r in $script:Results) {
     Write-Output ('{0,-18} {1,-52} {2}' -f $label, $r.Name, $r.Verdict)
-    if ($r.Verdict -ne 'pass') { $overall = 1 }
   }
-  if ($overall -eq 0) { Write-Output ''; Write-Output 'All checks passed.' }
+  if ($overall -eq 0) {
+    Write-Output ''
+    $warned = @($script:Results | Where-Object { $_.Verdict -eq 'warn' }).Count
+    if ($warned) { Write-Output "All checks passed ($warned declared warning(s))." }
+    else { Write-Output 'All checks passed.' }
+  }
   exit $overall
 }
 
@@ -681,29 +745,53 @@ Invoke-Check 'installs the application executable' {
 # (nothing `needs` it), so a red row costs visibility and nothing else, and the
 # day a signing certificate is wired in this turns green with no edit here.
 Invoke-Check 'the installer is Authenticode-signed and trusted' {
-  # signtool with /pa — MANDATORY: without it signtool applies the DRIVER
-  # signing policy, which rejects perfectly good application signatures and
-  # produces a failure that has nothing to do with the artifact. It lives under
-  # the Windows SDK, so take the newest one present and fall back to the
-  # built-in cmdlet, which asks the same question of the same OS trust store.
-  $signtool = Get-ChildItem -Path 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
-    Sort-Object -Property FullName | Select-Object -Last 1
-  if ($signtool) {
-    Write-Note "  $($signtool.FullName) verify /pa /v"
-    $out = & $signtool.FullName verify /pa /v $Artifact 2>&1
-    $rc = $LASTEXITCODE
-    foreach ($line in $out) { Write-Note "  $line" }
-    if ($rc -eq 0) { Write-Note 'OK: signtool accepts the signature under the default application policy'; return $true }
-    Write-Note "::error::signtool rejected the signature (exit $rc) — a user gets a SmartScreen block"
-    Write-Note '  Fix: sign the installer in release-tauri-app.yaml (a Windows code-signing certificate).'
-    return $false
-  }
+  # Get-AuthenticodeSignature is the STATUS SOURCE, because it discriminates the
+  # four outcomes this check now distinguishes — Valid / NotSigned / HashMismatch
+  # / NotTrusted — while signtool's exit status collapses "unsigned" and "signed
+  # but broken" into one non-zero. Losing that distinction is exactly what a
+  # plain skip would have cost.
   $sig = Get-AuthenticodeSignature -LiteralPath $Artifact
-  $verdict = Test-SignatureVerdict -Status $sig.Status.ToString() -SignerSubject $(if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' })
-  Write-Note "  Get-AuthenticodeSignature: $($verdict.Message)"
-  if ($verdict.Ok) { return $true }
-  Write-Note "::error::$($verdict.Message) — a user gets a SmartScreen 'unknown publisher' block"
-  Write-Note '  Fix: sign the installer in release-tauri-app.yaml (a Windows code-signing certificate).'
+  $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }
+  $verdict = Test-SignatureVerdict -Status $sig.Status.ToString() -SignerSubject $signer `
+    -ExpectSigned $script:ExpectWindowsSigned
+
+  # signtool with /pa CORROBORATES a signature the cmdlet accepted. /pa is
+  # mandatory: without it signtool applies the DRIVER signing policy and rejects
+  # perfectly good application signatures. It only lives under the Windows SDK,
+  # so its absence is not a failure — the cmdlet already asked the OS trust
+  # store the same question.
+  if ($verdict.Result -eq 'pass') {
+    $signtool = Get-ChildItem -Path 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+      Sort-Object -Property FullName | Select-Object -Last 1
+    if ($signtool) {
+      Write-Note "  $($signtool.FullName) verify /pa /v"
+      $out = & $signtool.FullName verify /pa /v $Artifact 2>&1
+      $rc = $LASTEXITCODE
+      foreach ($line in $out) { Write-Note "  $line" }
+      if ($rc -ne 0) {
+        Write-Note "::error::the certificate chain verifies but signtool rejects it under the default"
+        Write-Note "  application policy (exit $rc) — a user would still be blocked."
+        return $false
+      }
+      Write-Note '  signtool agrees under the default application policy'
+    }
+    Write-Note "OK: $($verdict.Message)"
+    return $true
+  }
+
+  if ($verdict.Result -eq 'warn') {
+    # Amber, not red, and only because we said so. The job stays green; the row
+    # and the annotation both say what is being tolerated and what it costs.
+    Write-Note "::warning::$($verdict.Message)"
+    Write-Note '  This is the DECLARED state (ExpectWindowsSigned = $false in this script), not a'
+    Write-Note '  clean bill of health. Wire a Windows code-signing certificate into'
+    Write-Note '  release-tauri-app.yaml and flip that declaration to $true.'
+    return 'warn'
+  }
+
+  Write-Note "::error::$($verdict.Message)"
+  Write-Note '  Fix: sign the installer in release-tauri-app.yaml (a Windows code-signing certificate),'
+  Write-Note '  or correct ExpectWindowsSigned in this script if the expectation is what changed.'
   return $false
 }
 
