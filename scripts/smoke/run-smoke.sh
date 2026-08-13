@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Release install-smoke: does the artifact we shipped work on a user's machine?
+#
+#   run-smoke.sh <artifact.deb|artifact.AppImage> [image ...]
+#   run-smoke.sh --print-computed-depends <artifact.deb> [image]
+#
+# Runs the whole check sequence in a PRISTINE container per image and prints one
+# table per image. The image list is UNYT_SMOKE_IMAGES below — one place, with
+# the reasoning for what it spans.
+#
+# Containers rather than a CI runner, deliberately. A GitHub runner is a build
+# image carrying hundreds of preinstalled libraries, so an under-declared
+# dependency is already satisfied there and the run goes green while a real
+# user's machine fails. A stock distro image is both more faithful and runnable
+# on a laptop, which is what makes this iterable.
+#
+# Needs only Docker on the host — no drivers, no display, nothing installed.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+PRINT_COMPUTED=""
+if [ "${1:-}" = "--print-computed-depends" ]; then
+  PRINT_COMPUTED=1
+  shift
+fi
+
+# ── THE MATRIX ────────────────────────────────────────────────────────────────
+# One list, deliberately spanning BOTH ends of the supported range, because the
+# two ends fail differently and each hides the other's bug:
+#
+#   OLD end  — the glibc floor. A binary built on a newer host imports symbols the
+#              old runtime lacks; it installs cleanly and dies at exec. This is
+#              also where the .deb's missing `libc6 (>= 2.34)` actually bites.
+#   NEW end  — library conflicts. Bundled copies of libwayland/glib/gstreamer
+#              collide with the host's newer ones (tauri-apps/tauri#15665), which
+#              only shows up on a distro newer than the build machine.
+#
+# Testing only the LTSs in the middle would miss both. Keep both ends when adding.
+#
+#   ubuntu:22.04  glibc 2.35  our support floor
+#   ubuntu:24.04  glibc 2.39  previous LTS, large install base
+#   debian:13     glibc 2.41  current Debian stable
+#   ubuntu:26.04  glibc 2.43  current Ubuntu LTS, and what `ubuntu:latest` resolves to
+#
+# debian:12 (2.36) was dropped: it sits between the two Ubuntu LTSs and exercises
+# nothing they don't.
+UNYT_SMOKE_IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:13 ubuntu:26.04)
+
+# THE MATRIX, READABLE FROM OUTSIDE. release-smoke.yaml runs one job per image
+# and builds that matrix by asking this script, rather than repeating the list in
+# YAML — two copies of it would drift the moment someone adds a distro here and
+# not there, and the drift would be invisible: the workflow would simply stop
+# testing the image nobody remembered to add. Declared once, below; read here.
+# Deliberately before the artifact argument is required, since listing the matrix
+# needs no artifact.
+if [ "${1:-}" = "--print-images" ]; then
+  printf '%s\n' "${UNYT_SMOKE_IMAGES[@]}"
+  exit 0
+fi
+
+ARTIFACT="${1:?usage: run-smoke.sh [--print-computed-depends] <artifact.deb|artifact.AppImage> [image ...]}"
+shift || true
+[ -f "$ARTIFACT" ] || { echo "::error::artifact not found: $ARTIFACT" >&2; exit 1; }
+ARTIFACT="$(cd "$(dirname "$ARTIFACT")" && pwd)/$(basename "$ARTIFACT")"
+
+# The two Linux bundles need different sequences: a .deb declares dependencies
+# that apt must resolve, an AppImage declares nothing and bundles them instead.
+case "$ARTIFACT" in
+  *.deb)      DRIVER=container-checks.sh ;;
+  *.AppImage) DRIVER=container-checks-appimage.sh ;;
+  *) echo "::error::unsupported artifact '$ARTIFACT' (expected .deb or .AppImage)" >&2; exit 1 ;;
+esac
+
+
+IMAGES=("$@")
+[ ${#IMAGES[@]} -gt 0 ] || IMAGES=("${UNYT_SMOKE_IMAGES[@]}")
+
+command -v docker >/dev/null || { echo "::error::docker not found" >&2; exit 1; }
+
+# Regeneration path for expected-deb-depends.txt: install into a throwaway
+# container and print what dpkg-shlibdeps computes, nothing else.
+if [ -n "$PRINT_COMPUTED" ]; then
+  [ "$DRIVER" = container-checks.sh ] || { echo "::error::--print-computed-depends applies to a .deb only" >&2; exit 1; }
+  docker run --rm \
+    -v "$ARTIFACT:/artifact/$(basename "$ARTIFACT"):ro" \
+    -v "$here:/smoke:ro" \
+    "${IMAGES[0]}" bash -c '
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq >/dev/null 2>&1
+      apt-get install -y "/artifact/'"$(basename "$ARTIFACT")"'" >/dev/null 2>&1
+      apt-get install -y -qq binutils dpkg-dev >/dev/null 2>&1
+      pkg=$(dpkg-deb -f "/artifact/'"$(basename "$ARTIFACT")"'" Package)
+      bin=$(dpkg -L "$pkg" | grep -E "^/usr/bin/" | head -1)
+      UNYT_SMOKE_PRINT_COMPUTED=1 bash /smoke/check-deb-depends.sh \
+        "/artifact/'"$(basename "$ARTIFACT")"'" "$bin" 2>/dev/null
+    '
+  exit $?
+fi
+
+overall=0
+declare -a summary
+
+for image in "${IMAGES[@]}"; do
+  echo ""
+  echo "############################################################"
+  echo "# $image"
+  echo "############################################################"
+  # --shm-size: WebKit needs more than Docker's 64MB default or the webview
+  # process dies on start for reasons that look nothing like the real cause.
+  out="$(docker run --rm --shm-size=1g \
+    -v "$ARTIFACT:/artifact/$(basename "$ARTIFACT"):ro" \
+    -v "$here:/smoke:ro" \
+    "$image" bash "/smoke/$DRIVER" "/artifact/$(basename "$ARTIFACT")" 2>&1)"
+  docker_rc=$?
+  echo "$out"
+
+  # container-checks.sh ends with `name|result` lines on stdout.
+  rows=0
+  while IFS='|' read -r name result; do
+    [ -n "${result:-}" ] || continue
+    rows=$((rows + 1))
+    summary+=("$image|$name|$result")
+    [ "$result" = pass ] || overall=1
+  done < <(printf '%s\n' "$out" | grep -E '\|(pass|FAIL)$')
+
+  # A container that never ran reports NOTHING, and a verdict read only from the
+  # rows would then be "no failures" — printing "All checks passed" for an image
+  # that was never pulled, a dead daemon, or an OOM kill. Both guards are needed:
+  # docker's own status, AND at least one result row, since the driver can also
+  # die mid-way after emitting some.
+  if [ "$docker_rc" -ne 0 ] || [ "$rows" -eq 0 ]; then
+    echo "::error::the checks did not complete on $image (docker exit $docker_rc, $rows result rows)" >&2
+    summary+=("$image|CHECKS DID NOT RUN|FAIL")
+    overall=1
+  fi
+done
+
+echo ""
+echo "############################################################"
+echo "# summary"
+echo "############################################################"
+printf '%-14s %-52s %s\n' "IMAGE" "CHECK" "RESULT"
+for row in "${summary[@]}"; do
+  IFS='|' read -r image name result <<<"$row"
+  printf '%-14s %-52s %s\n' "$image" "$name" "$result"
+done
+
+[ "$overall" -eq 0 ] && echo "" && echo "All checks passed."
+exit "$overall"

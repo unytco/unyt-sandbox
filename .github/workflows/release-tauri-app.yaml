@@ -238,6 +238,38 @@ jobs:
           assetNamePattern: ${{
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
+
+  # Install what was just built and prove the app starts — see release-smoke.yaml.
+  # Called directly (not via `workflow_run`, which only fires for workflow files
+  # on the DEFAULT branch and so would silently never run on a release branch),
+  # NON-BLOCKING BY STRUCTURE, not by a flag: this job goes red when a check
+  # fails, and nothing `needs` it, so its failure cannot stop or unpublish the
+  # release that produced the artifacts. Do not add it to another job's `needs`.
+  smoke-test:
+    needs: [publish-happ, release-tauri-app]
+    # `needs` alone SKIPS this job if any matrix row failed, so a Windows build
+    # failure would suppress a perfectly good Linux check. Run whenever the happ
+    # job produced a release id — the Linux artifacts either exist or the
+    # download step says so plainly.
+    # `!cancelled()` rather than `always()`: a cancelled release run should take
+    # the smoke with it instead of starting a 30-minute container sweep nobody
+    # is waiting for.
+    if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' }}
+    uses: ./.github/workflows/release-smoke.yaml
+    with:
+      release: ${{ needs.publish-happ.outputs.releaseId }}
+    # EXPLICIT, NOT `inherit`. This job sits above a build holding the Apple
+    # signing certificate, its password and the Tauri signing private key, and
+    # `secrets: inherit` would pass all of them to a workflow whose entire job is
+    # to download an already-published artifact and run shell scripts against it
+    # inside containers. Nothing in that path needs them, so a report-only
+    # post-release check would have become a signing-secret exposure path — every
+    # smoke script, every container image and every action they pull inside the
+    # blast radius. It needs exactly one secret, the PAT that can see a draft
+    # release, so it gets exactly that one.
+    secrets:
+      GIT_PAT: ${{ secrets.GIT_PAT }}
+
   # release-tauri-android-app:
   #   needs: publish-happ
   #   permissions: write-all
