@@ -157,10 +157,15 @@ jobs:
         with:
           node-version: 20
 
-      - name: install Rust stable
+      - name: install Rust 1.95.0
+        # A hard floor, not a style choice: src-tauri compiles holochain 0.7.0 in,
+        # which needs a toolchain new enough to have `cfg_select!` — an older one
+        # cannot build a release at all. Kept in lockstep with the app's pin and
+        # the nix dev shell; the version reasoning lives once at
+        # unyt/.github/workflows/rust.yaml.
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.89.0
+          toolchain: 1.95.0
 
       - name: install x86_64 target
         if: matrix.config.args == '--target x86_64-apple-darwin'
@@ -337,7 +342,7 @@ jobs:
   #       uses: actions-rs/toolchain@v1
   #       with:
   #         override: true
-  #         toolchain: 1.89.0
+  #         toolchain: 1.95.0
 
   #     - name: install Go stable
   #       uses: actions/setup-go@v4
