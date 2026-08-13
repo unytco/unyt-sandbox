@@ -139,5 +139,40 @@ check "a cold install shows no carry" no \
 check "has_existing_key: true is still a healthy backend state" yes \
   "$P LairReady -> NetworkSetupRequired { agent_key: \"uhCAkAAA\", has_existing_key: true }" smoke_match_backend_ready
 
+# ── N1: the bundle scan must survive a file with no GLIBC_ symbols LAST ──────
+# `[ -n "$v" ] && printf` as the last statement of a loop body makes the whole
+# `while` exit non-zero when the final iteration's test fails; pipefail carries
+# that through the `| sort`, and set -e then kills the script — skipping every
+# check below it, including the ceiling comparison. Which file lands last is
+# `find` order, so the gate was a coin flip per build. Drives the REAL script
+# against a synthetic AppDir whose last .so is data-only.
+if command -v objdump >/dev/null 2>&1 && [ -x "$(command -v ls || true)" ]; then
+  appdir="$(mktemp -d)"
+  mkdir -p "$appdir/usr/bin" "$appdir/usr/lib"
+  # A real dynamically-linked ELF, so the scan has a genuine GLIBC_ version to
+  # find; `command -v true` would resolve the shell builtin, not a file.
+  real_elf="$(command -v ls || true)"
+  cp "$real_elf" "$appdir/usr/bin/app"
+  printf 'not an elf at all' >"$appdir/usr/lib/zzz-data.so.9"   # sorts last
+  if out="$(bash "$here/check-appimage.sh" "$appdir" 2>&1)"; then :; fi
+  if printf '%s' "$out" | grep -q 'glibc ceiling of the bundle'; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "FAIL  the bundle scan aborted before reporting (N1 regression)" >&2
+    printf '      output was: %s\n' "${out:-<empty>}" >&2
+  fi
+  rm -rf "$appdir"
+else
+  echo "SKIP  N1 bundle-scan regression (no objdump)" >&2
+fi
+
 echo "oracle regression: $pass passed, $fail failed"
+# A floor on the COUNT, not just on failures: truncate this file and it would
+# otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
+# container-never-ran bug one level up. Raise it when adding assertions.
+if [ "$pass" -lt 33 ]; then
+  echo "::error::only $pass assertions ran; expected at least 33 — the test file is truncated or a block was skipped" >&2
+  exit 1
+fi
 [ "$fail" -eq 0 ]

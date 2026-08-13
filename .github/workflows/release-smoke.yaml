@@ -49,6 +49,13 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
+      # First, and outside the containers: <1s, no Docker, and it guards the
+      # oracle every other check depends on. Three invocation bugs have shipped
+      # in that oracle, each of which made an assertion incapable of failing — a
+      # regression test nothing runs is a regression test you do not have.
+      - name: Oracle regression test
+        run: bash scripts/smoke/test-oracle.sh
+
       - name: Download the released Linux artifacts
         id: download
         env:

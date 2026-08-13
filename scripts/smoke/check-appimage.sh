@@ -43,14 +43,21 @@ inner="$(find "$APPDIR/usr/bin" -type f -executable 2>/dev/null | head -1)"
 # Every ELF in the bundle, each reduced to the highest GLIBC_ it imports; the
 # bundle's ceiling is the max over all of them.
 elf_list="$(mktemp)"
-trap 'rm -f "$elf_list"' EXIT
+trap 'rm -f "$elf_list" "$elf_list.versions"' EXIT
 { printf '%s\n' "$inner"; find "$APPDIR" -name '*.so*' -type f; } >"$elf_list"
 
 while read -r f; do
   # `|| true`: most files here import no GLIBC_ symbols at all, and under
   # `set -e` + pipefail the empty grep would abort the whole scan silently.
   v="$(objdump -T "$f" 2>/dev/null | grep -oP 'GLIBC_\K[0-9.]+' | sort -Vu | tail -1 || true)"
-  [ -n "$v" ] && printf '%s %s\n' "$v" "$f"
+  # `if`, NOT `[ -n "$v" ] && printf`: as an AND-list the body's exit status is
+  # the test's, so a LAST file with no GLIBC_ symbols made the whole `while`
+  # return 1, pipefail carried it through `| sort`, and `set -e` killed the
+  # script — silently skipping every check below, including the ceiling
+  # comparison this file exists for. Which file lands last is `find` order, so
+  # the gate was a coin flip per build, and it failed with a wrong diagnosis
+  # (looks like "too-new glibc", is actually a data-only .so).
+  if [ -n "$v" ]; then printf '%s %s\n' "$v" "$f"; fi
 done <"$elf_list" | sort -V >"$elf_list.versions"
 
 max_ver="$(awk 'END{print $1}' "$elf_list.versions")"
