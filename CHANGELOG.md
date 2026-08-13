@@ -14,6 +14,9 @@ Application-level changes belong in
 
 ### Added
 
+- **Release pipeline: a post-release install smoke (UNYT-966/967/968).** Installs each shipped artifact in pristine distro containers and asserts the app boots to a healthy state; report-only, and runnable locally with Docker (`scripts/smoke/run-smoke.sh <artifact>`). New `scripts/smoke/`.
+  - **macOS and Windows lanes, static checks only** — signing, notarization, linkage and deployment target per architecture; silent install, Authenticode and imports on Windows. The one check a runner cannot do is documented for hand-running ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)).
+  - **Two findings, both gated red:** the `.deb` declared 2 of its 11 shared libraries (fixed in `unyt/`), and the Windows installers are unsigned, so users meet a SmartScreen "unknown publisher" block.
 - **Release pipeline: tag-derived release kinds + `.happ` inheritance (release-patterns UNYT-948).** `vM.m.0` builds the DNA; `vM.m.p` inherits it and repacks only the UI.
 - **Release pipeline: a version contract (release-patterns UNYT-946).** `unyt/src-tauri/Cargo.toml` is the single source of truth for the version; a pushed tag or a `tauri.conf.json` that disagrees fails the release before any artifact is built (new `scripts/check-version-contract.sh`). The shipped app build now receives `VITE_MIGRATION_SERVICE_URL` (the update router the app polls), with a guard step that fails an empty value — no more installers that can never check for updates.
 
