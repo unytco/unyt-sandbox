@@ -81,6 +81,14 @@ UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_CARRIED_IDENTITY='identity: agent identity carried forward'
 
+# The POSITIVE counterpart, logged on the cold path
+# (identity.rs: `latest_prior_holochain_dir` finds nothing). Required alongside
+# the absence above, because "the carry line is absent" is also satisfied by a
+# boot that never reached the identity check at all — an absence-only assertion
+# cannot tell "clean install" from "never ran".
+# shellcheck disable=SC2034  # read by the scripts that source this file
+UNYT_RE_FRESH_IDENTITY='identity: no prior data-root identity; using a fresh identity'
+
 # The webview breadcrumb (unyt/src-tauri/src/runtime/events.rs `ui_ready`),
 # emitted from the frontend's first mount. Required whenever the artifact carries
 # it — see smoke_supports_ui_ready.
@@ -92,8 +100,14 @@ UNYT_RE_UI_READY='UI ready: webview mounted the root element'
 # no version parsing, and nothing to keep in sync with a release schedule.
 # Artifacts predating the breadcrumb (v0.100.0 and earlier) stay smokeable; newer
 # ones cannot quietly lose their only webview proof.
+# Fails CLOSED on a bad path: an unreadable or missing probe is a broken check,
+# not evidence that the artifact predates the breadcrumb, and the two must not be
+# indistinguishable. Returns 2 for "cannot tell", which the caller treats as an
+# error rather than a skip.
 smoke_supports_ui_ready() {
-  grep -qaF "$UNYT_RE_UI_READY" "${1:?binary path required}" 2>/dev/null
+  local probe="${1:?binary path required}"
+  [ -f "$probe" ] && [ -r "$probe" ] || return 2
+  grep -qaF -e "$UNYT_RE_UI_READY" "$probe"
 }
 
 # ── the matchers ─────────────────────────────────────────────────────────────
@@ -112,9 +126,66 @@ smoke_match_backend_ready(){ grep -qE -e "$UNYT_RE_BACKEND_READY"; }
 smoke_first_backend_ready(){ grep -oE -e "($UNYT_RE_BACKEND_READY).*" | head -1; }
 smoke_match_ui_ready()     { grep -qF -e "$UNYT_RE_UI_READY"; }
 smoke_match_carried()      { grep -qF -e "$UNYT_RE_CARRIED_IDENTITY"; }
+smoke_match_fresh()        { grep -qF -e "$UNYT_RE_FRESH_IDENTITY"; }
 smoke_match_failed()       { grep -qE -e "$UNYT_RE_FAILED"; }
 smoke_first_failures()     { grep -oE -e "($UNYT_RE_FAILED).*" | head -3; }
 smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
+
+# ── dependency comparison ────────────────────────────────────────────────────
+# Compare a COMPUTED dependency list against what the package DECLARES, and emit
+# one finding per line: `MISSING <dep>`, `UNCONSTRAINED <dep>`, or
+# `TOOLOW <dep> declared <constraint>`.
+#
+# Args: <declared-file> <computed-file>, one `name (op ver)` per line.
+#
+# Lives here, and takes files rather than doing its own extraction, so
+# test-oracle.sh drives the REAL comparison against fixtures — the same reason
+# the matchers live here. Both bugs this replaced were invisible to reading:
+#   - package names were interpolated into an ERE, where `c++` is a quantifier,
+#     so a correctly-declared `libstdc++6` was reported MISSING. Parsing is now
+#     pure string splitting, with no pattern anywhere.
+#   - only a BARE declaration counted as under-declared, so declaring
+#     `libc6 (>= 2.17)` against a computed `(>= 2.34)` passed — leaving exactly
+#     the too-old-glibc install this gate exists to prevent. The declared floor
+#     must now COVER the computed one.
+smoke_depends_gaps() {
+  local declared_file="${1:?declared file required}" computed_file="${2:?computed file required}"
+  local dep name constraint dver cline cname cconstraint found
+  while read -r dep; do
+    [ -n "$dep" ] || continue
+    name="${dep%% *}"
+    # `libc6 (>= 2.34)` -> constraint `>= 2.34`; no parens -> empty.
+    constraint=""
+    case "$dep" in *\ \(*\)) constraint="${dep#*\(}"; constraint="${constraint%\)}" ;; esac
+
+    found=""
+    while read -r cline; do
+      [ -n "$cline" ] || continue
+      cname="${cline%% *}"
+      [ "$cname" = "$name" ] || continue
+      found="$cline"
+      cconstraint=""
+      case "$cline" in *\ \(*\)) cconstraint="${cline#*\(}"; cconstraint="${cconstraint%\)}" ;; esac
+      break
+    done <"$declared_file"
+
+    if [ -z "$found" ]; then
+      printf 'MISSING %s
+' "$dep"
+    elif [ -n "$constraint" ] && [ -z "$cconstraint" ]; then
+      printf 'UNCONSTRAINED %s
+' "$dep"
+    elif [ -n "$constraint" ]; then
+      # Compare only the versions; the operators are `>=` in practice, and a
+      # declared floor below the computed one is the defect either way.
+      dver="${constraint##* }"
+      if ! dpkg --compare-versions "${cconstraint##* }" ge "$dver" 2>/dev/null; then
+        printf 'TOOLOW %s declared (%s)
+' "$dep" "$cconstraint"
+      fi
+    fi
+  done <"$computed_file"
+}
 
 # The app's rolling log dir inside a smoke sandbox ($1 = sandbox root; the smoke
 # scripts point XDG_DATA_HOME at <sandbox>/data). Files are named

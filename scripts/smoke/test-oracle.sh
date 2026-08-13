@@ -139,6 +139,41 @@ check "a cold install shows no carry" no \
 check "has_existing_key: true is still a healthy backend state" yes \
   "$P LairReady -> NetworkSetupRequired { agent_key: \"uhCAkAAA\", has_existing_key: true }" smoke_match_backend_ready
 
+# ── N11: cold install proven positively, not only by an absence ──────────────
+check "the fresh-identity line is detected" yes \
+  '2026-08-12T20:00:00.000000Z  INFO unyt::runtime: identity: no prior data-root identity; using a fresh identity' smoke_match_fresh
+check "a carried boot is not a fresh identity" no \
+  '2026-08-12T20:00:00.000000Z  INFO unyt::runtime: identity: agent identity carried forward into the new version' smoke_match_fresh
+check "a boot that never ran the identity check is not fresh" no \
+  "$P Starting -> LairAwaitingPassword { is_initial_setup: true }" smoke_match_fresh
+
+# ── N3/N4: the declared-vs-computed comparison ───────────────────────────────
+# Both bugs were invisible to reading and are pinned here against the REAL
+# function: a declared floor BELOW the computed one used to pass silently, and a
+# correctly-declared libstdc++6 used to be reported missing because `c++` is an
+# ERE quantifier.
+dep_d="$(mktemp)"; dep_c="$(mktemp)"
+printf 'libc6 (>= 2.17)\nlibstdc++6\nlibgtk-3-0\nlibsoup-3.0-0 (>= 3.0.3)\nlibpango-1.0-0 (>= 1.14.0)\n' >"$dep_d"
+printf 'libc6 (>= 2.34)\nlibstdc++6 (>= 4.1.1)\nlibglib2.0-0 (>= 2.65.1)\nlibsoup-3.0-0 (>= 3.0.3)\nlibpango-1.0-0 (>= 1.10.0)\n' >"$dep_c"
+gaps="$(smoke_depends_gaps "$dep_d" "$dep_c")"
+expect_gap() {
+  if printf '%s\n' "$gaps" | grep -qF -e "$1"; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); printf 'FAIL  %-58s not reported\n' "$2" >&2
+    printf '      gaps were:\n%s\n' "$gaps" >&2; fi
+}
+reject_gap() {
+  if printf '%s\n' "$gaps" | grep -qF -e "$1"; then
+    fail=$((fail + 1)); printf 'FAIL  %-58s wrongly reported\n' "$2" >&2
+  else pass=$((pass + 1)); fi
+}
+expect_gap "TOOLOW libc6 (>= 2.34) declared (>= 2.17)" "a declared floor below the computed one"
+expect_gap "UNCONSTRAINED libstdc++6 (>= 4.1.1)"       "a bare declaration where a floor is required"
+expect_gap "MISSING libglib2.0-0 (>= 2.65.1)"          "a genuinely absent dependency"
+reject_gap "MISSING libstdc++6"                        "libstdc++6 (the c++ ERE-quantifier bug)"
+reject_gap "libsoup-3.0-0"                             "an exactly-matching dependency"
+reject_gap "libpango-1.0-0"                            "a declared floor ABOVE the computed one"
+rm -f "$dep_d" "$dep_c"
+
 # ── N1: the bundle scan must survive a file with no GLIBC_ symbols LAST ──────
 # `[ -n "$v" ] && printf` as the last statement of a loop body makes the whole
 # `while` exit non-zero when the final iteration's test fails; pipefail carries
@@ -171,8 +206,8 @@ echo "oracle regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 33 ]; then
-  echo "::error::only $pass assertions ran; expected at least 33 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 42 ]; then
+  echo "::error::only $pass assertions ran; expected at least 42 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

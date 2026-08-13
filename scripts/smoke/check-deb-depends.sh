@@ -5,7 +5,7 @@
 #
 # Two comparisons, reported separately because they mean different things:
 #
-#   A. COMPUTED vs EXPECTED (expected-deb-depends.txt) — fails on any change.
+#   A. COMPUTED vs EXPECTED (expected-deb-depends.<distro>-<ver>.txt, per image)
 #      This is the review gate: what the binary links against is allowed to
 #      change, but a human has to acknowledge it by editing that file.
 #
@@ -42,6 +42,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=common.sh
+. "$here/common.sh"
 DEB="${1:?usage: check-deb-depends.sh <artifact.deb> <installed-binary>}"
 BIN="${2:?installed binary path required}"
 # D1: dpkg-shlibdeps resolves a soname to whatever package owns it ON THIS IMAGE,
@@ -50,7 +52,9 @@ BIN="${2:?installed binary path required}"
 # shared expectation would therefore be red on every image but the one it was
 # captured on, and a permanently-red check is one nobody reads. So the
 # expectation is per-image, keyed on the distro's own ID+VERSION_ID.
-image_id="$( . /etc/os-release && printf '%s-%s' "$ID" "$VERSION_ID" )"
+# `set -u` would abort the whole check on an image with no VERSION_ID (Debian
+# testing/sid), so default it rather than letting an unbound variable kill the gate.
+image_id="$( . /etc/os-release && printf '%s-%s' "${ID:-unknown}" "${VERSION_ID:-rolling}" )"
 EXPECTED="$here/expected-deb-depends.$image_id.txt"
 
 for tool in dpkg-shlibdeps dpkg-deb; do
@@ -123,8 +127,12 @@ status=0
 
 # A. drift against the committed expectation for THIS image
 if [ ! -f "$EXPECTED" ]; then
-  echo "::warning::no expectation recorded for $image_id ($(basename "$EXPECTED")) — recording drift is skipped on this image" >&2
-  echo "  Capture it with: scripts/smoke/run-smoke.sh --print-computed-depends <deb> $image_id" >&2
+  # FAIL rather than warn: the matrix named this image, so an absent expectation
+  # means check A silently does not run there — a gate that skips itself on the
+  # image you just added is the failure mode this whole file exists to avoid.
+  echo "::error::no expectation recorded for $image_id ($(basename "$EXPECTED")) — check A cannot run" >&2
+  echo "  Capture it with: scripts/smoke/run-smoke.sh --print-computed-depends <artifact.deb> $image_id" >&2
+  status=1
 else
 expected="$(grep -v '^[[:space:]]*#' "$EXPECTED" | normalize)"
 if ! drift="$(diff <(printf '%s\n' "$expected") <(printf '%s\n' "$computed"))"; then
@@ -136,43 +144,35 @@ else
 fi
 fi
 
-# B. under-declaration: every computed entry must be covered by a declared one.
-# Compared on PACKAGE NAME, because the declared list carries no version
-# constraints at all — reporting each name once is the actionable form.
-missing=""
-unconstrained=""
-while read -r dep; do
-  [ -n "$dep" ] || continue
-  name="${dep%% *}"
-  # D3: package names go in as DATA, not as a regex. `.` matched the wrong name
-  # and `c++` is a quantifier, so a correctly-declared libstdc++6 read as missing.
-  declared_entry="$(printf '%s\n' "$declared" | grep -F -e "$name" | grep -Ex -e "$name( \(.*\))?" | head -1 || true)"
-  if [ -z "$declared_entry" ]; then
-    missing="$missing$dep"$'\n'
-  elif [ "$dep" != "$name" ] && [ "$declared_entry" = "$name" ]; then
-    # D2: the motivating defect IS a missing version floor. Declaring a bare
-    # `libc6` while the binary needs `libc6 (>= 2.34)` would otherwise satisfy
-    # this check and leave the package installable on a too-old glibc.
-    unconstrained="$unconstrained$dep (declared without a version constraint)"$'\n'
-  fi
-done <<<"$computed"
+# B. under-declaration, via the shared comparison (see common.sh) so the
+# regression test drives this exact code rather than a copy of it.
+declared_f="$work/declared.txt"; printf '%s\n' "$declared" >"$declared_f"
+computed_f="$work/computed.txt"; printf '%s\n' "$computed" >"$computed_f"
+gaps="$(smoke_depends_gaps "$declared_f" "$computed_f")"
 
-if [ -n "$missing" ] || [ -n "$unconstrained" ]; then
+if [ -n "$gaps" ]; then
   echo "::error::the package UNDER-DECLARES its dependencies:" >&2
-  [ -n "$missing" ] && {
-    echo "  absent from Depends: ($(printf '%s' "$missing" | grep -c .))" >&2
-    printf '%s' "$missing" | sed 's/^/    /' >&2
-  }
-  [ -n "$unconstrained" ] && {
-    echo "  declared but WITHOUT the required version floor ($(printf '%s' "$unconstrained" | grep -c .)):" >&2
-    printf '%s' "$unconstrained" | sed 's/^/    /' >&2
-  }
+  n_missing="$(printf '%s\n' "$gaps" | grep -c '^MISSING ' || true)"
+  n_unconstrained="$(printf '%s\n' "$gaps" | grep -c '^UNCONSTRAINED ' || true)"
+  n_toolow="$(printf '%s\n' "$gaps" | grep -c '^TOOLOW ' || true)"
+  if [ "$n_missing" != 0 ]; then
+    echo "  absent from Depends: ($n_missing)" >&2
+    printf '%s\n' "$gaps" | sed -n 's/^MISSING /    /p' >&2
+  fi
+  if [ "$n_unconstrained" != 0 ]; then
+    echo "  declared WITHOUT the required version floor ($n_unconstrained):" >&2
+    printf '%s\n' "$gaps" | sed -n 's/^UNCONSTRAINED /    /p' >&2
+  fi
+  if [ "$n_toolow" != 0 ]; then
+    echo "  declared with a floor BELOW what the binary needs ($n_toolow):" >&2
+    printf '%s\n' "$gaps" | sed -n 's/^TOOLOW /    /p' >&2
+  fi
   echo "" >&2
-  echo "  Fix: add them to bundle.linux.deb.depends in unyt/src-tauri/tauri.conf.json." >&2
+  echo "  Fix: add or raise them in bundle.linux.deb.depends in unyt/src-tauri/tauri.conf.json." >&2
   echo "  tauri-bundler writes that list verbatim and never computes one." >&2
   status=1
 else
-  echo "OK: every computed dependency is declared" >&2
+  echo "OK: every computed dependency is declared, with a covering version floor" >&2
 fi
 
 exit "$status"

@@ -161,7 +161,14 @@ echo "OK: reached a healthy backend state -> ${reached}" >&2
 # black-window release passes. Skipped only for an artifact that cannot emit the
 # breadcrumb at all (v0.100.0 and earlier), which keeps old artifacts smokeable
 # without letting a new one quietly lose its only webview proof.
-if smoke_supports_ui_ready "$UI_READY_PROBE"; then
+ui_probe_rc=0
+smoke_supports_ui_ready "$UI_READY_PROBE" || ui_probe_rc=$?
+if [ "$ui_probe_rc" = 2 ]; then
+  echo "::error::cannot read the ui_ready probe at '$UI_READY_PROBE', so whether the webview" >&2
+  echo "  gate applies is unknown — refusing to skip it silently." >&2
+  exit 1
+fi
+if [ "$ui_probe_rc" = 0 ]; then
   ui_deadline=$(( $(date +%s) + 120 ))
   ui_ok=""
   while [ "$(date +%s)" -lt "$ui_deadline" ]; do
@@ -178,7 +185,9 @@ if smoke_supports_ui_ready "$UI_READY_PROBE"; then
   fi
   echo "OK: the webview mounted the root element" >&2
 else
-  echo "NOTE: this artifact predates the ui_ready breadcrumb — webview paint NOT verified" >&2
+  # ::warning:: not a plain note: a skipped webview gate must be visible on the
+  # run page, since app-side drift in the log message would land here silently.
+  echo "::warning::this artifact predates the ui_ready breadcrumb — webview paint NOT verified" >&2
 fi
 
 # ── 1c. this was a COLD install ───────────────────────────────────────────────
@@ -192,7 +201,16 @@ if smoke_all_logs "$SANDBOX" | smoke_match_carried; then
   dump_logs
   exit 1
 fi
-echo "OK: cold install (no prior identity carried forward)" >&2
+# Positive counterpart, not just the absence: the identity check must have RUN
+# and found nothing. Absence alone is equally satisfied by a boot that never got
+# that far, which is the one thing this assertion must not confuse with clean.
+if ! smoke_all_logs "$SANDBOX" | smoke_match_fresh; then
+  echo "::error::the boot never reported a fresh identity, so this run cannot claim to be a" >&2
+  echo "  cold install — the identity check did not run, or its log line changed." >&2
+  dump_logs
+  exit 1
+fi
+echo "OK: cold install (fresh identity, nothing carried forward)" >&2
 
 # ── 2. stays up ───────────────────────────────────────────────────────────────
 # Bounded by construction (a fixed window, never "wait until healthy again"), so

@@ -242,19 +242,22 @@ jobs:
   # Install what was just built and prove the app starts — see release-smoke.yaml.
   # Called directly (not via `workflow_run`, which only fires for workflow files
   # on the DEFAULT branch and so would silently never run on a release branch),
-  # and report-only: the smoke job goes RED on a failure but nothing depends on
-  # it, so it never blocks or unpublishes the release that produced the artifacts.
+  # NON-BLOCKING BY STRUCTURE, not by a flag: this job goes red when a check
+  # fails, and nothing `needs` it, so its failure cannot stop or unpublish the
+  # release that produced the artifacts. Do not add it to another job's `needs`.
   smoke-test:
     needs: [publish-happ, release-tauri-app]
     # `needs` alone SKIPS this job if any matrix row failed, so a Windows build
     # failure would suppress a perfectly good Linux check. Run whenever the happ
     # job produced a release id — the Linux artifacts either exist or the
     # download step says so plainly.
-    if: ${{ always() && needs.publish-happ.outputs.releaseId != '' }}
+    # `!cancelled()` rather than `always()`: a cancelled release run should take
+    # the smoke with it instead of starting a 30-minute container sweep nobody
+    # is waiting for.
+    if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' }}
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}
-      report_only: true
     secrets: inherit
 
   # release-tauri-android-app:
