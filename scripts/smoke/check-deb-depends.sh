@@ -31,6 +31,14 @@
 #
 # The fix when B fails is additive: add the missing entries to
 # `bundle.linux.deb.depends` in unyt/src-tauri/tauri.conf.json.
+#
+# ON lintian — CONSIDERED, NOT USED. Its `missing-dependency-on-libc` tag asks a
+# subset of what check B already answers, and answers it less precisely: this
+# gate is per-image (so it survives Ubuntu's libgtk-3-0 -> libgtk-3-0t64 rename)
+# and it enforces the VERSION FLOOR, which lintian does not — the floor is the
+# half that actually matters, since a bare `libc6` still lets the package install
+# on a too-old glibc. Adding lintian for one redundant tag would buy nothing and
+# cost a dependency, so don't.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
