@@ -160,7 +160,18 @@ jobs:
       # check-macos.sh itself against stubbed tools, so a check that stopped
       # being able to go red is caught here rather than by nobody.
       - name: Can each check still fail?
-        run: bash scripts/smoke/test-macos-checks.sh
+        run: |
+          # The tally line is the PROOF the harness ran to the end. Asserted here
+          # as well as inside the script, because the failure being guarded
+          # against is the script not running its own guard: a truncated or
+          # replaced file exits 0 with no output, and a step that only checks
+          # the exit status would call that "every check is proven able to fail".
+          set -o pipefail
+          bash scripts/smoke/test-macos-checks.sh 2>&1 | tee "$RUNNER_TEMP/macos-oracle.log"
+          grep -q 'macos check regression:' "$RUNNER_TEMP/macos-oracle.log" || {
+            echo "::error::the macOS check-regression test printed no tally — it did not run to completion"
+            exit 1
+          }
 
       - name: Download the released macOS artifact
         id: download
@@ -244,7 +255,18 @@ jobs:
       # As on macOS: prove the checks can still fail before running any of them.
       - name: Can each check still fail?
         shell: pwsh
-        run: pwsh -NoProfile -File scripts/smoke/test-windows-checks.ps1
+        run: |
+          # Same reasoning as the macOS lane: the tally line is the proof the
+          # harness reached its end, and a step checking only the exit status
+          # would read a truncated or replaced file as a clean pass.
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:RUNNER_TEMP 'windows-oracle.log'
+          & pwsh -NoProfile -File scripts/smoke/test-windows-checks.ps1 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -LiteralPath $log -Pattern 'windows check regression:' -Quiet)) {
+            "::error::the Windows check-regression test printed no tally — it did not run to completion"
+            exit 1
+          }
 
       - name: Download the released Windows artifacts
         id: download

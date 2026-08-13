@@ -150,11 +150,18 @@ function Get-ImportedDll {
     default { throw "unknown PE optional header magic 0x$('{0:X}' -f $magic): $Path" }
   }
 
+  # EVERY FAILURE PATH BELOW THROWS. A parser that gives up quietly returns an
+  # empty import list, and an empty import list is indistinguishable from a
+  # binary that imports nothing — so a truncated file, an RVA that maps nowhere,
+  # or an unreadable name would each turn "could not read this" into "nothing to
+  # find here", which is a pass. No real native PE imports nothing.
   $sections = @()
   $secOffset = $optOffset + $sizeOfOptional
   for ($i = 0; $i -lt $numberOfSections; $i++) {
     $s = $secOffset + ($i * 40)
-    if (($s + 40) -gt $bytes.Length) { break }
+    if (($s + 40) -gt $bytes.Length) {
+      throw "section table is truncated at section $i of ${numberOfSections}: $Path"
+    }
     $sections += [PSCustomObject]@{
       VirtualSize    = [BitConverter]::ToUInt32($bytes, $s + 8)
       VirtualAddress = [BitConverter]::ToUInt32($bytes, $s + 12)
@@ -178,10 +185,17 @@ function Get-ImportedDll {
   }
   function Read-AsciiAt {
     param([int]$Offset)
-    if ($Offset -lt 0 -or $Offset -ge $bytes.Length) { return $null }
+    if ($Offset -lt 0 -or $Offset -ge $bytes.Length) {
+      throw "a DLL name points outside the file (offset $Offset): $Path"
+    }
     $end = $Offset
     while ($end -lt $bytes.Length -and $bytes[$end] -ne 0) { $end++ }
-    return [System.Text.Encoding]::ASCII.GetString($bytes, $Offset, $end - $Offset)
+    $s = [System.Text.Encoding]::ASCII.GetString($bytes, $Offset, $end - $Offset)
+    # An empty name is not a name. Dropping it silently would lose exactly one
+    # DLL from the sweep, and losing the single unsatisfied one turns the finding
+    # into a pass.
+    if (-not $s) { throw "an empty DLL name at offset ${Offset}: $Path" }
+    return $s
   }
 
   $names = [System.Collections.Generic.List[string]]::new()
@@ -191,11 +205,11 @@ function Get-ImportedDll {
   $importRva = [BitConverter]::ToUInt32($bytes, $dirOffset + 8)
   if ($importRva -ne 0) {
     $p = Convert-RvaToOffset -Rva $importRva
-    while ($p -ge 0 -and ($p + 20) -le $bytes.Length) {
+    if ($p -lt 0) { throw "the import directory RVA $importRva maps into no section: $Path" }
+    while (($p + 20) -le $bytes.Length) {
       $nameRva = [BitConverter]::ToUInt32($bytes, $p + 12)
       if ($nameRva -eq 0) { break }
-      $n = Read-AsciiAt -Offset (Convert-RvaToOffset -Rva $nameRva)
-      if ($n) { $names.Add($n) }
+      $names.Add((Read-AsciiAt -Offset (Convert-RvaToOffset -Rva $nameRva)))
       $p += 20
     }
   }
@@ -208,7 +222,8 @@ function Get-ImportedDll {
   $delayRva = [BitConverter]::ToUInt32($bytes, $dirOffset + (13 * 8))
   if ($delayRva -ne 0) {
     $p = Convert-RvaToOffset -Rva $delayRva
-    while ($p -ge 0 -and ($p + 32) -le $bytes.Length) {
+    if ($p -lt 0) { throw "the delay-load directory RVA $delayRva maps into no section: $Path" }
+    while (($p + 32) -le $bytes.Length) {
       $attrs = [BitConverter]::ToUInt32($bytes, $p)
       $nameField = [BitConverter]::ToUInt32($bytes, $p + 4)
       if ($nameField -eq 0) { break }
@@ -219,11 +234,11 @@ function Get-ImportedDll {
         # The old format's field is a virtual address, so it cannot be below the
         # image base. It is a 32-bit field, which is why the format only ever
         # appears in 32-bit images — refuse to guess rather than compute a
-        # nonsense RVA and report whatever string happens to live there.
-        break
+        # nonsense RVA and report whatever string happens to live there. A throw,
+        # not a break: giving up here silently drops every remaining delay import.
+        throw "a delay-load descriptor's name field ($nameField) is below the image base ($imageBase): $Path"
       }
-      $n = Read-AsciiAt -Offset (Convert-RvaToOffset -Rva $nameRva)
-      if ($n) { $names.Add($n) }
+      $names.Add((Read-AsciiAt -Offset (Convert-RvaToOffset -Rva $nameRva)))
       $p += 32
     }
   }
@@ -265,6 +280,41 @@ function Get-UnsatisfiedImport {
   }
   # Unary comma — see Get-ImportedDll: an empty result must stay a collection.
   return , @($unsatisfied | Sort-Object -Unique)
+}
+
+# The verdict on a whole import sweep, guards included.
+#
+# THE ZERO GUARD BELONGS HERE, ON THE POPULATION THE CHECK ACTUALLY INSPECTS.
+# Counting binaries answers "was there anything to scan"; it does not answer
+# "did we read any imports out of them". Zero imports across a set of native
+# binaries is a parser failure, never a clean result — no real native PE imports
+# nothing — and without this the sweep reports "every import either shipped or
+# guaranteed by Windows" having examined none.
+function Get-ImportSweepVerdict {
+  param(
+    [string[]]$Binaries = @(),
+    [string[]]$Imports = @(),
+    [string[]]$Unsatisfied = @()
+  )
+  if ($Binaries.Count -eq 0) {
+    return [PSCustomObject]@{ Ok = $false; Message = 'no .exe or .dll found under the install directory — nothing was scanned' }
+  }
+  if ($Imports.Count -eq 0) {
+    return [PSCustomObject]@{
+      Ok      = $false
+      Message = "$($Binaries.Count) binaries yielded ZERO imports between them — a native PE always imports something, so this is a failed parse, not a clean result"
+    }
+  }
+  if ($Unsatisfied.Count -gt 0) {
+    return [PSCustomObject]@{
+      Ok      = $false
+      Message = "$($Unsatisfied.Count) DLL(s) required from the machine that Windows does not ship"
+    }
+  }
+  return [PSCustomObject]@{
+    Ok      = $true
+    Message = "$($Binaries.Count) binaries, $($Imports.Count) imports, every one either shipped or guaranteed by Windows"
+  }
 }
 
 # Is an unsatisfied import the Visual C++ redistributable? Worth naming on its
@@ -644,25 +694,24 @@ Invoke-Check 'the installer is Authenticode-signed and trusted' {
 Invoke-Check 'imports nothing the machine is not guaranteed to have' {
   if (-not $script:InstallDir) { Write-Note '::error::no install directory, so nothing was scanned'; return $false }
   $binaries = @(Get-ChildItem -LiteralPath $script:InstallDir -Recurse -Include '*.exe', '*.dll' -ErrorAction SilentlyContinue)
-  if ($binaries.Count -eq 0) {
-    # An empty sweep finds no violations. That must not read the same as a clean
-    # one — it is the shape in which this check quietly stops checking.
-    Write-Note '::error::no .exe or .dll found under the install directory — nothing was scanned'
-    return $false
-  }
-  $shipped = $binaries | ForEach-Object { $_.Name }
+  $shipped = @($binaries | ForEach-Object { $_.Name })
   $all = [System.Collections.Generic.List[string]]::new()
   foreach ($b in $binaries) {
-    $imports = Get-ImportedDll -Path $b.FullName
+    # NOT wrapped in a try: a file that cannot be parsed is a failed sweep, and
+    # Get-ImportedDll throws rather than returning empty precisely so that it
+    # cannot be mistaken for a binary with no imports. Invoke-Check records the
+    # throw as a FAIL.
+    $imports = @(Get-ImportedDll -Path $b.FullName)
     Write-Note "  $($b.Name): $($imports.Count) imports"
     foreach ($i in $imports) { $all.Add($i) }
   }
-  $missing = Get-UnsatisfiedImport -Imports $all -ShippedFiles $shipped
-  if ($missing.Count -eq 0) {
-    Write-Note "OK: $($binaries.Count) binaries, every import either shipped or guaranteed by Windows"
+  $missing = @(Get-UnsatisfiedImport -Imports $all -ShippedFiles $shipped)
+  $verdict = Get-ImportSweepVerdict -Binaries $shipped -Imports $all -Unsatisfied $missing
+  if ($verdict.Ok) {
+    Write-Note "OK: $($verdict.Message)"
     return $true
   }
-  Write-Note "::error::$($missing.Count) DLL(s) required from the machine that Windows does not ship:"
+  Write-Note "::error::$($verdict.Message)"
   foreach ($m in $missing) { Write-Note "  $m" }
   if (@($missing | Where-Object { Test-IsVcRuntime -Dll $_ }).Count -gt 0) {
     Write-Note '  This is the Visual C++ redistributable. Windows does not include it; it is on most'

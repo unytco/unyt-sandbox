@@ -35,7 +35,25 @@ fail=0
 note() { printf '      %s\n' "$1" >&2; }
 
 ROOT="$(mktemp -d)"
-trap 'rm -rf "$ROOT"' EXIT INT TERM
+
+# THIS FILE'S OWN ZERO GUARD. Everything below only runs if control reaches the
+# tally at the end, and `set -uo pipefail` has no `-e` — so a truncated file, an
+# injected `exit 0`, or an early return produces NO OUTPUT AND STATUS 0, which
+# reads as "every check is proven able to fail" while nothing was proven at all.
+# The same shape as the bugs this file exists to catch, one level up.
+COMPLETED=""
+# shellcheck disable=SC2317  # invoked through the EXIT trap
+finish() {
+  local rc=$?
+  rm -rf "$ROOT"
+  if [ -z "$COMPLETED" ]; then
+    echo "::error::the regression test exited before completing (status $rc) — a truncated file," >&2
+    echo "  an early exit, or a killed run. NOTHING below was proven; do not read this as a pass." >&2
+    exit 1
+  fi
+  exit "$rc"
+}
+trap finish EXIT INT TERM
 
 # ── the real thing, captured ──────────────────────────────────────────────────
 # Verbatim `otool` output from the v0.100.0 release artifacts, which is what
@@ -124,8 +142,15 @@ printf '%s\n' "$val"
 EOF
 
   # Per-file canned output, written by the scenario next to the fixture.
+  # STUB_BREAK=otool_dead is the TOOL failing rather than the artifact being bad:
+  # it prints its complaint to stderr (which the script's 2>/dev/null swallows)
+  # and exits non-zero, which is what a stale xcode-select path actually does.
   cat >"$bin/otool" <<'EOF'
 #!/usr/bin/env bash
+if [ "${STUB_BREAK:-}" = otool_dead ]; then
+  echo "xcrun: error: unable to find utility \"otool\", not a developer tool or in PATH" >&2
+  exit 72
+fi
 mode="$1"; shift
 f="$1"
 case "$mode" in
@@ -524,6 +549,23 @@ expect_rc nonzero "a sort without -V stops the run instead of reporting"
 if grep -q 'does not do version ordering' "$ERR"; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  a sort without -V was not diagnosed" >&2; fi
 
+# ── the TOOL failing, not the artifact ────────────────────────────────────────
+# The scenarios above all break the ARTIFACT. This one breaks otool itself, and
+# it is a distinct hole: the artifact is perfect and genuinely links
+# /opt/homebrew, but with otool silent and non-zero the sweep reads zero paths,
+# finds no violations, and reports green. The guard has to sit on the population
+# actually inspected — the load paths — not on the files iterated over.
+mutate_homebrew_real() {
+  printf '%s\n\t/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n' \
+    "$OTOOL_L_CLEAN" >"$1/otool/libunyt.dylib.L"
+}
+FIX_MUTATE=mutate_homebrew_real run_scenario break-otool-dead STUB_BREAK=otool_dead
+expect_row "no build-machine library paths in any Mach-O" FAIL \
+  "otool exits non-zero silently: a violating bundle must NOT read as clean"
+expect_rc nonzero "a dead otool goes red"
+if grep -q 'broken otool' "$ERR"; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  a dead otool was not diagnosed as a tool failure" >&2; fi
+
 # ── an empty scan is not a clean scan ─────────────────────────────────────────
 # A bundle with no Mach-O in it at all — a husk, or an extraction that produced
 # one. Three checks sweep "every Mach-O", and a sweep over nothing finds no
@@ -550,12 +592,13 @@ else
   grep 'Mach-O file' "$ROOT/baseline-x86/stderr.log" >&2 || true
 fi
 
+COMPLETED=1
 echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 125 ]; then
-  echo "::error::only $pass assertions ran; expected at least 125 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 128 ]; then
+  echo "::error::only $pass assertions ran; expected at least 128 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

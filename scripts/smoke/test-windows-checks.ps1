@@ -37,6 +37,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $script:Pass = 0
 $script:Fail = 0
+$script:Completed = $false
 function Assert-That {
   param([Parameter(Mandatory)][string]$What, [Parameter(Mandatory)][AllowNull()][object]$Got, [AllowNull()][object]$Want)
   $g = if ($null -eq $Got) { '<null>' } else { ($Got -join ',') }
@@ -180,6 +181,58 @@ try {
   $threw = $false
   try { Get-ImportedDll -Path (Join-Path $root 'trunc.exe') | Out-Null } catch { $threw = $true }
   Assert-True 'a truncated PE throws' $threw
+
+  # ── the parser REFUSES to give up quietly ───────────────────────────────────
+  # Every one of these used to return an empty list, and an empty list is
+  # indistinguishable from a binary that imports nothing — so "could not read
+  # this" became "nothing to find here", which is a pass. Each must throw.
+  $bad = Join-Path $root 'badrva.exe'
+  [System.IO.File]::Copy($pe64, $bad, $true)
+  $b = [System.IO.File]::ReadAllBytes($bad)
+  # Point the import directory at an RVA no section covers.
+  [BitConverter]::GetBytes([uint32]0x7F000000).CopyTo($b, 0x80 + 24 + 112 + 8)
+  [System.IO.File]::WriteAllBytes($bad, $b)
+  $threw = $false
+  try { Get-ImportedDll -Path $bad | Out-Null } catch { $threw = $true }
+  Assert-True 'an import RVA mapping into no section throws' $threw
+
+  $bad2 = Join-Path $root 'badsections.exe'
+  [System.IO.File]::Copy($pe64, $bad2, $true)
+  $b2 = [System.IO.File]::ReadAllBytes($bad2)
+  # Claim more sections than the file can hold.
+  [BitConverter]::GetBytes([uint16]40).CopyTo($b2, 0x80 + 6)
+  [System.IO.File]::WriteAllBytes($bad2, $b2)
+  $threw = $false
+  try { Get-ImportedDll -Path $bad2 | Out-Null } catch { $threw = $true }
+  Assert-True 'a truncated section table throws' $threw
+
+  # An empty name is the subtlest of the four: it drops exactly ONE DLL from the
+  # sweep, and if that one is the only unsatisfied import, the finding vanishes
+  # and the check passes. Point the first descriptor's name RVA at the
+  # zero-filled start of the section so the name reads as "".
+  $bad3 = Join-Path $root 'emptyname.exe'
+  [System.IO.File]::Copy($pe64, $bad3, $true)
+  $b3 = [System.IO.File]::ReadAllBytes($bad3)
+  [BitConverter]::GetBytes([uint32]0x1000).CopyTo($b3, 0x400 + 12)
+  [System.IO.File]::WriteAllBytes($bad3, $b3)
+  $threw = $false
+  try { Get-ImportedDll -Path $bad3 | Out-Null } catch { $threw = $true }
+  Assert-True 'an empty DLL name throws rather than being dropped' $threw
+
+  # ── Get-ImportSweepVerdict ──────────────────────────────────────────────────
+  # The check-level guards. The zero-import case is the one that mattered: a
+  # sweep over binaries that yielded no imports at all used to report the clean
+  # message.
+  Assert-True 'a clean sweep passes' `
+  (Get-ImportSweepVerdict -Binaries @('app.exe') -Imports @('KERNEL32.dll') -Unsatisfied @()).Ok
+  Assert-False 'no binaries at all fails' `
+  (Get-ImportSweepVerdict -Binaries @() -Imports @() -Unsatisfied @()).Ok
+  Assert-False 'binaries that yielded ZERO imports fails' `
+  (Get-ImportSweepVerdict -Binaries @('app.exe', 'x.dll') -Imports @() -Unsatisfied @()).Ok
+  Assert-True 'and says it is a failed parse, not a clean result' `
+  ((Get-ImportSweepVerdict -Binaries @('app.exe') -Imports @() -Unsatisfied @()).Message -match 'failed parse')
+  Assert-False 'an unsatisfied import fails' `
+  (Get-ImportSweepVerdict -Binaries @('app.exe') -Imports @('VCRUNTIME140.dll') -Unsatisfied @('VCRUNTIME140.dll')).Ok
 
   # ── Get-UnsatisfiedImport ───────────────────────────────────────────────────
   # The Windows shape of the .deb dependency gate: what does the artifact need
@@ -344,17 +397,27 @@ try {
   $r = Invoke-Silently -FilePath $sh -Arguments $spaced -TimeoutSeconds 30
   Assert-That 'an argument with a space is passed as one argument' $r.ExitCode 7
 
+  # Reached only if every assertion above ran. See the guard in `finally`.
+  $script:Completed = $true
 }
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+  # THIS FILE'S OWN ZERO GUARD, matching test-macos-checks.sh: an injected
+  # `exit 0` or an early return would otherwise end the run with no output and
+  # status 0, which reads as "every check is proven able to fail" while nothing
+  # was proven. The same shape as the bugs this file exists to catch.
+  if (-not $script:Completed) {
+    [Console]::Error.WriteLine('::error::the regression test exited before completing — an early exit, a truncated file, or a killed run. NOTHING was proven; do not read this as a pass.')
+    exit 1
+  }
 }
 
 Write-Output "windows check regression: $script:Pass passed, $script:Fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding
 # assertions.
-if ($script:Pass -lt 60) {
-  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 60 — the test file is truncated or a block was skipped")
+if ($script:Pass -lt 77) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 77 — the test file is truncated or a block was skipped")
   exit 1
 }
 if ($script:Fail -gt 0) { exit 1 }

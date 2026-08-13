@@ -159,18 +159,39 @@ macho_min_os() {
   ' | sort -V | tail -1
 }
 
-# Every path a Mach-O will look for at load time: its recorded dependencies
-# (otool -L) and its runtime search paths (LC_RPATH). An rpath baked at build
-# time pointing at /opt/homebrew is the same bug as a direct link against it —
-# check-binary-compat.sh flags the ELF equivalent for the same reason.
-macho_load_paths() {
+# The libraries a Mach-O records as dependencies.
+#
+# RETURNS NON-ZERO WHEN IT READ NOTHING, and that distinction is the whole point:
+# every Mach-O links at least libSystem, so an empty result is ALWAYS a broken
+# tool and NEVER a clean binary. `2>/dev/null` hides otool's own diagnosis — a
+# stale `xcode-select` path makes the xcrun shim print to stderr and exit
+# non-zero — so without this the scan below would sweep zero paths, find no
+# violations, and report the same green row as a genuinely clean bundle.
+macho_dep_paths() {
+  local out
   # Skip otool -L's header (the file's own path, unindented) — only the
   # tab-indented dependency lines are what the binary will actually load.
-  otool -L "$1" 2>/dev/null | awk '/^[[:space:]]/ { print $1 }'
+  out="$(otool -L "$1" 2>/dev/null | awk '/^[[:space:]]/ { print $1 }')"
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+# The runtime search paths baked into it. An rpath pointing at /opt/homebrew is
+# the same bug as a direct link against it — check-binary-compat.sh flags the ELF
+# equivalent for the same reason. LEGITIMATELY EMPTY, unlike the dependencies
+# above: most binaries carry no LC_RPATH at all, so this one gets no floor.
+macho_rpaths() {
   otool -l "$1" 2>/dev/null | awk '
     $1 == "cmd" && $2 == "LC_RPATH" { r = 1; next }
     r && $1 == "path" { print $2; r = 0 }
   '
+}
+
+# Both, for the report at the end. Callers that GATE use the two separately, so
+# they can tell "read nothing" from "found nothing".
+macho_load_paths() {
+  macho_dep_paths "$1" || true
+  macho_rpaths "$1"
 }
 
 # ── 1. mount, extract, detach ─────────────────────────────────────────────────
@@ -308,11 +329,25 @@ run_check "the bundle's architecture matches the runner" check_arch_matches_runn
 
 # ── 4. nothing points at the build machine ────────────────────────────────────
 check_no_build_machine_paths() {
-  local f p prefix hits=0 total=0
+  local f p prefix deps hits=0 total=0 paths=0
   while IFS= read -r f; do
     total=$((total + 1))
+    # THE GUARD BELONGS ON THE PATHS, NOT THE FILES. Counting files answers "was
+    # there anything to scan"; it does not answer "did we manage to read any of
+    # it". With otool broken, every file is iterated, no path is ever examined,
+    # and the loop below finds no violations — a pass produced by reading
+    # nothing. Checked per file, because one unreadable binary among many is
+    # exactly where a violation would hide.
+    if ! deps="$(macho_dep_paths "$f")"; then
+      echo "::error::otool -L read no dependencies from ${f#"$APP"/}." >&2
+      echo "  Every Mach-O links at least libSystem, so this is a broken otool — a stale" >&2
+      echo "  xcode-select path does it — not a clean binary. Refusing to report a scan" >&2
+      echo "  that read nothing." >&2
+      return 1
+    fi
     while IFS= read -r p; do
       [ -n "$p" ] || continue
+      paths=$((paths + 1))
       # shellcheck disable=SC2086  # the constant is a space-separated list, split on purpose
       for prefix in $UNYT_BUILD_MACHINE_PREFIXES; do
         case "$p" in
@@ -322,7 +357,7 @@ check_no_build_machine_paths() {
             ;;
         esac
       done
-    done < <(macho_load_paths "$f")
+    done < <(printf '%s\n' "$deps"; macho_rpaths "$f")
   done <"$MACHOS"
   if [ "$total" -eq 0 ]; then
     # No Mach-O at all means the scan proved nothing; an empty sweep must not
@@ -330,12 +365,18 @@ check_no_build_machine_paths() {
     echo "::error::no Mach-O files found in the bundle — nothing was scanned" >&2
     return 1
   fi
+  if [ "$paths" -eq 0 ]; then
+    # Belt to the per-file brace above: the population this check inspects is
+    # load paths, so the aggregate gets its own floor too.
+    echo "::error::$total Mach-O file(s) yielded no load paths at all — nothing was inspected" >&2
+    return 1
+  fi
   if [ "$hits" -gt 0 ]; then
     echo "::error::$hits reference(s) to a developer machine's prefixes ($UNYT_BUILD_MACHINE_PREFIXES)" >&2
     echo "  These resolve on the build machine and on no user's Mac." >&2
     return 1
   fi
-  echo "OK: $total Mach-O file(s), none referencing $UNYT_BUILD_MACHINE_PREFIXES" >&2
+  echo "OK: $paths load path(s) across $total Mach-O file(s), none referencing $UNYT_BUILD_MACHINE_PREFIXES" >&2
   return 0
 }
 run_check "no build-machine library paths in any Mach-O" check_no_build_machine_paths
