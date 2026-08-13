@@ -55,7 +55,7 @@ stdout_log="$SANDBOX/app-stdout.log"
 : >"$stdout_log"
 
 app_pid=""
-# shellcheck disable=SC2317  # invoked through the EXIT trap
+# shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap (0.11 split the code)
 cleanup() {
   [ -n "$app_pid" ] || return 0
   kill -TERM -- "-$app_pid" 2>/dev/null || true
