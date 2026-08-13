@@ -59,25 +59,29 @@ apt-get install -y -qq binutils >/dev/null 2>&1
 run_check "bundle glibc ceiling + system requirements" \
   bash "$here/check-appimage.sh" /tmp/squashfs-root
 
-# The desktop baseline: exactly the libraries check-appimage.sh just reported as
-# required-but-not-bundled, plus a display. This IS the AppImage's implicit
-# dependency contract — it bundles 167 libraries and still expects these from the
-# host. Every one is present on any real desktop (libgbm/libdrm come with Mesa,
-# the rest with X11 and fontconfig), so installing them tests the APP rather than
-# our choice of baseline.
+# The desktop baseline, plus a display. `libwebkit2gtk-4.1-0` is named on purpose
+# rather than the individual sonames check-appimage.sh reports: apt resolves ITS
+# transitive closure per distro, and that closure is exactly the host stack a
+# WebKit app needs. A hand-listed set is distro-specific and silently wrong
+# elsewhere — the first version of this listed Ubuntu's requirements and then
+# failed on debian:13, which additionally needs libgpg-error and libcom_err.
 #
-# If a future build needs something not listed here, the launch fails with a
-# plain `error while loading shared libraries: <soname>` in the captured stdout —
-# a good failure mode, and check-appimage.sh names it in the same run.
-apt-get install -y -qq \
-  libgtk-3-0 libgbm1 libdrm2 libx11-6 libx11-xcb1 libxcb1 libfontconfig1 \
-  libfreetype6 libexpat1 libfribidi0 libharfbuzz0b libgl1 libegl1 \
-  xvfb >/dev/null 2>&1
+# This does NOT weaken the check. The AppImage prefers its own bundled libraries
+# via LD_LIBRARY_PATH, so it still runs its own WebKit; what the baseline
+# guarantees is a machine that could run a GTK/WebKit app at all. Precisely what
+# the bundle expects from the host is the separate report above, which is where
+# that fact belongs.
+apt-get install -y -qq libwebkit2gtk-4.1-0 libgbm1 libgl1 libegl1 xvfb >/dev/null 2>&1
 
 # The app runs as the inner binary, not as the .AppImage filename, so the launch
 # oracle is told what process to watch.
-UNYT_SMOKE_PROC_NAME="$(basename "$(find /tmp/squashfs-root/usr/bin -type f -executable | head -1)")"
+inner_bin="$(find /tmp/squashfs-root/usr/bin -type f -executable | head -1)"
+UNYT_SMOKE_PROC_NAME="$(basename "$inner_bin")"
 export UNYT_SMOKE_PROC_NAME
+# The breadcrumb string lives in the compressed squashfs, so probe the extracted
+# binary rather than the .AppImage file.
+UNYT_SMOKE_UI_READY_PROBE="$inner_bin"
+export UNYT_SMOKE_UI_READY_PROBE
 run_check "launches, stays up, shuts down" \
   bash "$here/launch-and-assert.sh" "$app"
 

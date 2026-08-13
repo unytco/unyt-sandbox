@@ -29,6 +29,12 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${1:?usage: launch-and-assert.sh <installed-binary>}"
 [ -x "$BIN" ] || { echo "::error::not executable: $BIN" >&2; exit 1; }
 
+# Which file to search for the compiled-in breadcrumb string. Defaults to the
+# launch target, which is right for an installed .deb; an AppImage's strings live
+# in its compressed squashfs, so the AppImage driver points this at the extracted
+# inner binary instead.
+UI_READY_PROBE="${UNYT_SMOKE_UI_READY_PROBE:-$BIN}"
+
 SANDBOX="${UNYT_SMOKE_SANDBOX:-/tmp/ut-smoke}"
 TIMEOUT="${UNYT_SMOKE_TIMEOUT:-240}"
 SETTLE="${UNYT_SMOKE_SETTLE:-45}"
@@ -130,8 +136,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     dump_logs
     exit 1
   fi
-  if printf '%s' "$logs" | smoke_match_healthy; then
-    reached="$(printf '%s' "$logs" | smoke_first_healthy)"
+  if printf '%s' "$logs" | smoke_match_backend_ready; then
+    reached="$(printf '%s' "$logs" | smoke_first_backend_ready)"
     break
   fi
   if ! alive; then
@@ -147,7 +153,33 @@ if [ -z "$reached" ]; then
   dump_logs
   exit 1
 fi
-echo "OK: reached a healthy state -> ${reached}" >&2
+echo "OK: reached a healthy backend state -> ${reached}" >&2
+
+# ── 1b. the WEBVIEW painted ───────────────────────────────────────────────────
+# Required, not an alternative: every state above comes from Rust during boot and
+# would appear just the same if the UI bundle never loaded, so without this a
+# black-window release passes. Skipped only for an artifact that cannot emit the
+# breadcrumb at all (v0.100.0 and earlier), which keeps old artifacts smokeable
+# without letting a new one quietly lose its only webview proof.
+if smoke_supports_ui_ready "$UI_READY_PROBE"; then
+  ui_deadline=$(( $(date +%s) + 120 ))
+  ui_ok=""
+  while [ "$(date +%s)" -lt "$ui_deadline" ]; do
+    if smoke_all_logs "$SANDBOX" | smoke_match_ui_ready; then ui_ok=1; break; fi
+    if ! alive; then break; fi
+    sleep 3
+  done
+  if [ -z "$ui_ok" ]; then
+    echo "::error::the backend booted but the webview never mounted the root element" >&2
+    echo "  This artifact emits the ui_ready breadcrumb, so its absence means the UI" >&2
+    echo "  bundle did not load — the app is up with a blank window." >&2
+    dump_logs
+    exit 1
+  fi
+  echo "OK: the webview mounted the root element" >&2
+else
+  echo "NOTE: this artifact predates the ui_ready breadcrumb — webview paint NOT verified" >&2
+fi
 
 # ── 2. stays up ───────────────────────────────────────────────────────────────
 # Bounded by construction (a fixed window, never "wait until healthy again"), so
@@ -187,7 +219,25 @@ echo "Sending SIGTERM..." >&2
 kill -TERM -- "-$app_pid" 2>/dev/null || true
 exit_deadline=$(( $(date +%s) + 30 ))
 while [ "$(date +%s)" -lt "$exit_deadline" ]; do
-  alive || { app_pid=""; echo "OK: exited on SIGTERM" >&2; exit 0; }
+  if ! alive; then
+    # `wait` gives the launcher's status; the app is not this shell's child, so
+    # its own code is unavailable. A crash on the way down still shows up as a
+    # failure line or a signal message in the log, so check that rather than
+    # reporting a clean shutdown purely from the process being gone.
+    app_pid=""
+    if smoke_all_logs "$SANDBOX" | smoke_match_failed; then
+      echo "::error::the app logged a failure while shutting down:" >&2
+      smoke_all_logs "$SANDBOX" | smoke_first_failures | sed 's/^/  /' >&2
+      exit 1
+    fi
+    if grep -qE -e '(Segmentation fault|SIGSEGV|SIGABRT|core dumped)' "$stdout_log" 2>/dev/null; then
+      echo "::error::the app crashed rather than exiting cleanly:" >&2
+      grep -oE -e '(Segmentation fault|SIGSEGV|SIGABRT|core dumped).*' "$stdout_log" | head -3 | sed 's/^/  /' >&2
+      exit 1
+    fi
+    echo "OK: exited on SIGTERM without crashing" >&2
+    exit 0
+  fi
   sleep 1
 done
 

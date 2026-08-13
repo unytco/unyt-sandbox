@@ -1,0 +1,27 @@
+# The shared-library dependencies `dpkg-shlibdeps` computes from the shipped
+# binary ON ubuntu:22.04 — the packages the app actually needs, one per line.
+#
+# PER IMAGE on purpose. dpkg-shlibdeps resolves a soname to whatever package owns
+# it on the distro it runs on, and those names diverge: Ubuntu's time_t
+# transition renamed libgtk-3-0 to libgtk-3-0t64 and libglib2.0-0 to
+# libglib2.0-0t64, so a single shared expectation would be red on every image but
+# the one it was captured on. A permanently-red check is one nobody reads.
+#
+# This file is the review gate for ubuntu:22.04: check-deb-depends.sh recomputes the set
+# on every run and fails on any difference, so a change in what the binary links
+# against has to be acknowledged by a human editing this file. Regenerate with:
+#
+#   scripts/smoke/run-smoke.sh --print-computed-depends <artifact.deb> ubuntu:22.04
+#
+# Captured from unyt_0.100.0_Unyt.Sandbox_default-arc_amd64_linux.deb.
+libc6 (>= 2.34)
+libcairo-gobject2 (>= 1.10.0)
+libcairo2 (>= 1.10.0)
+libgcc-s1 (>= 4.2)
+libgdk-pixbuf-2.0-0 (>= 2.36.9)
+libglib2.0-0 (>= 2.65.1)
+libgtk-3-0 (>= 3.21.5)
+libjavascriptcoregtk-4.1-0
+libpango-1.0-0 (>= 1.14.0)
+libsoup-3.0-0 (>= 3.0.3)
+libwebkit2gtk-4.1-0 (>= 2.41.90)

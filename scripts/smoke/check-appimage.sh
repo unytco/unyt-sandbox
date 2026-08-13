@@ -11,6 +11,15 @@
 # (tauri-apps/tauri#15665 — over-bundled libwayland/glib/gstreamer breaking
 # AppImages built on newer Ubuntu).
 #
+# ON appimagelint — TRIED, DROPPED, do not retry. It asks the same ABI-floor
+# question, but it cannot answer it here: on ubuntu:22.04 it dies immediately
+# because its OWN bundled readelf requires GLIBC_2.38, which our oldest supported
+# target does not have; on ubuntu:24.04 its readelf runs but it then fails
+# FUSE-mounting the target ("process exited before we could read AppImage
+# mountpoint"), including with /dev/fuse, SYS_ADMIN and libfuse2t64 granted. The
+# check below covers the same ground without FUSE or a privileged container, and
+# more precisely — it reads every bundled ELF rather than the mounted image.
+#
 # So the gate is the glibc ceiling across the WHOLE BUNDLE, not just the
 # executable. That distinction is load-bearing: for v0.100.0 the inner binary
 # needs 2.34 while the bundled libwebkit2gtk needs 2.35, so checking only the
@@ -53,18 +62,18 @@ inner_ver="$(objdump -T "$inner" 2>/dev/null | grep -oP 'GLIBC_\K[0-9.]+' | sort
 echo "--- glibc ceiling of the bundle ---" >&2
 echo "  inner binary requires: ${inner_ver:-none}" >&2
 echo "  WHOLE BUNDLE requires: ${max_ver:-none}  (from ${worst##*/})" >&2
-echo "  supported floor:       $UNYT_MAX_GLIBC" >&2
+echo "  supported floor:       $UNYT_OLDEST_GLIBC" >&2
 
 if [ -z "$max_ver" ]; then
   echo "::error::no GLIBC version symbols anywhere in the bundle — is this really an AppDir?" >&2
   status=1
-elif [ "$(printf '%s\n%s\n' "$max_ver" "$UNYT_MAX_GLIBC" | sort -V | tail -1)" != "$UNYT_MAX_GLIBC" ]; then
-  echo "::error::the bundle needs glibc $max_ver (${worst##*/}) but the oldest supported target has $UNYT_MAX_GLIBC" >&2
+elif [ "$(printf '%s\n%s\n' "$max_ver" "$UNYT_OLDEST_GLIBC" | sort -V | tail -1)" != "$UNYT_OLDEST_GLIBC" ]; then
+  echo "::error::the bundle needs glibc $max_ver (${worst##*/}) but the oldest supported target has $UNYT_OLDEST_GLIBC" >&2
   echo "  A library bundled from a newer build host does this. Build the AppImage on the oldest" >&2
   echo "  supported distro, or stop bundling that library." >&2
   status=1
 else
-  echo "OK: the whole bundle runs on glibc $UNYT_MAX_GLIBC" >&2
+  echo "OK: the whole bundle runs on glibc $UNYT_OLDEST_GLIBC" >&2
 fi
 
 # ── what it still expects FROM the system ────────────────────────────────────

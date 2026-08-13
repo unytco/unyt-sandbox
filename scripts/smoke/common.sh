@@ -10,10 +10,12 @@
 # CONDUCTOR dir never reaches this one.
 UNYT_BUNDLE_ID="co.unyt.unyt.sandbox"
 
-# The oldest glibc we support: Ubuntu 22.04 ships 2.35. A binary that needs more
-# than this installs fine and then dies at exec on a supported target.
+# The glibc of the OLDEST distro we support (Ubuntu 22.04 ships 2.35) — i.e. the
+# highest version a shipped binary is allowed to require. Named for what it is:
+# the floor of the support range, which is the ceiling on what we may import.
+# A binary needing more installs fine and then dies at exec on a supported target.
 # shellcheck disable=SC2034  # read by the scripts that source this file
-UNYT_MAX_GLIBC="2.35"
+UNYT_OLDEST_GLIBC="2.35"
 
 # ── The health oracle ─────────────────────────────────────────────────────────
 # Statuses as the app's own log writes them (unyt/src-tauri/src/runtime/status.rs
@@ -21,10 +23,6 @@ UNYT_MAX_GLIBC="2.35"
 #
 # HEALTHY is a SET, and every member is a genuine, correct first-run outcome for a
 # shipped build on a clean machine. Do not "simplify" it to one:
-#   UiReady              the webview mounted the frontend. The ONLY signal that
-#                        proves WebKit painted — every other line below is
-#                        emitted from Rust during boot and would still appear if
-#                        the UI bundle were broken.
 #   HcAuthRequired       production path: conductor up, agent key minted, the
 #                        auth server reachable and answering for an unregistered
 #                        key. A release build compiles a joining URL into
@@ -36,8 +34,14 @@ UNYT_MAX_GLIBC="2.35"
 #                        build genuinely has no joining service.
 #   JoiningRequired      membrane-proof path.
 #   Ready                already-provisioned install.
-# Accepting all five is what lets this run with or without network access to
+# Accepting all four is what lets this run with or without network access to
 # joining.unyt.dev, without tampering with the machine to force one branch.
+#
+# UiReady is deliberately NOT one of them. It is the only signal that proves the
+# WEBVIEW painted — every state above is emitted from Rust during boot and would
+# still appear if the UI bundle never loaded — so as an alternative it gated
+# nothing and a black-window release passed. It is asserted separately, and
+# REQUIRED, whenever the artifact under test carries the breadcrumb.
 #
 # NOTE ON SHAPE: these match Rust's Debug output, which differs per variant kind
 # — a struct variant prints `Name { field: … }`, a tuple variant `Name(…)`, and a
@@ -49,7 +53,7 @@ UNYT_MAX_GLIBC="2.35"
 # the like occur in unrelated subsystem output. Unanchored, any of those declared
 # the app healthy.
 # shellcheck disable=SC2034  # read by the scripts that source this file
-UNYT_RE_HEALTHY='UI ready: webview mounted the root element|Status update: .* -> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|Status update: .* -> Ready\b'
+UNYT_RE_BACKEND_READY='Status update: .* -> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|Status update: .* -> Ready\b'
 
 # Terminal failures. `ConductorDisconnected` is deliberately NOT here — it is the
 # transient first step of the heartbeat's reconnect backoff (5s -> 60s;
@@ -63,6 +67,21 @@ UNYT_RE_FAILED='panicked at|Status update: .* -> (ConductorError|AppInstallation
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
 
+# The webview breadcrumb (unyt/src-tauri/src/runtime/events.rs `ui_ready`),
+# emitted from the frontend's first mount. Required whenever the artifact carries
+# it — see smoke_supports_ui_ready.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+UNYT_RE_UI_READY='UI ready: webview mounted the root element'
+
+# Does THIS artifact know how to emit the breadcrumb? The log message is a string
+# literal compiled into the binary, so its presence is the artifact's own answer —
+# no version parsing, and nothing to keep in sync with a release schedule.
+# Artifacts predating the breadcrumb (v0.100.0 and earlier) stay smokeable; newer
+# ones cannot quietly lose their only webview proof.
+smoke_supports_ui_ready() {
+  grep -qaF "$UNYT_RE_UI_READY" "${1:?binary path required}" 2>/dev/null
+}
+
 # ── the matchers ─────────────────────────────────────────────────────────────
 # The ONLY place these patterns are applied. Both launch-and-assert.sh and
 # test-oracle.sh go through these functions, so the regression test exercises the
@@ -75,8 +94,9 @@ UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
 # The `(...)` around the pattern before appending `.*` is load-bearing: `A|B.*`
 # binds the `.*` to B alone, so a match on any earlier alternative was reported
 # truncated at the alternative's own end.
-smoke_match_healthy()      { grep -qE -e "$UNYT_RE_HEALTHY"; }
-smoke_first_healthy()      { grep -oE -e "($UNYT_RE_HEALTHY).*" | head -1; }
+smoke_match_backend_ready(){ grep -qE -e "$UNYT_RE_BACKEND_READY"; }
+smoke_first_backend_ready(){ grep -oE -e "($UNYT_RE_BACKEND_READY).*" | head -1; }
+smoke_match_ui_ready()     { grep -qF -e "$UNYT_RE_UI_READY"; }
 smoke_match_failed()       { grep -qE -e "$UNYT_RE_FAILED"; }
 smoke_first_failures()     { grep -oE -e "($UNYT_RE_FAILED).*" | head -3; }
 smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }

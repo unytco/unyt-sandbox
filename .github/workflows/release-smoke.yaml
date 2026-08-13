@@ -2,8 +2,9 @@ name: "release-smoke"
 
 # Does the artifact a release shipped actually work on a user's machine?
 #
-# Everything runs in PRISTINE distro containers (ubuntu:22.04, ubuntu:24.04,
-# debian:12), not on the runner. A GitHub runner is a build image carrying
+# Everything runs in PRISTINE distro containers, not on the runner — the matrix
+# is one named list in scripts/smoke/run-smoke.sh, spanning both the oldest
+# supported glibc and the current stables. A GitHub runner is a build image carrying
 # hundreds of preinstalled libraries, so a package that under-declares its
 # dependencies installs and runs there while a real user's machine fails — the
 # exact bug class this exists to catch would be invisible. Containers are both
@@ -20,7 +21,7 @@ on:
         required: true
         type: string
       report_only:
-        description: "Report failures without failing the run"
+        description: "Informational only — the job goes red either way; nothing depends on it, so it never blocks a release"
         required: false
         default: false
         type: boolean
@@ -42,10 +43,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Report-only covers the WHOLE job: the release must not go red because a
-    # container pull or the GitHub API hiccuped. The summary always says what
-    # actually happened, and the annotations survive a green job.
-    continue-on-error: ${{ inputs.report_only == true }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,7 +92,7 @@ jobs:
             sed -n '/^# summary/,$p' "$RUNNER_TEMP/smoke.log" 2>/dev/null || echo "(no summary — the run did not get that far)"
             echo '```'
             echo ""
-            echo "Report-only: \`${{ inputs.report_only }}\`. Full output is in the \`release-smoke-log\` artifact."
+            echo "Report-only: \`${{ inputs.report_only }}\` — this job goes red on a failure, but nothing depends on it, so it never blocks the release. Full output is in the \`release-smoke-log\` artifact."
           } >> "$GITHUB_STEP_SUMMARY"
 
           # Annotate, so a report-only failure is visible on the run page without
@@ -112,8 +109,11 @@ jobs:
           path: ${{ runner.temp }}/smoke.log
           if-no-files-found: warn
 
-      # Report-only is the release's contract, not the dispatcher's: a hand-run
-      # smoke must be able to go red so it can be iterated on.
+      # The job CONCLUDES FAILURE whenever a check failed — including under
+      # report_only. "Report-only" means it does not block the release, NOT that
+      # it reports green: a green check indistinguishable from a real pass is how
+      # a broken smoke goes unread. What keeps it off the critical path is that
+      # nothing `needs` this job, so its failure cannot stop or unpublish a release.
       - name: Fail on a failed check
-        if: ${{ always() && inputs.report_only != true }}
+        if: always()
         run: '[ "${{ steps.smoke.outcome }}" = success ]'

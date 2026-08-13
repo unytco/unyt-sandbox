@@ -28,17 +28,17 @@ glibc_max="$(max_symver GLIBC || true)"
 glibcxx_max="$(max_symver GLIBCXX || true)"
 
 echo "--- versioned-symbol ceiling of ${BIN##*/} ---" >&2
-echo "  GLIBC   max required: ${glibc_max:-none}  (supported floor: $UNYT_MAX_GLIBC)" >&2
+echo "  GLIBC   max required: ${glibc_max:-none}  (supported floor: $UNYT_OLDEST_GLIBC)" >&2
 echo "  GLIBCXX max required: ${glibcxx_max:-none (does not link libstdc++)}" >&2
 
 if [ -z "$glibc_max" ]; then
   echo "::error::no GLIBC_ version symbols found — is $BIN really a dynamically linked ELF?" >&2
   status=1
-elif [ "$(printf '%s\n%s\n' "$glibc_max" "$UNYT_MAX_GLIBC" | sort -V | tail -1)" != "$UNYT_MAX_GLIBC" ]; then
-  echo "::error::needs glibc $glibc_max but the oldest supported target has $UNYT_MAX_GLIBC — this build cannot run there" >&2
+elif [ "$(printf '%s\n%s\n' "$glibc_max" "$UNYT_OLDEST_GLIBC" | sort -V | tail -1)" != "$UNYT_OLDEST_GLIBC" ]; then
+  echo "::error::needs glibc $glibc_max but the oldest supported target has $UNYT_OLDEST_GLIBC — this build cannot run there" >&2
   status=1
 else
-  echo "OK: glibc requirement $glibc_max is within $UNYT_MAX_GLIBC" >&2
+  echo "OK: glibc requirement $glibc_max is within $UNYT_OLDEST_GLIBC" >&2
 fi
 
 # Unresolved symbols. Authoritative for the EXECUTABLE; findings against shipped

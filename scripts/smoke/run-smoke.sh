@@ -37,8 +37,30 @@ case "$DEB" in
   *) echo "::error::unsupported artifact '$DEB' (expected .deb or .AppImage)" >&2; exit 1 ;;
 esac
 
+# ── THE MATRIX ────────────────────────────────────────────────────────────────
+# One list, deliberately spanning BOTH ends of the supported range, because the
+# two ends fail differently and each hides the other's bug:
+#
+#   OLD end  — the glibc floor. A binary built on a newer host imports symbols the
+#              old runtime lacks; it installs cleanly and dies at exec. This is
+#              also where the .deb's missing `libc6 (>= 2.34)` actually bites.
+#   NEW end  — library conflicts. Bundled copies of libwayland/glib/gstreamer
+#              collide with the host's newer ones (tauri-apps/tauri#15665), which
+#              only shows up on a distro newer than the build machine.
+#
+# Testing only the LTSs in the middle would miss both. Keep both ends when adding.
+#
+#   ubuntu:22.04  glibc 2.35  our support floor
+#   ubuntu:24.04  glibc 2.39  previous LTS, large install base
+#   debian:13     glibc 2.41  current Debian stable
+#   ubuntu:26.04  glibc 2.43  current Ubuntu LTS, and what `ubuntu:latest` resolves to
+#
+# debian:12 (2.36) was dropped: it sits between the two Ubuntu LTSs and exercises
+# nothing they don't.
+UNYT_SMOKE_IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:13 ubuntu:26.04)
+
 IMAGES=("$@")
-[ ${#IMAGES[@]} -gt 0 ] || IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:12)
+[ ${#IMAGES[@]} -gt 0 ] || IMAGES=("${UNYT_SMOKE_IMAGES[@]}")
 
 command -v docker >/dev/null || { echo "::error::docker not found" >&2; exit 1; }
 
