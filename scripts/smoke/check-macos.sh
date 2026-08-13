@@ -657,9 +657,15 @@ check_syspolicy() {
   #
   # ANCHORING THE FAIL WORDS TO LINE STARTS WAS CONSIDERED AND IS WRONG. Of the
   # three documented failure lines, only `Severity: Fatal` begins with its
-  # significant word; `Notary Ticket Missing` and `Type: Distribution Error` both
-  # carry it at the END. Anchoring would stop matching two of the three and
-  # reopen the false green this pattern exists to close — cheap to type, and a
+  # significant word; `Notary Ticket Missing` and `Type: Distribution Error`
+  # both carry it at the END, so anchoring stops matching two of the three.
+  #
+  # Precisely, because the difference matters: on its own that DEGRADES a real
+  # failure from the fail branch to cannot-tell, which is still red. Turning it
+  # green additionally needs the pass sentence present in the same report. Red
+  # either way is not the reassurance it sounds like — a check that can only say
+  # "I could not read this" about a build Apple rejected has stopped doing its
+  # job, and the green case is one plausible line away. Cheap to type, and a
   # regression.
   scan="$(printf '%s' "$out" |
     grep -viE '^[[:space:]]*0 (errors?|warnings?|issues?|problems?)([[:space:],;]*(and )?0 (errors?|warnings?|issues?|problems?))*[[:space:].]*$')"

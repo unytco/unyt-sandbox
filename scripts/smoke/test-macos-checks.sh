@@ -17,25 +17,26 @@
 # test-oracle.sh: it drives the real call sites, because a copy of the logic
 # would pass while the real script stayed broken.
 #
-# ASSERT WHICH DIAGNOSIS FIRED, NOT JUST THAT THE ROW WENT RED. Several checks
-# here are layered — an ad-hoc signature also lacks an Authority line, a dead
-# otool trips both the per-file and the aggregate guard — so a colour-only
-# assertion stays green when a guard is deleted, because a DIFFERENT guard still
-# reddens the row. Mutation testing found exactly that: three guards could be
-# removed without a single assertion noticing. `expect_err` is the fix; do not
-# "simplify" an assertion back to checking the row alone.
+# THE ONE THING TO TAKE FROM THIS FILE: assert WHICH DIAGNOSIS fired, never just
+# that the row went red. Four separate guards here were deleted during mutation
+# testing without a single assertion noticing — the ad-hoc signature guard, the
+# TeamIdentifier guard, the syspolicy failure-wording read, and the zero-count
+# exclusion. Every one left the row red for a DIFFERENT reason, so every
+# colour-only assertion still passed. That is ONE failure mode, not four bugs,
+# and it gets worse the better the checks get: the more layered the guards, the
+# less a row's colour proves. `expect_err` is the fix; do not "simplify" an
+# assertion back to checking the row alone.
 #
 # A MUTANT PROVES NOTHING UNTIL YOU HAVE WATCHED IT FAIL FOR THE REASON YOU
 # INTENDED. The first mutation written for the universal-slice fix removed the
 # wrong thing and passed clean; recorded as-is it would have certified a guard
-# that was never exercised. Check the mutant's failure message, not just its
-# exit status.
+# that was never exercised. Read the mutant's failure message, not its exit
+# status.
 #
-# The same method found two instructions that would each have shipped a check
-# incapable of failing, and neither was reachable by reasoning about them —
-# only by building the fixture meant to prove them and watching it not fail:
-#   - reading only LC_BUILD_VERSION found NOTHING the moment it met a real
-#     x86_64 binary, which is half the artifacts
+# Both come from the same method, which also caught two instructions that looked
+# right and failed the moment a fixture met them:
+#   - reading only LC_BUILD_VERSION found NOTHING against a real x86_64 binary,
+#     which is half the artifacts
 #   - taking the max deployment target across slices passed a fixture written
 #     expecting rejection, because a too-new x86_64 slice hides behind an arm64
 #     slice legitimately at the same version
@@ -394,6 +395,16 @@ case "${STUB_BREAK:-}" in
   # any line CONTAINING a zero-count discards this failure whole — the filter
   # eating the finding it was meant to sit beside.
   syspolicy_fatal_same_line)
+    echo "Notary Ticket Missing, 0 errors in codesign"
+    exit 0 ;;
+  # THE GREEN THAT ACTUALLY SHIPPED, on a906f15. The whole-line filter ate the
+  # failure because it carried a zero-count, and the pass sentence then satisfied
+  # the pass check — so check 8 reported a build with a missing notary ticket as
+  # distributable. Both halves are needed: the filter swallowing the finding, AND
+  # the report saying it is ready. Kept as its own scenario because it is the
+  # defect, not a variant of one.
+  syspolicy_green_trap)
+    echo "App passed all pre-distribution checks and is ready for distribution."
     echo "Notary Ticket Missing, 0 errors in codesign"
     exit 0 ;;
 esac
@@ -805,6 +816,16 @@ expect_only_failure "passes Apple's own distribution assessment" \
   "a failure carrying its own zero-count on one line"
 expect_err "not ready for distribution" "the failure is read, not filtered away with the count"
 
+# THE FALSE GREEN THAT SHIPPED on a906f15, kept as its own scenario because it is
+# the defect rather than a variant of one. The whole-line filter ate the failure
+# (it carried a zero-count) and the pass sentence then satisfied the pass check,
+# so a build with a missing notary ticket was reported distributable. Both this
+# suite and its author called that state "fails safe" until it was run.
+run_scenario break-syspolicy-green-trap STUB_BREAK=syspolicy_green_trap
+expect_only_failure "passes Apple's own distribution assessment" \
+  "a missing notary ticket beside 'ready for distribution' is NOT a pass"
+expect_err "not ready for distribution" "the finding wins over the pass sentence"
+
 # ── 9. deployment target ──────────────────────────────────────────────────────
 # The documented real-world failure: a bundled dependency built against a newer
 # deployment target than the app claims. It launches on the OS the Info.plist
@@ -940,8 +961,8 @@ echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 282 ]; then
-  echo "::error::only $pass assertions ran; expected at least 282 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 293 ]; then
+  echo "::error::only $pass assertions ran; expected at least 293 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]
