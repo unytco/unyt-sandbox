@@ -27,6 +27,15 @@
 # less a row's colour proves. `expect_err` is the fix; do not "simplify" an
 # assertion back to checking the row alone.
 #
+# AND ONE LEVEL FURTHER OUT: ASSERT THROUGH THE CALL SITE'S ACTUAL SHAPE, not
+# the function in isolation. The Windows harness next door drove the real
+# functions — never a copy — and still shipped a defect that made a check report
+# a finding REGARDLESS of what the binary imported, because the assertions called
+# those functions BARE while production wrapped them in `@(...)`, and the two
+# shapes differ only in the case that was broken. "Drive the real function" was
+# satisfied; what was tested was a copy of the CALL. If production wraps,
+# coerces, splits or re-types a result, the assertion has to do it too.
+#
 # A MUTANT PROVES NOTHING UNTIL YOU HAVE WATCHED IT FAIL FOR THE REASON YOU
 # INTENDED. The first mutation written for the universal-slice fix removed the
 # wrong thing and passed clean; recorded as-is it would have certified a guard

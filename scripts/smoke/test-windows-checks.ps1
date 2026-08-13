@@ -14,6 +14,18 @@
   drives common.sh's matchers: every oracle bug so far has been in the call
   site, and a copy would pass while the real script stayed broken.
 
+  AND THAT IS NOT ENOUGH ON ITS OWN — ASSERT THROUGH THE CALL SITE'S ACTUAL
+  SHAPE. This file drove the real functions and still let a defect reach a real
+  runner: the assertions called them BARE while check 5 wraps them in `@(...)`,
+  and with `return , @(...)` those two shapes differ — the wrapped one nests the
+  array a level, which then coerces into [string[]] as a single space-joined
+  "DLL name". The allowlist matched nothing, every import list became one
+  unrecognised entry, and the check reported a finding regardless of what the
+  binary imported. It took the first real Windows run to see it, and it nearly
+  had a defect filed against the app that does not exist. Assertions marked
+  "wrapped:" below go through `@(...)` exactly as production does; keep them,
+  and add one whenever production wraps, coerces, splits or re-types a result.
+
   It runs on ANY platform, which is what makes it worth having: this repo has no
   Windows machine, so without it the checks would ship having never been
   observed to go either way. The import parser is fed synthetic PE images
