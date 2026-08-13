@@ -701,6 +701,11 @@ Invoke-Check 'imports nothing the machine is not guaranteed to have' {
     # Get-ImportedDll throws rather than returning empty precisely so that it
     # cannot be mistaken for a binary with no imports. Invoke-Check records the
     # throw as a FAIL.
+    #
+    # FIRST-RUN NOTE: anything named *.dll or *.exe that is not a PE image — a
+    # renamed data file, a placeholder — throws here and reds the lane. That is
+    # a fixture problem, not a finding about the build. Diagnose the file before
+    # treating a first red as a real dependency result.
     $imports = @(Get-ImportedDll -Path $b.FullName)
     Write-Note "  $($b.Name): $($imports.Count) imports"
     foreach ($i in $imports) { $all.Add($i) }
@@ -709,6 +714,13 @@ Invoke-Check 'imports nothing the machine is not guaranteed to have' {
     # DLL in resources\ does not satisfy an import made by the .exe at the top —
     # counting it as shipped would excuse exactly the dependency that breaks on
     # the user's machine.
+    #
+    # STRICTER THAN THE REAL LOADER, deliberately: the search order starts with
+    # the directory of the PROCESS executable, so a DLL beside the .exe does
+    # satisfy an import made by a DLL in a subfolder, which this will report.
+    # That direction is a false RED — visible, and diagnosed by the path in the
+    # message — rather than a false green, which is the trade this suite makes
+    # everywhere else too.
     $beside = @(Get-ChildItem -LiteralPath $b.DirectoryName -Filter '*.dll' -ErrorAction SilentlyContinue |
       ForEach-Object { $_.Name })
     foreach ($m in @(Get-UnsatisfiedImport -Imports $imports -ShippedFiles $beside)) { $unsat.Add($m) }
@@ -749,11 +761,18 @@ Invoke-Check 'uninstalls cleanly' {
   # scriptblock silently shadows the invocation's own arguments.
   #
   # Quote-aware, NOT a plain whitespace split: splitting on whitespace undoes
-  # exactly the grouping Invoke-Silently exists to preserve. NSIS uninstallers
-  # really do carry a path argument (`_?=C:\Program Files\Unyt Sandbox`), and
-  # splitting that into two tokens passes the uninstaller a directory that does
-  # not exist. A quoted span stays one token, quotes included, which
-  # Invoke-Silently then leaves alone as already-quoted.
+  # exactly the grouping Invoke-Silently exists to preserve. A quoted span stays
+  # one token, quotes included, which Invoke-Silently then leaves alone as
+  # already-quoted.
+  #
+  # WHAT THIS DOES NOT COVER, stated so the next person finishes it rather than
+  # assuming it is done: NSIS writes `_?=C:\Program Files\Unyt Sandbox`
+  # UNQUOTED, and an unquoted path with a space still splits here. Handling that
+  # needs knowledge this tokeniser does not have — that everything after `_?=` is
+  # one path, to end of string. It is not fixed now because our uninstall entry
+  # is read from the registry rather than constructed, so the form we actually
+  # run is whatever the installer recorded; if that turns out to carry a bare
+  # `_?=`, this is the place to fix.
   $argList = @([regex]::Matches($rest, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
   $r = Invoke-Silently -FilePath $exe -Arguments $argList
   if ($r.TimedOut) { return $false }

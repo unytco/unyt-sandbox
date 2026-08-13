@@ -25,6 +25,21 @@
 # removed without a single assertion noticing. `expect_err` is the fix; do not
 # "simplify" an assertion back to checking the row alone.
 #
+# A MUTANT PROVES NOTHING UNTIL YOU HAVE WATCHED IT FAIL FOR THE REASON YOU
+# INTENDED. The first mutation written for the universal-slice fix removed the
+# wrong thing and passed clean; recorded as-is it would have certified a guard
+# that was never exercised. Check the mutant's failure message, not just its
+# exit status.
+#
+# The same method found two instructions that would each have shipped a check
+# incapable of failing, and neither was reachable by reasoning about them —
+# only by building the fixture meant to prove them and watching it not fail:
+#   - reading only LC_BUILD_VERSION found NOTHING the moment it met a real
+#     x86_64 binary, which is half the artifacts
+#   - taking the max deployment target across slices passed a fixture written
+#     expecting rejection, because a too-new x86_64 slice hides behind an arm64
+#     slice legitimately at the same version
+#
 # WHAT THIS DOES NOT PROVE. The stubs encode what the real tools print, which for
 # otool is verbatim output captured from the shipped v0.100.0 artifacts (both
 # architectures), and for the signing tools is Apple's documented output, NOT
@@ -162,6 +177,12 @@ if [ "${STUB_BREAK:-}" = otool_dead ]; then
   echo "xcrun: error: unable to find utility \"otool\", not a developer tool or in PATH" >&2
   exit 72
 fi
+# The other way to read nothing: otool succeeds and prints only its own header,
+# with no indented dependency lines. Exit status says everything is fine.
+if [ "${STUB_BREAK:-}" = otool_header_only ] && [ "${1:-}" = "-L" ]; then
+  printf '%s:\n' "$2"
+  exit 0
+fi
 # `-arch <a> -l <file>` as well as `-L <file>` / `-l <file>`, because a universal
 # binary is read one slice at a time. Per-arch fixtures are <name>.<arch>.l, with
 # <name>.l as the thin fallback.
@@ -293,6 +314,11 @@ case "${STUB_BREAK:-}" in
     echo "source=Unnotarized Developer ID" >&2
     echo "origin=Developer ID Application: Unyt (TEAMID)" >&2
     exit 0 ;;
+  # Exit 0 without ever saying "accepted". The assessment did not happen, and
+  # "did not happen" must not read the same as "passed".
+  gatekeeper_silent)
+    echo "source=Notarized Developer ID" >&2
+    exit 0 ;;
 esac
 echo "$target: accepted" >&2
 echo "source=Notarized Developer ID" >&2
@@ -327,6 +353,29 @@ case "${STUB_BREAK:-}" in
   # And this is the other half: exit 0 with wording nobody taught the check.
   # Unknown must not read as pass.
   syspolicy_unknown) echo "Assessment complete. 3 items evaluated."; exit 0 ;;
+  # THE REAL SHAPE OF A FAILING REPORT. syspolicy_check reports PER CHECK, so a
+  # build with a fatal notarization problem still prints that its codesign check
+  # passed — and the failure carries none of the words a naive fail pattern looks
+  # for. A pass token matching `pass` anywhere matches the WRONG LINE here, which
+  # is a green row on a build Apple's own tool calls undistributable. Vocabulary
+  # from Apple's documented output (developer forums 706442).
+  syspolicy_mixed)
+    echo "Codesign check passed."
+    echo "Notary Ticket Missing"
+    echo "Severity: Fatal"
+    echo "Type: Distribution Error"
+    exit 0 ;;
+  syspolicy_mixed_count)
+    echo "2 of 3 checks passed."
+    echo "Notary Ticket Missing"
+    exit 0 ;;
+  # A per-check "passed" and NOTHING ELSE — no failure vocabulary to catch it,
+  # and no statement that the whole assessment succeeded. This is what isolates
+  # the pass token: with `pass` matching anywhere it is green, and the widened
+  # fail pattern cannot save it because there is nothing to match.
+  syspolicy_partial)
+    echo "Codesign check passed."
+    exit 0 ;;
 esac
 echo "App passed all pre-distribution checks and is ready for distribution."
 exit 0
@@ -453,6 +502,11 @@ expect_row() { # <check substring> <pass|FAIL> <description>
 # Which DIAGNOSIS the run produced, not merely that it went red. Where several
 # guards can reject the same fixture, only this pins the one under test — the
 # row alone stays red when the guard is deleted, so the deletion is invisible.
+# NOTE: reads $ERR, which run_scenario re-points on every call — so an expect_err
+# always refers to the MOST RECENT scenario, and moving one above its
+# run_scenario silently asserts against the previous scenario's log. Kept as a
+# global rather than threaded through because every call site sits directly
+# under its scenario; if that stops being true, pass the log explicitly.
 expect_err() { # <substring> <description>
   if grep -qF -e "$1" "$ERR"; then pass=$((pass + 1)); return; fi
   fail=$((fail + 1))
@@ -604,6 +658,20 @@ run_scenario break-twoteams STUB_BREAK=twoteams
 expect_only_failure "every Mach-O in the bundle is signed" \
   "two different signing teams in one bundle"
 
+# The UNYT_EXPECTED_TEAM_ID pin. Inert as shipped, since the constant is empty —
+# but it is precisely what someone will rely on the day they fill it in, so it
+# gets covered now rather than the first time it matters. Both directions: the
+# right team must not fire, the wrong one must.
+run_scenario team-pin-matches UNYT_EXPECTED_TEAM_ID=ABCDE12345
+expect_row "every Mach-O in the bundle is signed" pass \
+  "a matching team pin does not false-red"
+expect_rc zero "a matching team pin leaves the run green"
+
+run_scenario break-team-mismatch UNYT_EXPECTED_TEAM_ID=ZZZZZ99999
+expect_only_failure "every Mach-O in the bundle is signed" \
+  "a bundle signed by a team other than the pinned one"
+expect_err "expected ZZZZZ99999" "the mismatch names both teams"
+
 # ── 6. Gatekeeper ─────────────────────────────────────────────────────────────
 run_scenario break-gk STUB_BREAK=gatekeeper_rejected
 expect_only_failure "Gatekeeper accepts it as notarized software" \
@@ -615,6 +683,15 @@ expect_only_failure "Gatekeeper accepts it as notarized software" \
 run_scenario break-gk-source STUB_BREAK=gatekeeper_unnotarized
 expect_only_failure "Gatekeeper accepts it as notarized software" \
   "accepted, but NOT as notarized Developer ID"
+expect_err "NOT as notarized Developer ID" "the source line is what rejects it"
+
+# spctl exiting 0 without ever saying "accepted": the assessment did not happen,
+# and that must not read the same as one that passed. Nothing exercised this
+# guard before, so it was deletable unnoticed.
+run_scenario break-gk-silent STUB_BREAK=gatekeeper_silent
+expect_only_failure "Gatekeeper accepts it as notarized software" \
+  "spctl exits 0 without accepting anything"
+expect_err "without accepting the app" "the missing verdict is diagnosed as such"
 
 # ── 7. stapling ───────────────────────────────────────────────────────────────
 run_scenario break-staple STUB_BREAK=stapler
@@ -655,6 +732,30 @@ expect_err "not ready for distribution" "the output, not the exit status, is wha
 run_scenario break-syspolicy-unknown STUB_BREAK=syspolicy_unknown
 expect_only_failure "passes Apple's own distribution assessment" \
   "exit 0 with unrecognised wording is 'cannot tell', not 'fine'"
+
+# THE MIXED REPORT — the one that made this check green on an undistributable
+# build. syspolicy_check reports per check, so a fatal notarization problem sits
+# in the same output as "Codesign check passed."; a pass token matching `pass`
+# anywhere matched that line, and none of Missing/Fatal/Error was a fail token.
+# Fail must be broad and win; pass must be the one documented whole sentence.
+run_scenario break-syspolicy-mixed STUB_BREAK=syspolicy_mixed
+expect_only_failure "passes Apple's own distribution assessment" \
+  "a per-check 'passed' inside a FATAL report is not a pass"
+expect_err "not ready for distribution" "the failure block decides, not the passing line"
+
+run_scenario break-syspolicy-counted STUB_BREAK=syspolicy_mixed_count
+expect_only_failure "passes Apple's own distribution assessment" \
+  "'2 of 3 checks passed' plus a missing ticket is not a pass"
+
+# ISOLATES THE PASS TOKEN. The two scenarios above are caught by the widened
+# FAIL pattern, so they say nothing about how narrow the pass pattern is — a
+# report with a per-check "passed" and no failure vocabulary at all is the only
+# input that can tell the two apart. Only the documented whole sentence is a
+# pass; a partial report is "cannot tell", which is not green.
+run_scenario break-syspolicy-partial STUB_BREAK=syspolicy_partial
+expect_only_failure "passes Apple's own distribution assessment" \
+  "a lone per-check 'passed' is not a distribution verdict"
+expect_err "matched no known pass or fail wording" "a partial report is reported as unreadable"
 
 # ── 9. deployment target ──────────────────────────────────────────────────────
 # The documented real-world failure: a bundled dependency built against a newer
@@ -746,8 +847,15 @@ FIX_MUTATE=mutate_homebrew_real run_scenario break-otool-dead STUB_BREAK=otool_d
 expect_row "no build-machine library paths in any Mach-O" FAIL \
   "otool exits non-zero silently: a violating bundle must NOT read as clean"
 expect_rc nonzero "a dead otool goes red"
-if grep -q 'broken otool' "$ERR"; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL  a dead otool was not diagnosed as a tool failure" >&2; fi
+expect_err "broken otool" "a dead otool is diagnosed as a tool failure"
+
+# The same hole with a CLEAN exit status: otool succeeds and prints only its own
+# header line. Exit-status-based guards see nothing wrong; the path count is what
+# catches it, which is why the guard counts rather than checking the status.
+FIX_MUTATE=mutate_homebrew_real run_scenario break-otool-header-only STUB_BREAK=otool_header_only
+expect_row "no build-machine library paths in any Mach-O" FAIL \
+  "otool exits 0 having printed no dependencies at all"
+expect_err "read no load paths" "a header-only otool is caught by the path count, not its status"
 
 # ── an empty scan is not a clean scan ─────────────────────────────────────────
 # A bundle with no Mach-O in it at all — a husk, or an extraction that produced
@@ -764,6 +872,10 @@ expect_row "every Mach-O in the bundle is signed" FAIL \
 expect_row "deployment target within the supported floor" FAIL \
   "no Mach-O to read: the deployment sweep must not report clean"
 expect_rc nonzero "a bundle with no Mach-O goes red"
+# Which guard: the no-files one, not the per-file path count, which cannot fire
+# when the loop never runs. Without this the two are interchangeable and either
+# could be deleted unnoticed.
+expect_err "nothing was scanned" "the no-Mach-O guard is what rejects an empty bundle"
 
 # The enumeration must exclude the non-Mach-O and include all three Mach-Os —
 # a scan that quietly covered one file would make several checks meaningless.
@@ -780,8 +892,8 @@ echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 198 ]; then
-  echo "::error::only $pass assertions ran; expected at least 198 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 255 ]; then
+  echo "::error::only $pass assertions ran; expected at least 255 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

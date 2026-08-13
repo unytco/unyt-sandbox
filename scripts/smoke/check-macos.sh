@@ -72,7 +72,7 @@ UNYT_BUILD_MACHINE_PREFIXES='/usr/local/ /opt/homebrew/ /opt/local/'
 # signature must still name a Developer ID Application authority and carry SOME
 # team, and every Mach-O in the bundle must agree on which. Setting it turns
 # "signed by a real team" into "signed by OUR team".
-UNYT_EXPECTED_TEAM_ID=""
+UNYT_EXPECTED_TEAM_ID="${UNYT_EXPECTED_TEAM_ID:-}"
 
 # How long `hdiutil attach` may take before it is treated as stuck. Generous for
 # a 50MB image on a busy runner, and far below any job timeout, so a stall is
@@ -392,24 +392,15 @@ run_check "the bundle's architecture matches the runner" check_arch_matches_runn
 
 # ── 4. nothing points at the build machine ────────────────────────────────────
 check_no_build_machine_paths() {
-  local f p prefix deps hits=0 total=0 paths=0
+  local f p prefix deps dep_rc file_paths hits=0 total=0 paths=0
   while IFS= read -r f; do
     total=$((total + 1))
-    # THE GUARD BELONGS ON THE PATHS, NOT THE FILES. Counting files answers "was
-    # there anything to scan"; it does not answer "did we manage to read any of
-    # it". With otool broken, every file is iterated, no path is ever examined,
-    # and the loop below finds no violations — a pass produced by reading
-    # nothing. Checked per file, because one unreadable binary among many is
-    # exactly where a violation would hide.
-    if ! deps="$(macho_dep_paths "$f")"; then
-      echo "::error::otool -L read no dependencies from ${f#"$APP"/}." >&2
-      echo "  Every Mach-O links at least libSystem, so this is a broken otool — a stale" >&2
-      echo "  xcode-select path does it — not a clean binary. Refusing to report a scan" >&2
-      echo "  that read nothing." >&2
-      return 1
-    fi
+    file_paths=0
+    dep_rc=0
+    deps="$(macho_dep_paths "$f")" || dep_rc=$?
     while IFS= read -r p; do
       [ -n "$p" ] || continue
+      file_paths=$((file_paths + 1))
       paths=$((paths + 1))
       # shellcheck disable=SC2086  # the constant is a space-separated list, split on purpose
       for prefix in $UNYT_BUILD_MACHINE_PREFIXES; do
@@ -421,17 +412,33 @@ check_no_build_machine_paths() {
         esac
       done
     done < <(printf '%s\n' "$deps"; macho_rpaths "$f")
+
+    # THE GUARD BELONGS ON THE PATHS, NOT THE FILES — and on the count, not on
+    # otool's exit status. Counting files answers "was there anything to scan",
+    # never "did we manage to read any of it": with otool broken every file is
+    # iterated, no path is examined, no violation is found, and the row goes
+    # green having read nothing.
+    #
+    # ONE guard, per file, because that is the only formulation that is actually
+    # REACHABLE. An earlier version had this as two — a non-zero exit from
+    # macho_dep_paths, plus an aggregate count at the end — and the aggregate one
+    # could never fire: the per-file check returned first whenever deps was
+    # empty, so each guard was individually deletable without any test noticing.
+    # Counting per file covers both causes at once: otool exiting non-zero, and
+    # otool exiting 0 having printed nothing but its own header line.
+    if [ "$file_paths" -eq 0 ]; then
+      echo "::error::otool read no load paths from ${f#"$APP"/} (exit $dep_rc)." >&2
+      echo "  Every Mach-O links at least libSystem, so this is a broken otool — a stale" >&2
+      echo "  xcode-select path does it — not a clean binary. Refusing to report a scan" >&2
+      echo "  that read nothing." >&2
+      return 1
+    fi
   done <"$MACHOS"
   if [ "$total" -eq 0 ]; then
     # No Mach-O at all means the scan proved nothing; an empty sweep must not
-    # report the same green row as a clean one.
+    # report the same green row as a clean one. Distinct from the per-file guard
+    # above, which cannot fire when the loop never runs.
     echo "::error::no Mach-O files found in the bundle — nothing was scanned" >&2
-    return 1
-  fi
-  if [ "$paths" -eq 0 ]; then
-    # Belt to the per-file brace above: the population this check inspects is
-    # load paths, so the aggregate gets its own floor too.
-    echo "::error::$total Mach-O file(s) yielded no load paths at all — nothing was inspected" >&2
     return 1
   fi
   if [ "$hits" -gt 0 ]; then
@@ -459,7 +466,8 @@ run_check "no build-machine library paths in any Mach-O" check_no_build_machine_
 # maintain — an ad-hoc signature has no authority chain at all and reports
 # `TeamIdentifier=not set`, so requiring a Developer ID authority, a real team,
 # and one team across the bundle discriminates exactly what -R would here.
-# Set UNYT_EXPECTED_TEAM_ID above to pin the team without -R.
+# Set UNYT_EXPECTED_TEAM_ID (a constant above, overridable from the environment)
+# to pin the team without -R.
 check_every_macho_signed() {
   local f out rc info team teams="" bad=0 total=0
   while IFS= read -r f; do
@@ -564,6 +572,15 @@ run_check "Gatekeeper accepts it as notarized software" check_gatekeeper
 # Notarized but unstapled works only while Apple's service is reachable: offline,
 # or during an outage, the first launch fails. Stapling is what makes the ticket
 # part of the download.
+#
+# EXIT STATUS ALONE, AND THAT IS CORRECT HERE — the asymmetry with check 8 is
+# deliberate, not an oversight. stapler(1) DOCUMENTS its statuses (0 on success,
+# and 65/66/68/77 via sysexits), and documents that success is SILENT without
+# -v. So the status is a real contract, and grepping for a success string would
+# be a false-red trap: there is no string to find. Check 8 reads its tool's
+# output precisely because Apple documents no status for that one. Same rule
+# both times — trust what is documented — reaching opposite conclusions because
+# what is documented differs.
 check_stapled() {
   local out rc
   out="$(xcrun stapler validate "$APP" 2>&1)"
@@ -610,12 +627,27 @@ check_syspolicy() {
   # assumption, and a check resting on it would report a pass for a tool that
   # exits 0 while saying the build is unacceptable. This is the same rule check 6
   # applies to spctl, which is accepted only when it BOTH exits 0 and names a
-  # notarized source. Three outcomes, and only one of them is green:
-  if [ "$rc" -ne 0 ] || printf '%s' "$out" | grep -qiE 'fail|not (notarized|signed|accepted)|rejected|unacceptable|denied'; then
+  # notarized source.
+  #
+  # THE TWO PATTERNS ARE DELIBERATELY ASYMMETRIC, and in this direction only.
+  # syspolicy_check reports PER CHECK, so its output mixes verdicts: a build with
+  # a fatal notarization problem still prints "Codesign check passed." A pass
+  # token matching `pass` anywhere therefore matched the wrong line, and the real
+  # failure — `Notary Ticket Missing`, `Severity: Fatal`, `Type: Distribution
+  # Error` — carried none of the words the fail pattern looked for. That is a
+  # green row on a build Apple's own tool calls undistributable.
+  #
+  # So: FAIL is broad and wins, PASS is the one documented whole sentence. Any
+  # report that says "missing", "error", "fatal" or carries a severity is a
+  # failure regardless of how many individual checks passed, and only "ready for
+  # distribution" is success. A wrong guess about the wording is then a false RED
+  # that says so, never a false green.
+  if [ "$rc" -ne 0 ] ||
+    printf '%s' "$out" | grep -qiE 'fail|missing|error|fatal|severity|rejected|unacceptable|denied|not (notarized|signed|accepted|ready)'; then
     echo "::error::syspolicy_check says this build is not ready for distribution (exit $rc)" >&2
     return 1
   fi
-  if ! printf '%s' "$out" | grep -qiE 'pass|ready for distribution|accepted|succeeded'; then
+  if ! printf '%s' "$out" | grep -qiF 'ready for distribution'; then
     # Cannot tell. Not a pass: the wording is undocumented, so an unrecognised
     # answer means this check could not do its job, and a green row would claim
     # it did. Fails LOUDLY towards the operator rather than quietly towards the
