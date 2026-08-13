@@ -1,0 +1,361 @@
+﻿<#
+.SYNOPSIS
+  Can every Windows check actually FAIL?
+
+.DESCRIPTION
+  pwsh -File scripts/smoke/test-windows-checks.ps1
+
+  WHY THIS EXISTS. This suite's hard rule is that a check must be able to fail:
+  nine defects in it made a check silently pass, and every one was found by
+  feeding a deliberately broken input, never by reading the code.
+
+  It drives the REAL functions out of check-windows.ps1 — dot-sourced with
+  -LibraryOnly — rather than a copy of them, for the same reason test-oracle.sh
+  drives common.sh's matchers: every oracle bug so far has been in the call
+  site, and a copy would pass while the real script stayed broken.
+
+  It runs on ANY platform, which is what makes it worth having: this repo has no
+  Windows machine, so without it the checks would ship having never been
+  observed to go either way. The import parser is fed synthetic PE images
+  assembled byte by byte here — both PE32 and PE32+, with normal and delay-load
+  imports — and its output on the real shipped installer was cross-checked
+  against GNU objdump during development, on both formats, name for name.
+
+  WHAT THIS DOES NOT PROVE. Anything that needs a real Windows: the actual
+  install and uninstall, the registry, signtool, and whether an NSIS silent
+  install really lands where this expects. Those are verified the first time the
+  lane runs on a Windows runner.
+#>
+[CmdletBinding()]
+param()
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $here 'check-windows.ps1') -LibraryOnly
+
+$script:Pass = 0
+$script:Fail = 0
+function Assert-That {
+  param([Parameter(Mandatory)][string]$What, [Parameter(Mandatory)][AllowNull()][object]$Got, [AllowNull()][object]$Want)
+  $g = if ($null -eq $Got) { '<null>' } else { ($Got -join ',') }
+  $w = if ($null -eq $Want) { '<null>' } else { ($Want -join ',') }
+  # `-ceq`, NOT `-eq`. PowerShell's default string comparison is CASE-BLIND, so
+  # this assertion could not tell NSIS's `/S` from `/s` — and `/s` is not a
+  # switch NSIS knows, so the uninstaller would run interactively and hang the
+  # job. An assertion that cannot fail is the bug this whole file exists to
+  # prevent, and it was found here by mutation, not by reading.
+  if ($g -ceq $w) { $script:Pass++ ; return }
+  $script:Fail++
+  [Console]::Error.WriteLine(("FAIL  {0,-62} expected [{1}], got [{2}]" -f $What, $w, $g))
+}
+function Assert-True { param([string]$What, [object]$Got) Assert-That -What $What -Got ([bool]$Got) -Want $true }
+function Assert-False { param([string]$What, [object]$Got) Assert-That -What $What -Got ([bool]$Got) -Want $false }
+
+$root = Join-Path ([System.IO.Path]::GetTempPath()) ("unyt-smoke-win-" + [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $root -Force | Out-Null
+try {
+
+  # ── a PE image, assembled byte by byte ──────────────────────────────────────
+  # The import table is the only place the check's central question is answered,
+  # so the fixture has to be a real PE rather than a mocked return value. Both
+  # optional-header magics are built because they place the data directories at
+  # different offsets — read PE32+ with PE32's layout and the import RVA is
+  # garbage, which is a silent "no imports found", which is a silent pass.
+  function Build-TestPe {
+    param(
+      [Parameter(Mandatory)][string]$Path,
+      [string[]]$Imports = @(),
+      [string[]]$DelayImports = @(),
+      [ValidateSet('PE32', 'PE32+')][string]$Format = 'PE32+',
+      # The delay-load descriptor's "old" format stores virtual addresses rather
+      # than RVAs; the parser has to take the image base off them.
+      [switch]$OldFormatDelay
+    )
+    $peOffset = 0x80
+    $secRva = 0x1000
+    $secRaw = 0x400
+    if ($Format -eq 'PE32+') { $magic = 0x20B; $optSize = 240; $imageBase = [uint64]0x140000000 }
+    else { $magic = 0x10B; $optSize = 224; $imageBase = [uint64]0x400000 }
+
+    # Section payload: import descriptors, then delay descriptors, then the name
+    # strings they point at.
+    $impTable = if ($Imports.Count) { ($Imports.Count + 1) * 20 } else { 0 }
+    $delTable = if ($DelayImports.Count) { ($DelayImports.Count + 1) * 32 } else { 0 }
+    $namesAt = $impTable + $delTable
+    $sec = [System.Collections.Generic.List[byte]]::new()
+    $sec.AddRange([byte[]]::new($namesAt))
+    $nameRva = @{}
+    foreach ($n in ($Imports + $DelayImports)) {
+      if ($nameRva.ContainsKey($n)) { continue }
+      $nameRva[$n] = $secRva + $sec.Count
+      $sec.AddRange([System.Text.Encoding]::ASCII.GetBytes($n))
+      $sec.Add(0)
+    }
+    $secBytes = $sec.ToArray()
+    for ($i = 0; $i -lt $Imports.Count; $i++) {
+      # IMAGE_IMPORT_DESCRIPTOR: the DLL name RVA sits at +12.
+      [BitConverter]::GetBytes([uint32]$nameRva[$Imports[$i]]).CopyTo($secBytes, ($i * 20) + 12)
+    }
+    for ($i = 0; $i -lt $DelayImports.Count; $i++) {
+      # IMAGE_DELAYLOAD_DESCRIPTOR: attributes at +0, name at +4.
+      $base = $impTable + ($i * 32)
+      $attrs = if ($OldFormatDelay) { [uint32]0 } else { [uint32]1 }
+      $field = if ($OldFormatDelay) { [uint32]($imageBase + $nameRva[$DelayImports[$i]]) } else { [uint32]$nameRva[$DelayImports[$i]] }
+      [BitConverter]::GetBytes($attrs).CopyTo($secBytes, $base)
+      [BitConverter]::GetBytes($field).CopyTo($secBytes, $base + 4)
+    }
+
+    $file = [byte[]]::new($secRaw + $secBytes.Length)
+    $file[0] = 0x4D; $file[1] = 0x5A                                   # MZ
+    [BitConverter]::GetBytes([int32]$peOffset).CopyTo($file, 0x3C)     # e_lfanew
+    $file[$peOffset] = 0x50; $file[$peOffset + 1] = 0x45               # PE\0\0
+    [BitConverter]::GetBytes([uint16]0x8664).CopyTo($file, $peOffset + 4)   # Machine
+    [BitConverter]::GetBytes([uint16]1).CopyTo($file, $peOffset + 6)        # NumberOfSections
+    [BitConverter]::GetBytes([uint16]$optSize).CopyTo($file, $peOffset + 20)
+    [BitConverter]::GetBytes([uint16]0x2022).CopyTo($file, $peOffset + 22)  # Characteristics
+
+    $opt = $peOffset + 24
+    [BitConverter]::GetBytes([uint16]$magic).CopyTo($file, $opt)
+    if ($Format -eq 'PE32+') {
+      [BitConverter]::GetBytes([uint64]$imageBase).CopyTo($file, $opt + 24)
+      $dir = $opt + 112
+    }
+    else {
+      [BitConverter]::GetBytes([uint32]$imageBase).CopyTo($file, $opt + 28)
+      $dir = $opt + 96
+    }
+    if ($Imports.Count) {
+      [BitConverter]::GetBytes([uint32]$secRva).CopyTo($file, $dir + 8)           # dir[1] import
+      [BitConverter]::GetBytes([uint32]$impTable).CopyTo($file, $dir + 12)
+    }
+    if ($DelayImports.Count) {
+      [BitConverter]::GetBytes([uint32]($secRva + $impTable)).CopyTo($file, $dir + (13 * 8))
+      [BitConverter]::GetBytes([uint32]$delTable).CopyTo($file, $dir + (13 * 8) + 4)
+    }
+
+    $s = $opt + $optSize
+    [System.Text.Encoding]::ASCII.GetBytes('.text').CopyTo($file, $s)
+    [BitConverter]::GetBytes([uint32]$secBytes.Length).CopyTo($file, $s + 8)   # VirtualSize
+    [BitConverter]::GetBytes([uint32]$secRva).CopyTo($file, $s + 12)           # VirtualAddress
+    [BitConverter]::GetBytes([uint32]$secBytes.Length).CopyTo($file, $s + 16)  # SizeOfRawData
+    [BitConverter]::GetBytes([uint32]$secRaw).CopyTo($file, $s + 20)           # PointerToRawData
+    $secBytes.CopyTo($file, $secRaw)
+
+    [System.IO.File]::WriteAllBytes($Path, $file)
+    return $Path
+  }
+
+  # ── Get-ImportedDll ─────────────────────────────────────────────────────────
+  $pe64 = Build-TestPe -Path (Join-Path $root 'app64.exe') -Format 'PE32+' -Imports @('KERNEL32.dll', 'VCRUNTIME140.dll')
+  Assert-That 'PE32+ imports are read' (Get-ImportedDll -Path $pe64) @('KERNEL32.dll', 'VCRUNTIME140.dll')
+
+  $pe32 = Build-TestPe -Path (Join-Path $root 'app32.exe') -Format 'PE32' -Imports @('ADVAPI32.dll', 'USER32.dll')
+  Assert-That 'PE32 imports are read (the directories move)' (Get-ImportedDll -Path $pe32) @('ADVAPI32.dll', 'USER32.dll')
+
+  # A delay-loaded DLL is just as absent from the user's machine; the app dies
+  # the moment it touches that code path rather than at startup.
+  $peDelay = Build-TestPe -Path (Join-Path $root 'delay.exe') -Imports @('KERNEL32.dll') -DelayImports @('WebView2Loader.dll')
+  Assert-That 'delay-load imports are read too' (Get-ImportedDll -Path $peDelay) @('KERNEL32.dll', 'WebView2Loader.dll')
+
+  # PE32 for this one: the old format's name field is a 32-bit VIRTUAL ADDRESS,
+  # which is why it only ever occurs in 32-bit images — a 64-bit image base does
+  # not fit in it.
+  $peOld = Build-TestPe -Path (Join-Path $root 'delayold.exe') -Format 'PE32' -Imports @('KERNEL32.dll') -DelayImports @('MSVCP140.dll') -OldFormatDelay
+  Assert-That 'old-format delay descriptors (VA, not RVA)' (Get-ImportedDll -Path $peOld) @('KERNEL32.dll', 'MSVCP140.dll')
+
+  $peNone = Build-TestPe -Path (Join-Path $root 'none.exe')
+  Assert-That 'a PE with no imports reports none' (Get-ImportedDll -Path $peNone).Count 0
+
+  # A file that is not a PE must THROW, not return an empty list: "no imports"
+  # and "could not be read" must never be the same answer, or a check that
+  # scanned nothing reports the same green row as a clean scan.
+  Set-Content -LiteralPath (Join-Path $root 'notpe.exe') -Value 'this is not a PE image at all' -NoNewline
+  $threw = $false
+  try { Get-ImportedDll -Path (Join-Path $root 'notpe.exe') | Out-Null } catch { $threw = $true }
+  Assert-True 'a non-PE file throws rather than reporting no imports' $threw
+
+  [System.IO.File]::WriteAllBytes((Join-Path $root 'trunc.exe'), [byte[]]@(0x4D, 0x5A, 0, 0))
+  $threw = $false
+  try { Get-ImportedDll -Path (Join-Path $root 'trunc.exe') | Out-Null } catch { $threw = $true }
+  Assert-True 'a truncated PE throws' $threw
+
+  # ── Get-UnsatisfiedImport ───────────────────────────────────────────────────
+  # The Windows shape of the .deb dependency gate: what does the artifact need
+  # that the machine is not guaranteed to have?
+  Assert-That 'the VC++ runtime is NOT guaranteed by Windows' `
+  (Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'VCRUNTIME140.dll') -ShippedFiles @('app.exe')) @('VCRUNTIME140.dll')
+  Assert-That 'shipping the DLL beside the app satisfies it' `
+  (Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'VCRUNTIME140.dll') -ShippedFiles @('app.exe', 'VCRUNTIME140.dll')).Count 0
+  # PE import names are whatever the linker recorded, so a case-sensitive
+  # comparison would let the same DLL pass or fail depending on its spelling.
+  Assert-That 'the check is case-insensitive on the import' `
+  (Get-UnsatisfiedImport -Imports @('vcruntime140.DLL') -ShippedFiles @()) @('vcruntime140.DLL')
+  Assert-That 'the check is case-insensitive on what is shipped' `
+  (Get-UnsatisfiedImport -Imports @('VCRUNTIME140.dll') -ShippedFiles @('vcruntime140.dll')).Count 0
+  Assert-That 'kernel32 in any case is guaranteed' `
+  (Get-UnsatisfiedImport -Imports @('KERNEL32.DLL', 'kernel32.dll') -ShippedFiles @()).Count 0
+  Assert-That 'the UCRT and its api-set forwarders are Windows components' `
+  (Get-UnsatisfiedImport -Imports @('ucrtbase.dll', 'api-ms-win-crt-runtime-l1-1-0.dll', 'ext-ms-win-foo-l1-1-0.dll') -ShippedFiles @()).Count 0
+  # Tauri normally links this statically; if it is imported and not shipped,
+  # that is a real packaging break, so it must not be on the allowlist.
+  Assert-That 'WebView2Loader is not quietly allowlisted' `
+  (Get-UnsatisfiedImport -Imports @('WebView2Loader.dll') -ShippedFiles @()) @('WebView2Loader.dll')
+  Assert-That 'a clean import set produces no finding' `
+  (Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'USER32.dll', 'ole32.dll') -ShippedFiles @()).Count 0
+
+  # End to end, from PE bytes to verdict — the two functions the check actually
+  # composes, driven together rather than each in isolation.
+  Assert-That 'PE bytes through to the finding' `
+  (Get-UnsatisfiedImport -Imports (Get-ImportedDll -Path $pe64) -ShippedFiles @('app64.exe')) @('VCRUNTIME140.dll')
+
+  Assert-True 'VCRUNTIME140.dll is named as the VC++ redistributable' (Test-IsVcRuntime -Dll 'VCRUNTIME140.dll')
+  Assert-True 'VCRUNTIME140_1.dll too' (Test-IsVcRuntime -Dll 'VCRUNTIME140_1.dll')
+  Assert-True 'MSVCP140.dll too' (Test-IsVcRuntime -Dll 'msvcp140.dll')
+  Assert-True 'CONCRT140.dll too' (Test-IsVcRuntime -Dll 'CONCRT140.dll')
+  Assert-False 'kernel32 is not the VC++ redistributable' (Test-IsVcRuntime -Dll 'kernel32.dll')
+  Assert-False 'WebView2Loader is not either' (Test-IsVcRuntime -Dll 'WebView2Loader.dll')
+
+  # ── Test-SignatureVerdict ───────────────────────────────────────────────────
+  # NotSigned is our builds' CURRENT state, and it must be a failure: the whole
+  # point of gating it is that the day a certificate is wired in, this turns
+  # green with no edit.
+  Assert-True 'a valid signature passes' (Test-SignatureVerdict -Status 'Valid' -SignerSubject 'CN=Unyt').Ok
+  Assert-False 'an unsigned installer FAILS' (Test-SignatureVerdict -Status 'NotSigned').Ok
+  Assert-True 'and says so plainly' ((Test-SignatureVerdict -Status 'NotSigned').Message -match 'NO Authenticode')
+  Assert-False 'a tampered signature fails' (Test-SignatureVerdict -Status 'HashMismatch').Ok
+  Assert-False 'an untrusted signer fails' (Test-SignatureVerdict -Status 'UnknownError').Ok
+  Assert-False 'an empty status fails' (Test-SignatureVerdict -Status '').Ok
+
+  # ── Get-ArtifactVersion / Get-InstallerKind ─────────────────────────────────
+  Assert-That 'the version comes out of a release asset name' `
+  (Get-ArtifactVersion -FileName 'unyt_0.100.0_Unyt.Sandbox_default-arc_x64_windows.exe') '0.100.0'
+  Assert-That 'and out of the .msi name' `
+  (Get-ArtifactVersion -FileName 'unyt_1.2.3_Unyt.Sandbox_default-arc_x64_windows.msi') '1.2.3'
+  Assert-That 'a hand-built file has no version to read' (Get-ArtifactVersion -FileName 'handbuilt.exe') $null
+  # NSIS artifacts here are a plain .exe, never -setup.exe; a name that does not
+  # match must be unknown rather than silently accepted.
+  Assert-That 'a non-release name is unknown' (Get-ArtifactVersion -FileName 'unyt-setup.exe') $null
+  Assert-That 'an .exe is the NSIS installer' (Get-InstallerKind -Path 'a\b\x.exe') 'nsis'
+  Assert-That 'case does not matter' (Get-InstallerKind -Path 'X.EXE') 'nsis'
+  Assert-That 'an .msi is the MSI' (Get-InstallerKind -Path 'x.msi') 'msi'
+  Assert-That 'anything else is refused' (Get-InstallerKind -Path 'x.zip') 'unsupported'
+
+  # ── Get-NewUninstallEntry ───────────────────────────────────────────────────
+  $a = [PSCustomObject]@{ KeyPath = 'HKCU:\...\A'; DisplayName = 'A'; DisplayVersion = '1' }
+  $b = [PSCustomObject]@{ KeyPath = 'HKCU:\...\B'; DisplayName = 'B'; DisplayVersion = '1' }
+  $c = [PSCustomObject]@{ KeyPath = 'HKCU:\...\Unyt'; DisplayName = 'Unyt Sandbox'; DisplayVersion = '0.100.0' }
+  Assert-That 'the entry the install added is the one found' `
+  (Get-NewUninstallEntry -Before @($a, $b) -After @($a, $b, $c)).KeyPath 'HKCU:\...\Unyt'
+  Assert-That 'an install that registered nothing is detected' `
+  (Get-NewUninstallEntry -Before @($a, $b) -After @($a, $b)).Count 0
+  Assert-That 'a first-ever entry is found on an empty machine' `
+  (Get-NewUninstallEntry -Before @() -After @($c)).Count 1
+
+  # ── Test-UninstallEntry ─────────────────────────────────────────────────────
+  Assert-True 'the registered version matching the artifact passes' (Test-UninstallEntry -Entry $c -ExpectedVersion '0.100.0').Ok
+  Assert-False 'a version mismatch fails' (Test-UninstallEntry -Entry $c -ExpectedVersion '0.99.0').Ok
+  Assert-False 'no entry at all fails' (Test-UninstallEntry -Entry $null -ExpectedVersion '0.100.0').Ok
+  # Cannot answer is not a pass — and it must fail FOR THAT REASON. Both verdicts
+  # are red, so without pinning the message a check that had stopped
+  # distinguishing "no version to compare" from "the versions differ" would look
+  # identical here.
+  Assert-False 'an unknown expected version fails' (Test-UninstallEntry -Entry $c -ExpectedVersion $null).Ok
+  Assert-True 'and fails as unanswerable, not as a mismatch' `
+  ((Test-UninstallEntry -Entry $c -ExpectedVersion $null).Message -match 'carries no version')
+
+  # ── Get-UninstallCommand ────────────────────────────────────────────────────
+  Assert-That 'a QuietUninstallString is used as given' `
+  (Get-UninstallCommand -Entry ([PSCustomObject]@{ QuietUninstallString = '"C:\P\uninstall.exe" /S'; UninstallString = '"C:\P\uninstall.exe"' })) `
+    '"C:\P\uninstall.exe" /S'
+  # UPPERCASE /S. A lowercase /s is not a switch NSIS knows, so the installer
+  # runs INTERACTIVELY and the job waits on a dialog nobody will click.
+  Assert-That 'an NSIS uninstaller gets an uppercase /S' `
+  (Get-UninstallCommand -Entry ([PSCustomObject]@{ UninstallString = '"C:\P\uninstall.exe"' })) '"C:\P\uninstall.exe" /S'
+  # /I means "modify" — reusing the MSI string unchanged pops the maintenance UI.
+  Assert-That 'an MSI string becomes a quiet /x by product code' `
+  (Get-UninstallCommand -Entry ([PSCustomObject]@{ UninstallString = 'MsiExec.exe /I{3F2504E0-4F89-11D3-9A0C-0305E82C3301}' })) `
+    'msiexec.exe /x {3F2504E0-4F89-11D3-9A0C-0305E82C3301} /quiet /norestart'
+  Assert-That 'an entry with no uninstall string yields nothing' `
+  (Get-UninstallCommand -Entry ([PSCustomObject]@{ DisplayName = 'X' })) $null
+  Assert-That 'an msiexec string with no product code yields nothing' `
+  (Get-UninstallCommand -Entry ([PSCustomObject]@{ UninstallString = 'msiexec.exe /I' })) $null
+
+  # ── Test-InstallDirectory ───────────────────────────────────────────────────
+  $good = Join-Path $root 'installed'; New-Item -ItemType Directory -Path $good -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $good 'unyt-sandbox.exe') -Value 'x'
+  Assert-True 'a directory holding the program passes' (Test-InstallDirectory -Path $good).Ok
+  $empty = Join-Path $root 'empty'; New-Item -ItemType Directory -Path $empty -Force | Out-Null
+  Assert-False 'a registered install that shipped no program fails' (Test-InstallDirectory -Path $empty).Ok
+  Assert-False 'a missing install directory fails' (Test-InstallDirectory -Path (Join-Path $root 'nope')).Ok
+  Assert-False 'no recorded location fails' (Test-InstallDirectory -Path $null).Ok
+
+  # ── Test-RemovalComplete ────────────────────────────────────────────────────
+  Assert-True 'a clean removal passes' `
+  (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir (Join-Path $root 'nope')).Ok
+  Assert-False 'an uninstaller that leaves its registration fails' `
+  (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $c) -InstallDir (Join-Path $root 'nope')).Ok
+  Assert-False 'an uninstaller that leaves the program behind fails' `
+  (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir $good).Ok
+  Assert-That 'and both problems are reported at once' `
+  (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($c) -InstallDir $good).Problems.Count 2
+
+  # ── Invoke-Check: a body that does not answer is a FAILURE ──────────────────
+  # The suite's defining bug class, guarded at the harness level: `[bool](&
+  # $Body)` would call any non-empty output true, so one unsilenced cmdlet line
+  # would turn a failing check green.
+  $script:Results.Clear()
+  Invoke-Check 'returns true' { $true }
+  Invoke-Check 'returns false' { $false }
+  Invoke-Check 'returns nothing' { }
+  Invoke-Check 'throws' { throw 'boom' }
+  Invoke-Check 'emits a stray line and no verdict' { 'some output nobody silenced' }
+  Invoke-Check 'emits a stray line then false' { 'chatter'; $false }
+  Assert-That 'a true body passes' $script:Results[0].Verdict 'pass'
+  Assert-That 'a false body fails' $script:Results[1].Verdict 'FAIL'
+  Assert-That 'a body returning nothing fails' $script:Results[2].Verdict 'FAIL'
+  Assert-That 'a throwing body fails, never skips' $script:Results[3].Verdict 'FAIL'
+  Assert-That 'stray output is not a verdict' $script:Results[4].Verdict 'FAIL'
+  Assert-That 'stray output does not mask a false verdict' $script:Results[5].Verdict 'FAIL'
+  $script:Results.Clear()
+
+  # ── Invoke-Silently: it must not wait forever ───────────────────────────────
+  # An installer given the wrong silent switch puts a dialog up and waits. Real
+  # processes, on whatever platform this is running on, because the point is the
+  # timeout and the kill, not the command.
+  if ($IsWindows) { $sh = 'cmd.exe'; $ok = @('/c', 'exit 0'); $bad = @('/c', 'exit 3'); $hang = @('/c', 'pause') }
+  else { $sh = '/bin/sh'; $ok = @('-c', 'exit 0'); $bad = @('-c', 'exit 3'); $hang = @('-c', 'sleep 60') }
+  $r = Invoke-Silently -FilePath $sh -Arguments $ok -TimeoutSeconds 30
+  Assert-That 'a clean run reports exit 0' $r.ExitCode 0
+  Assert-False 'and did not time out' $r.TimedOut
+  $r = Invoke-Silently -FilePath $sh -Arguments $bad -TimeoutSeconds 30
+  Assert-That 'a failing installer reports its exit code' $r.ExitCode 3
+  $started = Get-Date
+  $r = Invoke-Silently -FilePath $sh -Arguments $hang -TimeoutSeconds 3
+  Assert-True 'a process that never finishes is reported as a timeout' $r.TimedOut
+  Assert-True 'and is given up on promptly rather than hanging the job' (((Get-Date) - $started).TotalSeconds -lt 30)
+
+  # An argument containing a space must reach the process as ONE argument.
+  # Unquoted it is re-split, which is how `msiexec /i C:\dir with space\x.msi`
+  # silently installs nothing — and, in this test, how a command that should
+  # fail was reported as exit 0.
+  if ($IsWindows) { $spaced = @('/c', 'exit 7') } else { $spaced = @('-c', 'exit 7') }
+  $r = Invoke-Silently -FilePath $sh -Arguments $spaced -TimeoutSeconds 30
+  Assert-That 'an argument with a space is passed as one argument' $r.ExitCode 7
+
+}
+finally {
+  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Output "windows check regression: $script:Pass passed, $script:Fail failed"
+# A floor on the COUNT, not just on failures: truncate this file and it would
+# otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding
+# assertions.
+if ($script:Pass -lt 60) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 60 — the test file is truncated or a block was skipped")
+  exit 1
+}
+if ($script:Fail -gt 0) { exit 1 }
+exit 0
