@@ -17,6 +17,14 @@
 # test-oracle.sh: it drives the real call sites, because a copy of the logic
 # would pass while the real script stayed broken.
 #
+# ASSERT WHICH DIAGNOSIS FIRED, NOT JUST THAT THE ROW WENT RED. Several checks
+# here are layered — an ad-hoc signature also lacks an Authority line, a dead
+# otool trips both the per-file and the aggregate guard — so a colour-only
+# assertion stays green when a guard is deleted, because a DIFFERENT guard still
+# reddens the row. Mutation testing found exactly that: three guards could be
+# removed without a single assertion noticing. `expect_err` is the fix; do not
+# "simplify" an assertion back to checking the row alone.
+#
 # WHAT THIS DOES NOT PROVE. The stubs encode what the real tools print, which for
 # otool is verbatim output captured from the shipped v0.100.0 artifacts (both
 # architectures), and for the signing tools is Apple's documented output, NOT
@@ -154,18 +162,39 @@ if [ "${STUB_BREAK:-}" = otool_dead ]; then
   echo "xcrun: error: unable to find utility \"otool\", not a developer tool or in PATH" >&2
   exit 72
 fi
-mode="$1"; shift
-f="$1"
+# `-arch <a> -l <file>` as well as `-L <file>` / `-l <file>`, because a universal
+# binary is read one slice at a time. Per-arch fixtures are <name>.<arch>.l, with
+# <name>.l as the thin fallback.
+mode=""; arch=""; f=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -arch) arch="$2"; shift 2 ;;
+    -L|-l) mode="$1"; shift ;;
+    *) f="$1"; shift ;;
+  esac
+done
+b="$(basename "$f")"
 case "$mode" in
-  -L) printf '%s:\n' "$f"; cat "$STUB_FIXTURE/otool/$(basename "$f").L" 2>/dev/null ;;
-  -l) cat "$STUB_FIXTURE/otool/$(basename "$f").l" 2>/dev/null ;;
+  -L) printf '%s:\n' "$f"; cat "$STUB_FIXTURE/otool/$b.L" 2>/dev/null ;;
+  -l)
+    if [ -n "$arch" ] && [ -f "$STUB_FIXTURE/otool/$b.$arch.l" ]; then
+      cat "$STUB_FIXTURE/otool/$b.$arch.l"
+    else
+      cat "$STUB_FIXTURE/otool/$b.l" 2>/dev/null
+    fi ;;
 esac
 exit 0
 EOF
 
+  # Per-file arch lists, so one fixture can be universal while the rest are thin.
   cat >"$bin/lipo" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "${STUB_BIN_ARCH:-x86_64}"
+f="${@: -1}"
+if [ -f "$STUB_FIXTURE/lipo/$(basename "$f")" ]; then
+  cat "$STUB_FIXTURE/lipo/$(basename "$f")"
+else
+  printf '%s\n' "${STUB_BIN_ARCH:-x86_64}"
+fi
 EOF
 
   cat >"$bin/uname" <<'EOF'
@@ -358,6 +387,22 @@ EOF
     printf '%s\n' "$OTOOL_L_CLEAN" >"$dir/otool/$m.L"
     printf '%s\n' "$lc" >"$dir/otool/$m.l"
   done
+
+  # A UNIVERSAL main binary: two slices, two different minimums, two different
+  # floors. FIX_UNIVERSAL_X86 sets what the x86_64 slice demands — 10.13 is
+  # correct, 11.0 is the bug that hides behind the arm64 slice, since the max
+  # across slices is 11.0 either way.
+  if [ -n "${FIX_UNIVERSAL:-}" ]; then
+    mkdir -p "$dir/lipo"
+    printf 'x86_64 arm64\n' >"$dir/lipo/unyt-sandbox"
+    printf '%s\n' "$LC_ARM64" >"$dir/otool/unyt-sandbox.arm64.l"
+    if [ "${FIX_UNIVERSAL_X86:-10.13}" = "10.13" ]; then
+      printf '%s\n' "$LC_X86" >"$dir/otool/unyt-sandbox.x86_64.l"
+    else
+      printf 'Load command 9\n      cmd LC_VERSION_MIN_MACOSX\n  cmdsize 16\n  version %s\n      sdk 26.5\n' \
+        "${FIX_UNIVERSAL_X86}" >"$dir/otool/unyt-sandbox.x86_64.l"
+    fi
+  fi
   : >"$dir/artifact.dmg"
 }
 
@@ -373,7 +418,7 @@ OUT=""; RC=0; ERR=""
 # is the one failure mode a test cannot report.
 scenario_reset() {
   FIX_VERSION=""; FIX_CLAIM=""; FIX_FLAVOUR=""; FIX_MUTATE=""; FIX_DMG_NAME=""
-  FIX_NO_MACHO=""; FIX_NO_SORT_V=""
+  FIX_NO_MACHO=""; FIX_NO_SORT_V=""; FIX_UNIVERSAL=""; FIX_UNIVERSAL_X86=""
 }
 scenario_reset
 
@@ -643,6 +688,26 @@ FIX_MUTATE=mutate_no_version_cmd run_scenario break-no-version
 expect_row "deployment target within the supported floor" FAIL \
   "a Mach-O declaring no deployment target at all"
 
+# ── universal binaries: one floor per slice ───────────────────────────────────
+# Reading only the FIRST lipo slice judged an arm64 build against x86_64's 10.13
+# floor — a false red on a build with nothing wrong with it, which costs someone
+# an afternoon. We ship per-arch DMGs today, so this is future-proofing, and the
+# check gets MORE valuable if universal-apple-darwin is ever shipped.
+FIX_UNIVERSAL=1 run_scenario universal-ok STUB_BIN_ARCH=arm64 STUB_RUNNER_ARCH=arm64
+expect_row "deployment target within the supported floor" pass \
+  "a universal binary: x86_64 at 10.13 and arm64 at 11.0 are both correct"
+expect_rc zero "a correct universal build is not red"
+
+# And the opposite error, which taking the MAX across slices would commit: an
+# x86_64 slice raised to 11.0 hides behind the arm64 slice that is legitimately
+# there — the maximum is 11.0 either way — while every Intel Mac on 10.13-10.15
+# has been dropped in silence.
+FIX_UNIVERSAL=1 FIX_UNIVERSAL_X86=11.0 run_scenario universal-x86-too-new \
+  STUB_BIN_ARCH=arm64 STUB_RUNNER_ARCH=arm64
+expect_row "deployment target within the supported floor" FAIL \
+  "a universal binary whose x86_64 slice silently requires 11.0"
+expect_err "(x86_64) requires macOS 11.0" "the failing SLICE is named, not just the file"
+
 # The positive half of the same pair: the x86_64 shape (LC_VERSION_MIN_MACOSX)
 # is read correctly rather than being the case that finds nothing.
 if grep -q 'WHOLE BUNDLE requires: 10.13' "$ROOT/baseline-x86/stderr.log"; then
@@ -715,8 +780,8 @@ echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 190 ]; then
-  echo "::error::only $pass assertions ran; expected at least 190 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 198 ]; then
+  echo "::error::only $pass assertions ran; expected at least 198 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

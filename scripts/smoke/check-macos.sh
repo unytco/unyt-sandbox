@@ -158,15 +158,34 @@ find_machos() {
   return 0
 }
 
-# The macOS floor a single Mach-O demands. TWO load commands, because the two
-# architectures we ship do not use the same one: v0.100.0's aarch64 binary
+# The oldest macOS a given ARCHITECTURE can run at all. arm64 macOS did not exist
+# before Big Sur, so every arm64 binary reports at least 11.0 and the 10.13 floor
+# is unreachable there; measured, not assumed (v0.100.0's aarch64 binary reports
+# minos 11.0 under a 10.13 claim). The effective floor is the higher of the two,
+# which keeps the check sharp on arm64 rather than disabling it.
+arch_floor() {
+  case "$1" in
+    arm64*) version_max "$UNYT_OLDEST_MACOS" "$UNYT_ARM64_MIN_MACOS" ;;
+    *) printf '%s\n' "$UNYT_OLDEST_MACOS" ;;
+  esac
+}
+
+# The macOS floor a single Mach-O SLICE demands. TWO load commands, because the
+# two architectures we ship do not use the same one: v0.100.0's aarch64 binary
 # carries LC_BUILD_VERSION (`minos 11.0`) and its x86_64 twin carries the older
 # LC_VERSION_MIN_MACOSX (`version 10.13`). Reading only LC_BUILD_VERSION — the
 # obvious modern choice — finds NOTHING on the x86_64 build, and "nothing found"
 # must never read as "no requirement", so the caller fails closed on an empty
 # result. Both shapes verified against the real v0.100.0 artifacts.
-macho_min_os() {
-  otool -l "$1" 2>/dev/null | awk '
+#
+# PER SLICE, because a universal binary carries one per architecture with
+# DIFFERENT minimums, and they are judged against different floors: an arm64
+# slice at 11.0 is correct while an x86_64 slice at 11.0 has silently dropped
+# every Intel Mac on 10.13-10.15.
+macho_min_os() { # <file> [arch]
+  local f="$1" a="${2:-}"
+  if [ -n "$a" ]; then set -- -arch "$a" -l "$f"; else set -- -l "$f"; fi
+  otool "$@" 2>/dev/null | awk '
     $1 == "cmd" && ($2 == "LC_BUILD_VERSION" || $2 == "LC_VERSION_MIN_MACOSX") { c = $2; next }
     c == "LC_BUILD_VERSION"     && $1 == "minos"   { print $2; c = "" }
     c == "LC_VERSION_MIN_MACOSX" && $1 == "version" { print $2; c = "" }
@@ -425,11 +444,22 @@ check_no_build_machine_paths() {
 }
 run_check "no build-machine library paths in any Mach-O" check_no_build_machine_paths
 
-# ── 5. every Mach-O is signed ─────────────────────────────────────────────────
+# ── 5. every Mach-O is signed, and by whom ────────────────────────────────────
 # Per file, from a list this script built itself — NOT `codesign --deep --strict`,
 # which has been observed to miss an unsigned binary in Contents/Resources and
 # has been deprecated for signing since Ventura. Enumerating means nothing can be
 # skipped, and the failure names the exact file.
+#
+# WHY THE SHAPE OF THE SIGNATURE AND NOT `-R`. A designated-requirement pin —
+# `-R='anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>"'` — is
+# the STRONGER form and was considered, not overlooked. It is deliberately not
+# used: it needs the team OU baked into this script, which drags an identity
+# into a job that currently touches no secrets and turns cert rotation into a
+# code change. Asserting the SHAPE rejects the same case with nothing to
+# maintain — an ad-hoc signature has no authority chain at all and reports
+# `TeamIdentifier=not set`, so requiring a Developer ID authority, a real team,
+# and one team across the bundle discriminates exactly what -R would here.
+# Set UNYT_EXPECTED_TEAM_ID above to pin the team without -R.
 check_every_macho_signed() {
   local f out rc info team teams="" bad=0 total=0
   while IFS= read -r f; do
@@ -610,56 +640,66 @@ run_check "passes Apple's own distribution assessment" check_syspolicy
 # and dies in dyld, and a bundle claiming more than our support floor has
 # silently dropped users we promised to serve.
 check_deployment_target() {
-  local f v claimed bundle_max="" worst="" arch floor total=0
-  arch="$(lipo -archs "$MAIN_BIN" 2>/dev/null | awk '{print $1}')"
-  case "$arch" in
-    arm64*) floor="$(version_max "$UNYT_OLDEST_MACOS" "$UNYT_ARM64_MIN_MACOS")" ;;
-    *)      floor="$UNYT_OLDEST_MACOS" ;;
-  esac
+  local f a v slices claimed bundle_max="" worst="" floor status=0 total=0 slices_seen=0
 
   while IFS= read -r f; do
     total=$((total + 1))
-    v="$(macho_min_os "$f")"
-    if [ -z "$v" ]; then
-      # A Mach-O with neither load command tells us nothing about where it runs,
-      # and "told us nothing" must not read as "fine" — this is exactly how the
-      # x86_64 build would have slipped through a LC_BUILD_VERSION-only reader.
-      echo "::error::  ${f#"$APP"/} declares no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX" >&2
+    slices="$(lipo -archs "$f" 2>/dev/null)"
+    if [ -z "$slices" ]; then
+      echo "::error::  lipo read no architecture from ${f#"$APP"/} — cannot judge its deployment target" >&2
       return 1
     fi
-    if [ -z "$bundle_max" ] || [ "$(version_max "$v" "$bundle_max")" != "$bundle_max" ]; then
-      bundle_max="$v"; worst="$f"
-    fi
+    # PER SLICE, NOT PER FILE. A universal binary carries one Mach-O per
+    # architecture, each with its own minimum AND its own floor: taking the
+    # first slice judged an arm64 build (11.0, correct) against x86_64's 10.13
+    # floor and reported a FALSE RED on a build with nothing wrong with it.
+    # Comparing only the maxima would be the opposite error — an x86_64 slice
+    # raised to 11.0 hides behind the arm64 slice that is legitimately there,
+    # and every Intel Mac on 10.13-10.15 is dropped in silence.
+    for a in $slices; do
+      slices_seen=$((slices_seen + 1))
+      v="$(macho_min_os "$f" "$a")"
+      if [ -z "$v" ]; then
+        # A slice with neither load command tells us nothing about where it
+        # runs, and "told us nothing" must not read as "fine" — this is exactly
+        # how the x86_64 build slipped past a LC_BUILD_VERSION-only reader.
+        echo "::error::  ${f#"$APP"/} ($a) declares no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX" >&2
+        return 1
+      fi
+      floor="$(arch_floor "$a")"
+      if ! version_within "$v" "$floor"; then
+        echo "::error::  ${f#"$APP"/} ($a) requires macOS $v but the $a floor is $floor —" >&2
+        echo "    on that OS the app starts and dies in dyld. A dependency built with a newer" >&2
+        echo "    deployment target than the app does this." >&2
+        status=1
+      fi
+      if [ -z "$bundle_max" ] || [ "$(version_max "$v" "$bundle_max")" != "$bundle_max" ]; then
+        bundle_max="$v"; worst="${f##*/} ($a)"
+      fi
+    done
   done <"$MACHOS"
 
-  if [ "$total" -eq 0 ] || [ -z "$bundle_max" ]; then
+  if [ "$total" -eq 0 ] || [ "$slices_seen" -eq 0 ] || [ -z "$bundle_max" ]; then
     echo "::error::no Mach-O deployment target could be read — nothing was checked" >&2
     return 1
   fi
 
   claimed="$(plutil -extract LSMinimumSystemVersion raw -o - "$APP/Contents/Info.plist" 2>/dev/null)"
   echo "  Info.plist claims:     ${claimed:-<none>}" >&2
-  echo "  WHOLE BUNDLE requires: $bundle_max  (from ${worst##*/})" >&2
-  echo "  effective floor:       $floor  (support floor $UNYT_OLDEST_MACOS, $arch minimum)" >&2
+  echo "  WHOLE BUNDLE requires: $bundle_max  (from $worst)" >&2
+  echo "  slices checked:        $slices_seen across $total Mach-O file(s), each against its own floor" >&2
 
   if [ -z "$claimed" ]; then
     echo "::error::Info.plist has no LSMinimumSystemVersion — the Finder cannot warn a user off" >&2
     echo "  an unsupported Mac, so they get a crash at launch instead." >&2
     return 1
   fi
-  local status=0
   if ! version_within "$claimed" "$UNYT_OLDEST_MACOS"; then
     echo "::error::the bundle claims macOS $claimed but we support back to $UNYT_OLDEST_MACOS —" >&2
     echo "  this build has dropped users we promise to serve." >&2
     status=1
   fi
-  if ! version_within "$bundle_max" "$floor"; then
-    echo "::error::${worst##*/} requires macOS $bundle_max but the effective floor is $floor —" >&2
-    echo "  on that OS the app starts and dies in dyld. A dependency built with a newer" >&2
-    echo "  deployment target than the app does this." >&2
-    status=1
-  fi
-  [ "$status" -eq 0 ] && echo "OK: everything in the bundle runs on macOS $floor" >&2
+  [ "$status" -eq 0 ] && echo "OK: every slice is within its architecture's floor" >&2
   return "$status"
 }
 run_check "deployment target within the supported floor" check_deployment_target
