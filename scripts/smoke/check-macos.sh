@@ -65,6 +65,20 @@ UNYT_ARM64_MIN_MACOS="11.0"
 # prefixes (Intel /usr/local, Apple-silicon /opt/homebrew) plus MacPorts.
 UNYT_BUILD_MACHINE_PREFIXES='/usr/local/ /opt/homebrew/ /opt/local/'
 
+# The Apple Developer team every Mach-O in the bundle must be signed by
+# (release-tauri-app.yaml's APPLE_TEAM_ID). Not a secret — a team identifier is
+# public in every signature we ship — but it is not recorded in this repo, so it
+# is left empty until someone fills it in. EMPTY DOES NOT DISABLE THE CHECK: the
+# signature must still name a Developer ID Application authority and carry SOME
+# team, and every Mach-O in the bundle must agree on which. Setting it turns
+# "signed by a real team" into "signed by OUR team".
+UNYT_EXPECTED_TEAM_ID=""
+
+# How long `hdiutil attach` may take before it is treated as stuck. Generous for
+# a 50MB image on a busy runner, and far below any job timeout, so a stall is
+# diagnosed here rather than as an unexplained six-hour hang.
+UNYT_HDIUTIL_TIMEOUT="${UNYT_HDIUTIL_TIMEOUT:-120}"
+
 results=()
 record() { results+=("$1|$2"); }
 run_check() {
@@ -226,8 +240,38 @@ mount_ok=1
 # An explicit -mountpoint, rather than parsing hdiutil's tab-separated plist-ish
 # output for where it landed: one less thing to misparse, and it keeps the mount
 # inside the directory the trap already cleans up.
-if ! hdiutil attach -nobrowse -readonly -quiet -mountpoint "$mnt" "$DMG" >&2; then
-  echo "::error::hdiutil could not mount $(basename "$DMG") — the disk image is unreadable" >&2
+#
+# NO -quiet: it suppresses the diagnosis as well as the noise, so a corrupt or
+# truncated download failed with nothing said about why. The output is captured
+# and printed only on failure.
+#
+# BOUNDED, and with stdin closed. A DMG carrying a software licence agreement
+# makes `hdiutil attach` WAIT FOR A KEYPRESS; on a runner that is a job hanging
+# until the six-hour ceiling with no diagnosis. </dev/null turns the prompt into
+# an immediate error, and the deadline catches anything else that stalls.
+# `timeout(1)` is not used because macOS does not ship it.
+attach_log="$WORK/hdiutil-attach.log"
+hdiutil attach -nobrowse -readonly -noverify -noautoopen \
+  -mountpoint "$mnt" "$DMG" >"$attach_log" 2>&1 </dev/null &
+hd_pid=$!
+hd_deadline=$(( $(date +%s) + UNYT_HDIUTIL_TIMEOUT ))
+hd_rc=0
+while kill -0 "$hd_pid" 2>/dev/null; do
+  if [ "$(date +%s)" -ge "$hd_deadline" ]; then
+    kill -TERM "$hd_pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$hd_pid" 2>/dev/null || true
+    echo "::error::hdiutil did not finish attaching within ${UNYT_HDIUTIL_TIMEOUT}s — a disk image" >&2
+    echo "  carrying a licence agreement waits for a keypress, which would otherwise hang the job." >&2
+    hd_rc=124
+    break
+  fi
+  sleep 1
+done
+[ "$hd_rc" -ne 0 ] || { wait "$hd_pid"; hd_rc=$?; }
+if [ "$hd_rc" -ne 0 ]; then
+  echo "::error::hdiutil could not mount $(basename "$DMG") (exit $hd_rc) — the disk image is unreadable:" >&2
+  sed 's/^/  /' "$attach_log" >&2 || true
   mount_ok=""
 else
   MOUNT="$mnt"
@@ -387,7 +431,7 @@ run_check "no build-machine library paths in any Mach-O" check_no_build_machine_
 # has been deprecated for signing since Ventura. Enumerating means nothing can be
 # skipped, and the failure names the exact file.
 check_every_macho_signed() {
-  local f out rc bad=0 total=0
+  local f out rc info team teams="" bad=0 total=0
   while IFS= read -r f; do
     total=$((total + 1))
     out="$(codesign --verify --strict --verbose=2 "$f" 2>&1)"
@@ -395,8 +439,55 @@ check_every_macho_signed() {
     if [ "$rc" -ne 0 ]; then
       echo "::error::  ${f#"$APP"/}: $(printf '%s' "$out" | head -2 | tr '\n' ' ')" >&2
       bad=$((bad + 1))
+      continue
     fi
+
+    # VERIFYING IS NOT ENOUGH, and on arm64 that gap is the whole check.
+    # Apple Silicon binaries are ad-hoc codesigned BY DEFAULT, and an ad-hoc
+    # signature verifies perfectly under --verify --strict: without -R, code is
+    # only checked against its OWN designated requirement, which an ad-hoc
+    # signature trivially satisfies. So a bundled dylib the signing step missed
+    # passes on aarch64 while failing on x86_64 — the exact case this check
+    # exists for, invisible on half the artifacts. Read who actually signed it.
+    info="$(codesign -dv --verbose=4 "$f" 2>&1)"
+    if printf '%s' "$info" | grep -q 'Signature=adhoc'; then
+      echo "::error::  ${f#"$APP"/} carries an AD-HOC signature — it verifies, but no Developer ID" >&2
+      echo "    signed it, so Gatekeeper will refuse it on a user's Mac." >&2
+      bad=$((bad + 1))
+      continue
+    fi
+    if ! printf '%s' "$info" | grep -q '^Authority=Developer ID Application'; then
+      echo "::error::  ${f#"$APP"/} is not signed by a Developer ID Application authority:" >&2
+      printf '%s' "$info" | grep -E '^(Authority|Signature)=' | head -3 | sed 's/^/      /' >&2
+      bad=$((bad + 1))
+      continue
+    fi
+    team="$(printf '%s' "$info" | sed -n 's/^TeamIdentifier=//p' | head -1)"
+    if [ -z "$team" ] || [ "$team" = "not set" ]; then
+      echo "::error::  ${f#"$APP"/} has no TeamIdentifier — not a Developer ID signature" >&2
+      bad=$((bad + 1))
+      continue
+    fi
+    # Pinned when the team is declared, and otherwise self-consistent: a bundle
+    # signed by two different teams is a mis-assembled one either way, and this
+    # needs no secret to assert.
+    if [ -n "$UNYT_EXPECTED_TEAM_ID" ] && [ "$team" != "$UNYT_EXPECTED_TEAM_ID" ]; then
+      echo "::error::  ${f#"$APP"/} is signed by team $team, expected $UNYT_EXPECTED_TEAM_ID" >&2
+      bad=$((bad + 1))
+      continue
+    fi
+    case " $teams " in
+      *" $team "*) ;;
+      *) teams="$teams $team" ;;
+    esac
   done <"$MACHOS"
+
+  # shellcheck disable=SC2086  # deliberate split: counting the distinct teams
+  if [ "$bad" -eq 0 ] && [ "$(set -- $teams; echo $#)" -gt 1 ]; then
+    echo "::error::the bundle is signed by more than one team ($teams) — it was assembled from" >&2
+    echo "  parts signed by different identities." >&2
+    bad=$((bad + 1))
+  fi
   if [ "$total" -eq 0 ]; then
     echo "::error::no Mach-O files found in the bundle — nothing was verified" >&2
     return 1
@@ -405,7 +496,7 @@ check_every_macho_signed() {
     echo "::error::$bad of $total Mach-O file(s) fail signature verification" >&2
     return 1
   fi
-  echo "OK: all $total Mach-O file(s) carry a valid signature" >&2
+  echo "OK: all $total Mach-O file(s) signed by Developer ID team$teams" >&2
   return 0
 }
 run_check "every Mach-O in the bundle is signed" check_every_macho_signed
@@ -484,8 +575,26 @@ check_syspolicy() {
     echo "::error::syspolicy_check rejected the INVOCATION, not the app — fix the call, not the build" >&2
     return 1
   fi
-  if [ "$rc" -ne 0 ]; then
+  # EXIT STATUS ALONE IS NOT ENOUGH, because Apple documents none: the man page
+  # has no EXIT STATUS and no DIAGNOSTICS section, so "exit 0 means pass" is an
+  # assumption, and a check resting on it would report a pass for a tool that
+  # exits 0 while saying the build is unacceptable. This is the same rule check 6
+  # applies to spctl, which is accepted only when it BOTH exits 0 and names a
+  # notarized source. Three outcomes, and only one of them is green:
+  if [ "$rc" -ne 0 ] || printf '%s' "$out" | grep -qiE 'fail|not (notarized|signed|accepted)|rejected|unacceptable|denied'; then
     echo "::error::syspolicy_check says this build is not ready for distribution (exit $rc)" >&2
+    return 1
+  fi
+  if ! printf '%s' "$out" | grep -qiE 'pass|ready for distribution|accepted|succeeded'; then
+    # Cannot tell. Not a pass: the wording is undocumented, so an unrecognised
+    # answer means this check could not do its job, and a green row would claim
+    # it did. Fails LOUDLY towards the operator rather than quietly towards the
+    # release — if the real wording differs from these patterns, this is the
+    # message that says so, and it names itself as the thing to fix.
+    echo "::error::syspolicy_check exited 0 but its output matched no known pass or fail wording," >&2
+    echo "  so this check cannot say whether the build is distributable. Apple documents no exit" >&2
+    echo "  status for this tool, so the output is the only signal — teach this check the real" >&2
+    echo "  wording rather than assuming exit 0 meant success." >&2
     return 1
   fi
   echo "OK: passes Apple's pre-distribution assessment" >&2

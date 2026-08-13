@@ -694,8 +694,8 @@ Invoke-Check 'the installer is Authenticode-signed and trusted' {
 Invoke-Check 'imports nothing the machine is not guaranteed to have' {
   if (-not $script:InstallDir) { Write-Note '::error::no install directory, so nothing was scanned'; return $false }
   $binaries = @(Get-ChildItem -LiteralPath $script:InstallDir -Recurse -Include '*.exe', '*.dll' -ErrorAction SilentlyContinue)
-  $shipped = @($binaries | ForEach-Object { $_.Name })
   $all = [System.Collections.Generic.List[string]]::new()
+  $unsat = [System.Collections.Generic.List[string]]::new()
   foreach ($b in $binaries) {
     # NOT wrapped in a try: a file that cannot be parsed is a failed sweep, and
     # Get-ImportedDll throws rather than returning empty precisely so that it
@@ -704,9 +704,18 @@ Invoke-Check 'imports nothing the machine is not guaranteed to have' {
     $imports = @(Get-ImportedDll -Path $b.FullName)
     Write-Note "  $($b.Name): $($imports.Count) imports"
     foreach ($i in $imports) { $all.Add($i) }
+    # RESOLVED PER DIRECTORY, not against every file under the install root. The
+    # loader looks beside the importing binary, not in a sibling subfolder, so a
+    # DLL in resources\ does not satisfy an import made by the .exe at the top —
+    # counting it as shipped would excuse exactly the dependency that breaks on
+    # the user's machine.
+    $beside = @(Get-ChildItem -LiteralPath $b.DirectoryName -Filter '*.dll' -ErrorAction SilentlyContinue |
+      ForEach-Object { $_.Name })
+    foreach ($m in @(Get-UnsatisfiedImport -Imports $imports -ShippedFiles $beside)) { $unsat.Add($m) }
   }
-  $missing = @(Get-UnsatisfiedImport -Imports $all -ShippedFiles $shipped)
-  $verdict = Get-ImportSweepVerdict -Binaries $shipped -Imports $all -Unsatisfied $missing
+  $missing = @($unsat | Sort-Object -Unique)
+  $verdict = Get-ImportSweepVerdict -Binaries @($binaries | ForEach-Object { $_.Name }) `
+    -Imports $all -Unsatisfied $missing
   if ($verdict.Ok) {
     Write-Note "OK: $($verdict.Message)"
     return $true
@@ -738,7 +747,14 @@ Invoke-Check 'uninstalls cleanly' {
   else { $parts = $cmd -split '\s+', 2; $exe = $parts[0]; $rest = if ($parts.Count -gt 1) { $parts[1] } else { '' } }
   # NOT $args: that is an automatic variable, and assigning to it inside a
   # scriptblock silently shadows the invocation's own arguments.
-  $argList = @($rest -split '\s+' | Where-Object { $_ })
+  #
+  # Quote-aware, NOT a plain whitespace split: splitting on whitespace undoes
+  # exactly the grouping Invoke-Silently exists to preserve. NSIS uninstallers
+  # really do carry a path argument (`_?=C:\Program Files\Unyt Sandbox`), and
+  # splitting that into two tokens passes the uninstaller a directory that does
+  # not exist. A quoted span stays one token, quotes included, which
+  # Invoke-Silently then leaves alone as already-quoted.
+  $argList = @([regex]::Matches($rest, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
   $r = Invoke-Silently -FilePath $exe -Arguments $argList
   if ($r.TimedOut) { return $false }
   if ($r.ExitCode -ne 0) {

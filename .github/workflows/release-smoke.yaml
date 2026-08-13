@@ -51,11 +51,12 @@ jobs:
         id: download
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
+          RELEASE: ${{ inputs.release }}
         run: |
           deb="$(bash scripts/smoke/download-release-asset.sh \
-            "${{ inputs.release }}" linux.deb "$RUNNER_TEMP/artifacts")"
+            "$RELEASE" linux.deb "$RUNNER_TEMP/artifacts")"
           appimage="$(bash scripts/smoke/download-release-asset.sh \
-            "${{ inputs.release }}" linux.AppImage "$RUNNER_TEMP/artifacts")"
+            "$RELEASE" linux.AppImage "$RUNNER_TEMP/artifacts")"
           echo "deb=$deb" >> "$GITHUB_OUTPUT"
           echo "appimage=$appimage" >> "$GITHUB_OUTPUT"
 
@@ -82,9 +83,10 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           SMOKE: ${{ steps.smoke.outcome || 'did not run' }}
+          RELEASE: ${{ inputs.release }}
         run: |
           {
-            echo "### Release smoke — \`${{ inputs.release }}\`"
+            echo "### Release smoke — \`$RELEASE\`"
             echo ""
             echo '```'
             # Only the result rows, never `/^# summary/,$p` — with two artifacts
@@ -177,9 +179,11 @@ jobs:
         id: download
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
+          RELEASE: ${{ inputs.release }}
+          ASSET: ${{ matrix.asset }}
         run: |
           dmg="$(bash scripts/smoke/download-release-asset.sh \
-            "${{ inputs.release }}" "${{ matrix.asset }}" "$RUNNER_TEMP/artifacts")"
+            "$RELEASE" "$ASSET" "$RUNNER_TEMP/artifacts")"
           echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
 
       - name: Run the macOS checks
@@ -196,9 +200,11 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           SMOKE: ${{ steps.smoke.outcome || 'did not run' }}
+          RELEASE: ${{ inputs.release }}
+          ARCH: ${{ matrix.arch }}
         run: |
           {
-            echo "### macOS release smoke — \`${{ inputs.release }}\` (${{ matrix.arch }})"
+            echo "### macOS release smoke — \`$RELEASE\` ($ARCH)"
             echo ""
             echo '```'
             grep -E '^(IMAGE|macos|All checks)' "$RUNNER_TEMP/smoke-macos.log" 2>/dev/null | head -50 \
@@ -273,15 +279,16 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
+          RELEASE: ${{ inputs.release }}
         run: |
           # RUNNER_TEMP is a backslash path on Windows and this step runs in Git
           # Bash, where `mkdir -p 'D:\a\_temp/artifacts'` creates one directory
           # with backslashes in its name. Forward slashes work in both shells.
           out="${RUNNER_TEMP//\\//}/artifacts"
           exe="$(bash scripts/smoke/download-release-asset.sh \
-            "${{ inputs.release }}" x64_windows.exe "$out")"
+            "$RELEASE" x64_windows.exe "$out")"
           msi="$(bash scripts/smoke/download-release-asset.sh \
-            "${{ inputs.release }}" x64_windows.msi "$out")"
+            "$RELEASE" x64_windows.msi "$out")"
           echo "exe=$exe" >> "$GITHUB_OUTPUT"
           echo "msi=$msi" >> "$GITHUB_OUTPUT"
 
@@ -312,6 +319,8 @@ jobs:
         shell: pwsh
         env:
           SMOKE: ${{ steps.smoke.outcome || 'did not run' }}
+          RELEASE: ${{ inputs.release }}
+          RUNNER_LABEL: ${{ matrix.runner }}
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'smoke-windows.log'
           $rows = if (Test-Path -LiteralPath $log) {
@@ -320,7 +329,7 @@ jobs:
           } else { @() }
           if ($rows.Count -eq 0) { $rows = @('(no summary — the run did not get that far)') }
           @(
-            "### Windows release smoke — ``${{ inputs.release }}`` (${{ matrix.runner }})"
+            "### Windows release smoke — ``$($env:RELEASE)`` ($($env:RUNNER_LABEL))"
             ''
             '```'
             $rows

@@ -389,13 +389,21 @@ try {
   Assert-True 'a process that never finishes is reported as a timeout' $r.TimedOut
   Assert-True 'and is given up on promptly rather than hanging the job' (((Get-Date) - $started).TotalSeconds -lt 30)
 
-  # An argument containing a space must reach the process as ONE argument.
-  # Unquoted it is re-split, which is how `msiexec /i C:\dir with space\x.msi`
-  # silently installs nothing — and, in this test, how a command that should
-  # fail was reported as exit 0.
-  if ($IsWindows) { $spaced = @('/c', 'exit 7') } else { $spaced = @('-c', 'exit 7') }
-  $r = Invoke-Silently -FilePath $sh -Arguments $spaced -TimeoutSeconds 30
-  Assert-That 'an argument with a space is passed as one argument' $r.ExitCode 7
+  # An argument containing a space must reach the process as ONE argument —
+  # `msiexec /i "C:\dir with space\x.msi"`. Unquoted it is re-split and msiexec
+  # installs nothing.
+  #
+  # COUNTS THE ARGUMENTS THE CHILD ACTUALLY RECEIVED, because the obvious pin is
+  # hollow: `cmd /c exit 7` and `cmd /c "exit 7"` both yield 7 on Windows, the
+  # only platform this really matters on, so the assertion held whether or not
+  # the quoting worked. One argument means quoting survived; two means it was
+  # split. Runs identically on both platforms because the child is pwsh itself.
+  $argCounter = Join-Path $root 'argcount.ps1'
+  Set-Content -LiteralPath $argCounter -Value 'exit $args.Count'
+  $pwshExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+  $spacedPath = Join-Path $root 'dir with space\pkg.msi'
+  $r = Invoke-Silently -FilePath $pwshExe -Arguments @('-NoProfile', '-File', $argCounter, $spacedPath) -TimeoutSeconds 60
+  Assert-That 'a path containing a space arrives as ONE argument' $r.ExitCode 1
 
   # Reached only if every assertion above ran. See the guard in `finally`.
   $script:Completed = $true

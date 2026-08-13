@@ -96,6 +96,9 @@ make_stubs() {
 case "${1:-}" in
   attach)
     [ "${STUB_BREAK:-}" = mount ] && { echo "hdiutil: attach failed - no mountable file systems" >&2; exit 1; }
+    # A disk image with a licence agreement waits for a keypress. Without a
+    # bound this is a job hanging to the runner's six-hour ceiling.
+    [ "${STUB_BREAK:-}" = hdiutil_hang ] && { sleep 300; exit 0; }
     shift; mp=""
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -175,9 +178,15 @@ EOF
   # a lexicographic fallback puts 9.0 above 10.13 — every floor comparison would
   # then be wrong in the direction that reads as a pass.
   if [ -n "${FIX_NO_SORT_V:-}" ]; then
+    # REMOVE the flag, don't blank it: `"${@/-V/}"` leaves an EMPTY argument
+    # behind, which real sort rejects — so the scenario would pass because sort
+    # errored, not because it sorted lexicographically, and the guard under test
+    # would never actually be exercised.
     cat >"$bin/sort" <<'EOF'
 #!/usr/bin/env bash
-exec /usr/bin/sort "${@/-V/}"
+args=()
+for a in "$@"; do [ "$a" = "-V" ] || args+=("$a"); done
+exec /usr/bin/sort "${args[@]}"
 EOF
   fi
 
@@ -189,13 +198,54 @@ case "${1:-}" in
 esac
 EOF
 
+  # Two modes, because the check asks two questions. `--verify` says whether the
+  # signature is intact; `-dv` says WHO signed it. An ad-hoc signature answers
+  # the first perfectly and fails the second, which is the whole point of the
+  # adhoc scenario below.
   cat >"$bin/codesign" <<'EOF'
 #!/usr/bin/env bash
 f="${@: -1}"
+case "$*" in
+  *-dv*)
+    case "${STUB_BREAK:-}" in
+      adhoc)
+        if [ "$(basename "$f")" = "libunyt.dylib" ]; then
+          echo "Executable=$f" >&2
+          echo "Identifier=libunyt" >&2
+          echo "Signature=adhoc" >&2
+          echo "TeamIdentifier=not set" >&2
+          exit 0
+        fi ;;
+      noteam)
+        echo "Executable=$f" >&2
+        echo "Authority=Developer ID Application: Unyt (ABCDE12345)" >&2
+        echo "TeamIdentifier=not set" >&2
+        exit 0 ;;
+      applesigned)
+        echo "Executable=$f" >&2
+        echo "Authority=Apple Mac OS Application Signing" >&2
+        echo "TeamIdentifier=APPLE" >&2
+        exit 0 ;;
+      twoteams)
+        if [ "$(basename "$f")" = "helper" ]; then
+          echo "Executable=$f" >&2
+          echo "Authority=Developer ID Application: Someone Else (ZZZZZ99999)" >&2
+          echo "TeamIdentifier=ZZZZZ99999" >&2
+          exit 0
+        fi ;;
+    esac
+    echo "Executable=$f" >&2
+    echo "Identifier=co.unyt.unyt.sandbox" >&2
+    echo "Authority=Developer ID Application: Unyt (ABCDE12345)" >&2
+    echo "Authority=Developer ID Certification Authority" >&2
+    echo "TeamIdentifier=ABCDE12345" >&2
+    exit 0 ;;
+esac
 if [ "${STUB_BREAK:-}" = unsigned ] && [ "$(basename "$f")" = "helper" ]; then
   echo "$f: code object is not signed at all" >&2
   exit 1
 fi
+# An ad-hoc signature VERIFIES. That is the trap: --verify alone cannot see it.
 echo "$f: valid on disk" >&2
 echo "$f: satisfies its Designated Requirement" >&2
 exit 0
@@ -241,6 +291,13 @@ EOF
 case "${STUB_BREAK:-}" in
   syspolicy_usage) echo "Usage: syspolicy_check <check> <path>"; exit 64 ;;
   syspolicy) echo "App failed pre-distribution checks: not notarized"; exit 1 ;;
+  # Apple documents NO exit status for this tool, so "exit 0 means pass" is an
+  # assumption. This is that assumption being wrong: the tool exits 0 while
+  # saying the build is unacceptable.
+  syspolicy_zero_but_failed) echo "App failed pre-distribution checks: not notarized"; exit 0 ;;
+  # And this is the other half: exit 0 with wording nobody taught the check.
+  # Unknown must not read as pass.
+  syspolicy_unknown) echo "Assessment complete. 3 items evaluated."; exit 0 ;;
 esac
 echo "App passed all pre-distribution checks and is ready for distribution."
 exit 0
@@ -348,6 +405,14 @@ expect_row() { # <check substring> <pass|FAIL> <description>
   printf 'FAIL  %-58s expected %s, got %s\n' "$3" "$2" "${got:-<no row>}" >&2
   note "summary was:"; printf '%s\n' "$OUT" | sed 's/^/      /' >&2
 }
+# Which DIAGNOSIS the run produced, not merely that it went red. Where several
+# guards can reject the same fixture, only this pins the one under test — the
+# row alone stays red when the guard is deleted, so the deletion is invisible.
+expect_err() { # <substring> <description>
+  if grep -qF -e "$1" "$ERR"; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s no "%s" in the diagnosis\n' "$2" "$1" >&2
+}
 expect_rc() { # <expected-nonzero|zero> <description>
   local ok=no
   case "$1" in
@@ -401,6 +466,15 @@ expect_rc zero "baseline arm64 exits 0"
 run_scenario break-mount STUB_BREAK=mount
 expect_row "mounts and yields a .app bundle" FAIL "a disk image that will not mount"
 expect_rc nonzero "an unmountable image goes red"
+# hdiutil's own words, which -quiet used to swallow: a corrupt download failed
+# with nothing said about why.
+expect_err "no mountable file systems" "hdiutil's diagnosis reaches the log"
+
+# A licence-agreement image waits for a keypress. Bounded, or the job hangs to
+# the runner's six-hour ceiling with no diagnosis at all.
+run_scenario break-mount-hang STUB_BREAK=hdiutil_hang UNYT_HDIUTIL_TIMEOUT=3
+expect_row "mounts and yields a .app bundle" FAIL "an image that never finishes attaching"
+expect_err "did not finish attaching" "a stalled attach is diagnosed, not waited on"
 # The abort path still has to print its table, or the failure is invisible.
 if printf '%s\n' "$OUT" | grep -q '^# summary'; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  the early abort printed no summary table" >&2; fi
@@ -456,6 +530,35 @@ run_scenario break-unsigned STUB_BREAK=unsigned
 expect_only_failure "every Mach-O in the bundle is signed" \
   "an unsigned helper in Contents/Resources"
 
+# THE ARM64 HOLE. Apple Silicon binaries are ad-hoc codesigned by DEFAULT, and an
+# ad-hoc signature passes `--verify --strict` — without -R, code is checked only
+# against its own designated requirement, which ad-hoc trivially satisfies. So a
+# dylib the signing step missed is caught on x86_64 and invisible on arm64,
+# which is half the artifacts. The stub verifies it happily; only `-dv` tells.
+run_scenario break-adhoc STUB_BREAK=adhoc
+expect_only_failure "every Mach-O in the bundle is signed" \
+  "an ad-hoc signed dylib that VERIFIES but no Developer ID signed"
+# WHICH guard fired, not just that the row went red. These checks are layered —
+# an ad-hoc signature also lacks an Authority line — so without pinning the
+# diagnosis, deleting the ad-hoc guard leaves the row red for a different reason
+# and the deletion goes unnoticed. Mutation testing showed exactly that.
+expect_err "AD-HOC signature" "the ad-hoc guard is what rejects an ad-hoc signature"
+
+run_scenario break-noteam STUB_BREAK=noteam
+expect_only_failure "every Mach-O in the bundle is signed" \
+  "a signature with no TeamIdentifier"
+expect_err "no TeamIdentifier" "the TeamIdentifier guard is what rejects a team-less signature"
+
+run_scenario break-applesigned STUB_BREAK=applesigned
+expect_only_failure "every Mach-O in the bundle is signed" \
+  "signed by Apple, but not by a Developer ID Application authority"
+
+# A bundle assembled from parts signed by different identities. Asserted without
+# needing the team ID to be declared, which this repo does not record.
+run_scenario break-twoteams STUB_BREAK=twoteams
+expect_only_failure "every Mach-O in the bundle is signed" \
+  "two different signing teams in one bundle"
+
 # ── 6. Gatekeeper ─────────────────────────────────────────────────────────────
 run_scenario break-gk STUB_BREAK=gatekeeper_rejected
 expect_only_failure "Gatekeeper accepts it as notarized software" \
@@ -492,6 +595,21 @@ mutate_no_syspolicy() { rm -f "$1/bin/syspolicy_check"; }
 FIX_MUTATE=mutate_no_syspolicy run_scenario break-syspolicy-missing
 expect_row "passes Apple's own distribution assessment" FAIL \
   "a missing syspolicy_check fails closed"
+
+# Apple documents NO exit status for syspolicy_check, so gating on exit 0 alone
+# rests on an assumption this repo cannot check. These two scenarios ARE that
+# assumption being wrong, in both directions — and they are the reason the check
+# reads the output as well as the status, exactly as check 6 does for spctl.
+run_scenario break-syspolicy-zero STUB_BREAK=syspolicy_zero_but_failed
+expect_only_failure "passes Apple's own distribution assessment" \
+  "exit 0 while SAYING it failed must not be a pass"
+# Pinned to the failure branch specifically: the unknown-wording branch would
+# also turn this red, which would hide the loss of the failure-marker read.
+expect_err "not ready for distribution" "the output, not the exit status, is what rejects it"
+
+run_scenario break-syspolicy-unknown STUB_BREAK=syspolicy_unknown
+expect_only_failure "passes Apple's own distribution assessment" \
+  "exit 0 with unrecognised wording is 'cannot tell', not 'fine'"
 
 # ── 9. deployment target ──────────────────────────────────────────────────────
 # The documented real-world failure: a bundled dependency built against a newer
@@ -597,8 +715,8 @@ echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 128 ]; then
-  echo "::error::only $pass assertions ran; expected at least 128 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 190 ]; then
+  echo "::error::only $pass assertions ran; expected at least 190 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]
