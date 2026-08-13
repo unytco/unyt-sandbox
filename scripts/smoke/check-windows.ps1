@@ -70,12 +70,16 @@ function Write-Note { param([string]$Message) [Console]::Error.WriteLine($Messag
 # to it deliberately and only for something Windows genuinely ships — a lazy
 # addition here silently converts a real finding into a pass.
 #
-# Deliberately ABSENT, though they are the ones most likely to show up:
+# Deliberately ABSENT, and kept absent even though the shipped build turned out
+# not to need them:
 #   VCRUNTIME140*.dll / MSVCP140*.dll / CONCRT140.dll — the Visual C++
 #   redistributable. Windows does NOT ship it; it is present on most machines
-#   only because other software installed it. A Rust MSVC build links it
-#   dynamically by default, and this repo's unyt/.cargo/config.toml sets no
-#   +crt-static, so the shipped binaries are expected to import it.
+#   only because other software installed it. This was PREDICTED to appear, on
+#   the reasoning that a Rust MSVC build links it dynamically and unyt's
+#   .cargo/config.toml sets no +crt-static — and the first real run DISPROVED
+#   that: v0.100.0's installed binaries import none of them. The entries stay
+#   out of the list so that a future build which does start needing one is
+#   reported rather than waved through.
 #   WebView2Loader.dll — Tauri normally links it statically; if it turns up as
 #   an import and is not shipped, that is a real packaging break.
 # ucrtbase.dll and the api-ms-win-crt-* forwarders ARE Windows components
@@ -95,7 +99,7 @@ $script:WindowsGuaranteedDlls = @(
   'dwmapi.dll', 'dcomp.dll', 'd3d9.dll', 'd3d11.dll', 'd3d12.dll', 'dxgi.dll',
   'dxva2.dll', 'opengl32.dll', 'gdiplus.dll', 'msimg32.dll', 'setupapi.dll',
   'cfgmgr32.dll', 'powrprof.dll', 'psapi.dll', 'dbghelp.dll', 'wtsapi32.dll',
-  'winspool.drv', 'mpr.dll', 'netapi32.dll', 'wldap32.dll', 'normaliz.dll',
+  'winspool.drv', 'mpr.dll', 'netapi32.dll', 'pdh.dll', 'wldap32.dll', 'normaliz.dll',
   'clbcatq.dll', 'hid.dll', 'avrt.dll', 'apphelp.dll', 'winsta.dll',
   'credui.dll', 'dsound.dll', 'msctf.dll', 'twinapi.appcore.dll'
 )
@@ -243,12 +247,15 @@ function Get-ImportedDll {
     }
   }
 
-  # `,@(...)` — the unary comma. PowerShell UNROLLS a collection on return, so
-  # an empty result comes back as $null and the caller's `.Count` throws under
-  # StrictMode (or, worse, reads as "no imports" when the truth is "nothing was
-  # parsed"). The comma returns the array itself, so every caller gets a real
-  # collection whatever the contents.
-  return , @($names | Sort-Object -Unique)
+  # RETURNED PLAINLY, AND EVERY CALLER WRAPS IN @(). The obvious alternative —
+  # `return , @(...)`, the unary comma, so an empty result stays a collection —
+  # is a trap here: it emits the array as ONE object, so a caller writing the
+  # idiomatic `@(Get-ImportedDll ...)` nests it one level deep, and a nested list
+  # coerced into [string[]] collapses into a single space-joined "DLL name". That
+  # shipped: the allowlist then matched nothing, every import list became one
+  # unrecognised entry, and the check reported a finding no matter what the
+  # binary imported. Wrapping at the call site cannot nest, and is the idiom.
+  return @($names | Sort-Object -Unique)
 }
 
 # What the machine has to provide that neither the installer nor Windows does.
@@ -278,8 +285,9 @@ function Get-UnsatisfiedImport {
     if ($key -like 'api-ms-win-*' -or $key -like 'ext-ms-win-*') { continue }
     $unsatisfied.Add($imp)
   }
-  # Unary comma — see Get-ImportedDll: an empty result must stay a collection.
-  return , @($unsatisfied | Sort-Object -Unique)
+  # Returned plainly; callers wrap. See Get-ImportedDll for why the unary comma
+  # is wrong here.
+  return @($unsatisfied | Sort-Object -Unique)
 }
 
 # The verdict on a whole import sweep, guards included.
@@ -364,8 +372,8 @@ function Get-NewUninstallEntry {
   )
   $seen = @{}
   foreach ($b in $Before) { if ($b) { $seen[$b.KeyPath] = $true } }
-  # Unary comma — see Get-ImportedDll: an empty result must stay a collection.
-  return , @($After | Where-Object { $_ -and -not $seen.ContainsKey($_.KeyPath) })
+  # Returned plainly; callers wrap. See Get-ImportedDll.
+  return @($After | Where-Object { $_ -and -not $seen.ContainsKey($_.KeyPath) })
 }
 
 # Is the entry an install of the version the artifact claims? Separated from the
@@ -395,16 +403,29 @@ function Test-UninstallEntry {
 function Test-InstallDirectory {
   param([AllowNull()][string]$Path)
   if (-not $Path) {
-    return [PSCustomObject]@{ Ok = $false; Message = 'the uninstall entry records no InstallLocation'; Executables = @() }
+    return [PSCustomObject]@{ Ok = $false; Message = 'the uninstall entry records no InstallLocation'; Executables = @(); Path = $null }
+  }
+  # THE REGISTRY VALUE IS NOT A CLEAN PATH, and the two installers disagree about
+  # how. Observed on a real runner: NSIS writes it QUOTED —
+  #   "C:\Users\runneradmin\AppData\Local\Unyt Sandbox"
+  # while the MSI writes it bare with a trailing separator —
+  #   C:\Users\runneradmin\AppData\Local\Unyt Sandbox\
+  # Taken verbatim, the quoted form fails every Test-Path and the check reported
+  # a perfectly good install as missing, then cascaded into "nothing was scanned"
+  # for the import sweep. Strip the quotes, and the trailing separator with them
+  # so both installers produce the same string.
+  $Path = $Path.Trim().Trim('"').TrimEnd('\', '/')
+  if (-not $Path) {
+    return [PSCustomObject]@{ Ok = $false; Message = 'the uninstall entry records an empty InstallLocation'; Executables = @(); Path = $null }
   }
   if (-not (Test-Path -LiteralPath $Path)) {
-    return [PSCustomObject]@{ Ok = $false; Message = "InstallLocation '$Path' does not exist"; Executables = @() }
+    return [PSCustomObject]@{ Ok = $false; Message = "InstallLocation '$Path' does not exist"; Executables = @(); Path = $Path }
   }
   $exes = @(Get-ChildItem -LiteralPath $Path -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue)
   if ($exes.Count -eq 0) {
-    return [PSCustomObject]@{ Ok = $false; Message = "no .exe anywhere under $Path — the installer registered itself but shipped no program"; Executables = @() }
+    return [PSCustomObject]@{ Ok = $false; Message = "no .exe anywhere under $Path — the installer registered itself but shipped no program"; Executables = @(); Path = $Path }
   }
-  return [PSCustomObject]@{ Ok = $true; Message = "$($exes.Count) executable(s) under $Path"; Executables = $exes }
+  return [PSCustomObject]@{ Ok = $true; Message = "$($exes.Count) executable(s) under $Path"; Executables = $exes; Path = $Path }
 }
 
 # Did the uninstall actually remove it? Both halves matter: an uninstaller that
@@ -586,12 +607,11 @@ function Get-UninstallEntry {
         })
     }
   }
-  # Unary comma — see Get-ImportedDll: a machine with no uninstall entries at
-  # all must come back as an empty list, not as $null.
-  return , $out.ToArray()
+  # Returned plainly; callers wrap. See Get-ImportedDll.
+  return $out.ToArray()
 }
 
-$script:Before = Get-UninstallEntry
+$script:Before = @(Get-UninstallEntry)
 $script:Entry = $null
 $script:InstallDir = $null
 $script:Installed = $false
@@ -622,7 +642,7 @@ Invoke-Check 'installs silently' {
 # release packaged something other than what it is named after.
 Invoke-Check 'registers an uninstall entry for this version' {
   if (-not $script:Installed) { Write-Note '::error::nothing was installed, so there is nothing to find'; return $false }
-  $new = Get-NewUninstallEntry -Before $script:Before -After (Get-UninstallEntry)
+  $new = @(Get-NewUninstallEntry -Before $script:Before -After @(Get-UninstallEntry))
   if ($new.Count -eq 0) {
     Write-Note '::error::the install added no uninstall entry — the app cannot be removed from Settings'
     return $false
@@ -645,7 +665,8 @@ Invoke-Check 'installs the application executable' {
   if (-not $script:Entry) { Write-Note '::error::no uninstall entry, so no install location to check'; return $false }
   $d = Test-InstallDirectory -Path $script:Entry.InstallLocation
   if (-not $d.Ok) { Write-Note "::error::$($d.Message)"; return $false }
-  $script:InstallDir = $script:Entry.InstallLocation
+  # The NORMALISED path, not the raw registry value — see Test-InstallDirectory.
+  $script:InstallDir = $d.Path
   foreach ($e in $d.Executables) { Write-Note "  $($e.FullName)" }
   return $true
 }
@@ -788,7 +809,7 @@ Invoke-Check 'uninstalls cleanly' {
   do {
     Start-Sleep -Seconds 2
     $verdict = Test-RemovalComplete -EntryKeyPath $script:Entry.KeyPath `
-      -CurrentEntries (Get-UninstallEntry) -InstallDir $script:InstallDir
+      -CurrentEntries @(Get-UninstallEntry) -InstallDir $script:InstallDir
   } while (-not $verdict.Ok -and (Get-Date) -lt $deadline)
   if (-not $verdict.Ok) {
     Write-Note '::error::60s after the uninstaller exited 0, it has not finished removing the app:'

@@ -167,7 +167,7 @@ try {
   Assert-That 'old-format delay descriptors (VA, not RVA)' (Get-ImportedDll -Path $peOld) @('KERNEL32.dll', 'MSVCP140.dll')
 
   $peNone = Build-TestPe -Path (Join-Path $root 'none.exe')
-  Assert-That 'a PE with no imports reports none' (Get-ImportedDll -Path $peNone).Count 0
+  Assert-That 'a PE with no imports reports none' @(Get-ImportedDll -Path $peNone).Count 0
 
   # A file that is not a PE must THROW, not return an empty list: "no imports"
   # and "could not be read" must never be the same answer, or a check that
@@ -181,6 +181,24 @@ try {
   $threw = $false
   try { Get-ImportedDll -Path (Join-Path $root 'trunc.exe') | Out-Null } catch { $threw = $true }
   Assert-True 'a truncated PE throws' $threw
+
+  # ── THE SHAPE THE PRODUCTION CALL SITE ACTUALLY USES ────────────────────────
+  # Every assertion above calls these functions BARE, and production wraps them
+  # in @(). Those are not the same thing: with `return , @(...)` the raw call
+  # returned a clean 3-element array while `@(call)` nested it one level, and a
+  # nested list coerced into [string[]] collapsed to ONE space-joined string. The
+  # allowlist then matched nothing, every import list became a single
+  # unrecognised "DLL", and the check reported a finding regardless of what the
+  # binary imported — which is exactly what the first real Windows run produced.
+  # Testing the bare shape could not see it. These test the wrapped shape.
+  $wrapped = @(Get-ImportedDll -Path $pe64)
+  Assert-That 'wrapped: the caller gets one element PER DLL' $wrapped.Count 2
+  Assert-That 'wrapped: elements are strings, not a nested array' $wrapped[0].GetType().Name 'String'
+  $wrappedUnsat = @(Get-UnsatisfiedImport -Imports $wrapped -ShippedFiles @('app64.exe'))
+  Assert-That 'wrapped: the allowlist still filters' $wrappedUnsat.Count 1
+  Assert-That 'wrapped: and names the real DLL' $wrappedUnsat[0] 'VCRUNTIME140.dll'
+  $wrappedClean = @(Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'USER32.dll') -ShippedFiles @())
+  Assert-That 'wrapped: a clean set yields nothing, not one blob' $wrappedClean.Count 0
 
   # ── the parser REFUSES to give up quietly ───────────────────────────────────
   # Every one of these used to return an empty list, and an empty list is
@@ -240,23 +258,23 @@ try {
   Assert-That 'the VC++ runtime is NOT guaranteed by Windows' `
   (Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'VCRUNTIME140.dll') -ShippedFiles @('app.exe')) @('VCRUNTIME140.dll')
   Assert-That 'shipping the DLL beside the app satisfies it' `
-  (Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'VCRUNTIME140.dll') -ShippedFiles @('app.exe', 'VCRUNTIME140.dll')).Count 0
+  @(Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'VCRUNTIME140.dll') -ShippedFiles @('app.exe', 'VCRUNTIME140.dll')).Count 0
   # PE import names are whatever the linker recorded, so a case-sensitive
   # comparison would let the same DLL pass or fail depending on its spelling.
   Assert-That 'the check is case-insensitive on the import' `
   (Get-UnsatisfiedImport -Imports @('vcruntime140.DLL') -ShippedFiles @()) @('vcruntime140.DLL')
   Assert-That 'the check is case-insensitive on what is shipped' `
-  (Get-UnsatisfiedImport -Imports @('VCRUNTIME140.dll') -ShippedFiles @('vcruntime140.dll')).Count 0
+  @(Get-UnsatisfiedImport -Imports @('VCRUNTIME140.dll') -ShippedFiles @('vcruntime140.dll')).Count 0
   Assert-That 'kernel32 in any case is guaranteed' `
-  (Get-UnsatisfiedImport -Imports @('KERNEL32.DLL', 'kernel32.dll') -ShippedFiles @()).Count 0
+  @(Get-UnsatisfiedImport -Imports @('KERNEL32.DLL', 'kernel32.dll') -ShippedFiles @()).Count 0
   Assert-That 'the UCRT and its api-set forwarders are Windows components' `
-  (Get-UnsatisfiedImport -Imports @('ucrtbase.dll', 'api-ms-win-crt-runtime-l1-1-0.dll', 'ext-ms-win-foo-l1-1-0.dll') -ShippedFiles @()).Count 0
+  @(Get-UnsatisfiedImport -Imports @('ucrtbase.dll', 'api-ms-win-crt-runtime-l1-1-0.dll', 'ext-ms-win-foo-l1-1-0.dll') -ShippedFiles @()).Count 0
   # Tauri normally links this statically; if it is imported and not shipped,
   # that is a real packaging break, so it must not be on the allowlist.
   Assert-That 'WebView2Loader is not quietly allowlisted' `
   (Get-UnsatisfiedImport -Imports @('WebView2Loader.dll') -ShippedFiles @()) @('WebView2Loader.dll')
   Assert-That 'a clean import set produces no finding' `
-  (Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'USER32.dll', 'ole32.dll') -ShippedFiles @()).Count 0
+  @(Get-UnsatisfiedImport -Imports @('KERNEL32.dll', 'USER32.dll', 'ole32.dll') -ShippedFiles @()).Count 0
 
   # End to end, from PE bytes to verdict — the two functions the check actually
   # composes, driven together rather than each in isolation.
@@ -302,9 +320,9 @@ try {
   Assert-That 'the entry the install added is the one found' `
   (Get-NewUninstallEntry -Before @($a, $b) -After @($a, $b, $c)).KeyPath 'HKCU:\...\Unyt'
   Assert-That 'an install that registered nothing is detected' `
-  (Get-NewUninstallEntry -Before @($a, $b) -After @($a, $b)).Count 0
+  @(Get-NewUninstallEntry -Before @($a, $b) -After @($a, $b)).Count 0
   Assert-That 'a first-ever entry is found on an empty machine' `
-  (Get-NewUninstallEntry -Before @() -After @($c)).Count 1
+  @(Get-NewUninstallEntry -Before @() -After @($c)).Count 1
 
   # ── Test-UninstallEntry ─────────────────────────────────────────────────────
   Assert-True 'the registered version matching the artifact passes' (Test-UninstallEntry -Entry $c -ExpectedVersion '0.100.0').Ok
@@ -343,6 +361,15 @@ try {
   Assert-False 'a registered install that shipped no program fails' (Test-InstallDirectory -Path $empty).Ok
   Assert-False 'a missing install directory fails' (Test-InstallDirectory -Path (Join-Path $root 'nope')).Ok
   Assert-False 'no recorded location fails' (Test-InstallDirectory -Path $null).Ok
+  # THE TWO SHAPES A REAL REGISTRY RETURNS, observed on a runner: NSIS writes
+  # InstallLocation QUOTED, the MSI writes it bare with a trailing separator.
+  # Taken verbatim the quoted one fails every Test-Path, so a good install was
+  # reported missing and the import sweep then had nothing to scan.
+  Assert-True 'a QUOTED InstallLocation (NSIS) is accepted' (Test-InstallDirectory -Path "`"$good`"").Ok
+  Assert-True 'a trailing-separator InstallLocation (MSI) is accepted' (Test-InstallDirectory -Path "$good\").Ok
+  Assert-That 'and the normalised path comes back for the caller to reuse' `
+  (Test-InstallDirectory -Path "`"$good`"").Path $good
+  Assert-False 'a value that is nothing but quotes fails' (Test-InstallDirectory -Path '""').Ok
 
   # ── Test-RemovalComplete ────────────────────────────────────────────────────
   Assert-True 'a clean removal passes' `
@@ -424,8 +451,8 @@ Write-Output "windows check regression: $script:Pass passed, $script:Fail failed
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding
 # assertions.
-if ($script:Pass -lt 77) {
-  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 77 — the test file is truncated or a block was skipped")
+if ($script:Pass -lt 84) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 84 — the test file is truncated or a block was skipped")
   exit 1
 }
 if ($script:Fail -gt 0) { exit 1 }

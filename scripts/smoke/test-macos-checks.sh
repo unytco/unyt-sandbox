@@ -197,12 +197,12 @@ while [ $# -gt 0 ]; do
 done
 b="$(basename "$f")"
 case "$mode" in
-  -L) printf '%s:\n' "$f"; cat "$STUB_FIXTURE/otool/$b.L" 2>/dev/null ;;
+  -L) printf '%s:\n' "$f"; cat "$STUB_FIXTURE/otool/$b.deps" 2>/dev/null ;;
   -l)
-    if [ -n "$arch" ] && [ -f "$STUB_FIXTURE/otool/$b.$arch.l" ]; then
-      cat "$STUB_FIXTURE/otool/$b.$arch.l"
+    if [ -n "$arch" ] && [ -f "$STUB_FIXTURE/otool/$b.$arch.loadcmds" ]; then
+      cat "$STUB_FIXTURE/otool/$b.$arch.loadcmds"
     else
-      cat "$STUB_FIXTURE/otool/$b.l" 2>/dev/null
+      cat "$STUB_FIXTURE/otool/$b.loadcmds" 2>/dev/null
     fi ;;
 esac
 exit 0
@@ -464,8 +464,8 @@ build_fixture() { # <dir> [version] [plist-claim] [lc-flavour]
 EOF
 
   for m in unyt-sandbox helper libunyt.dylib; do
-    printf '%s\n' "$OTOOL_L_CLEAN" >"$dir/otool/$m.L"
-    printf '%s\n' "$lc" >"$dir/otool/$m.l"
+    printf '%s\n' "$OTOOL_L_CLEAN" >"$dir/otool/$m.deps"
+    printf '%s\n' "$lc" >"$dir/otool/$m.loadcmds"
   done
 
   # A UNIVERSAL main binary: two slices, two different minimums, two different
@@ -475,12 +475,12 @@ EOF
   if [ -n "${FIX_UNIVERSAL:-}" ]; then
     mkdir -p "$dir/lipo"
     printf 'x86_64 arm64\n' >"$dir/lipo/unyt-sandbox"
-    printf '%s\n' "$LC_ARM64" >"$dir/otool/unyt-sandbox.arm64.l"
+    printf '%s\n' "$LC_ARM64" >"$dir/otool/unyt-sandbox.arm64.loadcmds"
     if [ "${FIX_UNIVERSAL_X86:-10.13}" = "10.13" ]; then
-      printf '%s\n' "$LC_X86" >"$dir/otool/unyt-sandbox.x86_64.l"
+      printf '%s\n' "$LC_X86" >"$dir/otool/unyt-sandbox.x86_64.loadcmds"
     else
       printf 'Load command 9\n      cmd LC_VERSION_MIN_MACOSX\n  cmdsize 16\n  version %s\n      sdk 26.5\n' \
-        "${FIX_UNIVERSAL_X86}" >"$dir/otool/unyt-sandbox.x86_64.l"
+        "${FIX_UNIVERSAL_X86}" >"$dir/otool/unyt-sandbox.x86_64.loadcmds"
     fi
   fi
   : >"$dir/artifact.dmg"
@@ -637,7 +637,7 @@ expect_rc nonzero "a mispaired runner goes red"
 # ── 4. build-machine paths ────────────────────────────────────────────────────
 mutate_homebrew() {
   printf '%s\n\t/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n' \
-    "$OTOOL_L_CLEAN" >"$1/otool/libunyt.dylib.L"
+    "$OTOOL_L_CLEAN" >"$1/otool/libunyt.dylib.deps"
 }
 FIX_MUTATE=mutate_homebrew run_scenario break-homebrew
 expect_only_failure "no build-machine library paths in any Mach-O" \
@@ -647,7 +647,7 @@ expect_only_failure "no build-machine library paths in any Mach-O" \
 # only reads otool -L never sees it.
 mutate_rpath() {
   printf '%s\nLoad command 20\n      cmd LC_RPATH\n  cmdsize 32\n     path /usr/local/lib (offset 12)\n' \
-    "$LC_X86" >"$1/otool/unyt-sandbox.l"
+    "$LC_X86" >"$1/otool/unyt-sandbox.loadcmds"
 }
 FIX_MUTATE=mutate_rpath run_scenario break-rpath
 expect_only_failure "no build-machine library paths in any Mach-O" \
@@ -832,7 +832,7 @@ expect_err "not ready for distribution" "the finding wins over the pass sentence
 # advertises and dies in dyld.
 mutate_dylib_too_new() {
   printf 'Load command 8\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform macos\n      sdk 26.5\n    minos 12.0\n   ntools 1\n     tool ld\n' \
-    >"$1/otool/libunyt.dylib.l"
+    >"$1/otool/libunyt.dylib.loadcmds"
 }
 FIX_MUTATE=mutate_dylib_too_new run_scenario break-deployment
 expect_only_failure "deployment target within the supported floor" \
@@ -853,7 +853,7 @@ expect_row "deployment target within the supported floor" FAIL \
 # Neither load command present. "Nothing found" must not read as "nothing
 # required" — this is the exact shape in which the x86_64 build would slip past a
 # reader that knew only LC_BUILD_VERSION.
-mutate_no_version_cmd() { : >"$1/otool/libunyt.dylib.l"; }
+mutate_no_version_cmd() { : >"$1/otool/libunyt.dylib.loadcmds"; }
 FIX_MUTATE=mutate_no_version_cmd run_scenario break-no-version
 expect_row "deployment target within the supported floor" FAIL \
   "a Mach-O declaring no deployment target at all"
@@ -910,7 +910,7 @@ if grep -q 'does not do version ordering' "$ERR"; then pass=$((pass + 1)); else
 # actually inspected — the load paths — not on the files iterated over.
 mutate_homebrew_real() {
   printf '%s\n\t/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n' \
-    "$OTOOL_L_CLEAN" >"$1/otool/libunyt.dylib.L"
+    "$OTOOL_L_CLEAN" >"$1/otool/libunyt.dylib.deps"
 }
 FIX_MUTATE=mutate_homebrew_real run_scenario break-otool-dead STUB_BREAK=otool_dead
 expect_row "no build-machine library paths in any Mach-O" FAIL \
