@@ -243,6 +243,11 @@ if command -v objdump >/dev/null 2>&1 && [ -x "$(command -v ls || true)" ]; then
   # find; `command -v true` would resolve the shell builtin, not a file.
   real_elf="$(command -v ls || true)"
   cp "$real_elf" "$appdir/usr/bin/app"
+  # check-appimage.sh resolves the app binary from the .desktop Exec rather than
+  # guessing at find order, so the fixture has to carry one as a real AppImage
+  # does. Without it the script correctly refuses, and this regression test then
+  # measures the refusal instead of the bundle scan it exists to pin.
+  printf '[Desktop Entry]\nExec=app\n' >"$appdir/app.desktop"
   printf 'not an elf at all' >"$appdir/usr/lib/zzz-data.so.9"   # sorts last
   if out="$(bash "$here/check-appimage.sh" "$appdir" 2>&1)"; then :; fi
   if printf '%s' "$out" | grep -q 'glibc ceiling of the bundle'; then

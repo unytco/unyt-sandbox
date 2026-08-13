@@ -37,8 +37,26 @@ command -v objdump >/dev/null || { echo "::error::objdump not found (apt-get ins
 status=0
 
 # ── the ceiling, across every ELF the bundle ships ────────────────────────────
-inner="$(find "$APPDIR/usr/bin" -type f -executable 2>/dev/null | head -1)"
-[ -n "$inner" ] || { echo "::error::no executable under $APPDIR/usr/bin" >&2; exit 1; }
+# THE APP'S OWN BINARY, named by the .desktop file's Exec — not
+# `find usr/bin | head -1`, which is directory order and therefore a coin flip.
+# This bundle ships xdg-mime beside the app, and on the CI runner find returned
+# THAT: the ceiling scan below then ran over xdg-mime plus the .so files with the
+# application binary silently absent from its own compatibility check, and the
+# "libraries required from the system" report described xdg-mime's needs rather
+# than the app's. Same failure that made the launch oracle watch the wrong
+# process (container-checks-appimage.sh), and the same class as N1 below: find
+# order is not an answer to "which file do I want".
+# `|| true`: with no .desktop the glob does not match, grep exits non-zero, and
+# under `set -e` an assignment from a failing substitution aborts the script —
+# killing the diagnosis below before it can be printed.
+desktop_exec="$(grep -hm1 '^Exec=' "$APPDIR"/*.desktop 2>/dev/null | sed 's/^Exec=//; s/[[:space:]].*//' || true)"
+inner="$APPDIR/usr/bin/$desktop_exec"
+if [ -z "$desktop_exec" ] || [ ! -x "$inner" ]; then
+  echo "::error::cannot tell which binary this AppImage runs: .desktop Exec='${desktop_exec:-<none>}'" >&2
+  echo "  is missing or not executable under usr/bin. Refusing to guess — scanning the wrong" >&2
+  echo "  binary is how this check silently stopped covering the application." >&2
+  exit 1
+fi
 
 # Every ELF in the bundle, each reduced to the highest GLIBC_ it imports; the
 # bundle's ceiling is the max over all of them.

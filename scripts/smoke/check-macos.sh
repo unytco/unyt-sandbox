@@ -294,8 +294,16 @@ if [ "$hd_rc" -ne 0 ]; then
   mount_ok=""
 else
   MOUNT="$mnt"
-  app_src="$(find "$mnt" -maxdepth 1 -name '*.app' -print | head -1)"
-  if [ -z "$app_src" ]; then
+  # `head -1` over find output is directory order, so with two .app bundles this
+  # would assess an arbitrary one — the same coin flip that made the AppImage
+  # lane watch xdg-mime instead of the app. A release DMG carries exactly one.
+  app_count="$(find "$mnt" -maxdepth 1 -name '*.app' -print | grep -c .)"
+  app_src="$(find "$mnt" -maxdepth 1 -name '*.app' -print | sort | head -1)"
+  if [ "$app_count" -gt 1 ]; then
+    echo "::error::the disk image contains $app_count .app bundles — refusing to pick one at random:" >&2
+    find "$mnt" -maxdepth 1 -name '*.app' -print | sed 's/^/  /' >&2
+    mount_ok=""
+  elif [ -z "$app_src" ]; then
     echo "::error::the disk image mounted but contains no .app:" >&2
     ls -la "$mnt" >&2
     mount_ok=""

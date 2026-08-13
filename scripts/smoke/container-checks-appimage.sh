@@ -75,8 +75,36 @@ apt-get install -y -qq libwebkit2gtk-4.1-0 libgbm1 libgl1 libegl1 xvfb >/dev/nul
 
 # The app runs as the inner binary, not as the .AppImage filename, so the launch
 # oracle is told what process to watch.
-inner_bin="$(find /tmp/squashfs-root/usr/bin -type f -executable | head -1)"
-UNYT_SMOKE_PROC_NAME="$(basename "$inner_bin")"
+#
+# READ FROM THE .desktop FILE, NOT `find usr/bin | head -1`. This bundle ships
+# xdg-mime alongside the app, and `find` returns directory order, not sorted
+# order — so which of the two came first was a coin flip per machine. On a
+# developer's box it was the app; on the CI runner it was xdg-mime, and the
+# launch oracle then watched for a process by that name, never saw one, and
+# failed a WORKING artifact at the 20s mark on all four images. The same value
+# also feeds the ui_ready probe below, so the breadcrumb was being looked for in
+# xdg-mime — a skip that happened to be right for v0.100.0 and would have been
+# silently wrong for any newer build. Same bug class as check-appimage.sh's N1:
+# `find` order is not an answer to "which file do I want".
+#
+# The .desktop file at the AppDir root is the AppImage's own statement of what it
+# runs (`Exec=unyt-sandbox`), which is exactly the question being asked.
+desktop_exec="$(grep -hm1 '^Exec=' /tmp/squashfs-root/*.desktop 2>/dev/null |
+  sed 's/^Exec=//; s/[[:space:]].*//')"
+inner_bin="/tmp/squashfs-root/usr/bin/$desktop_exec"
+if [ -z "$desktop_exec" ] || [ ! -x "$inner_bin" ]; then
+  # No guessing. Picking some other executable is how this failed in the first
+  # place, and a launch check watching the wrong process reports a red that says
+  # nothing about the artifact.
+  echo "::error::cannot tell which binary this AppImage runs: .desktop Exec='${desktop_exec:-<none>}'" >&2
+  echo "  is missing or not executable under usr/bin. Candidates present:" >&2
+  find /tmp/squashfs-root/usr/bin -type f -executable -exec basename {} \; 2>/dev/null | sed 's/^/    /' >&2
+  record "launches, stays up, shuts down" FAIL
+  printf '%s\n' "${results[@]}"
+  exit 1
+fi
+echo "  AppImage runs as '$desktop_exec' (from the .desktop Exec)" >&2
+UNYT_SMOKE_PROC_NAME="$desktop_exec"
 export UNYT_SMOKE_PROC_NAME
 # The breadcrumb string lives in the compressed squashfs, so probe the extracted
 # binary rather than the .AppImage file.
