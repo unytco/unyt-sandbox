@@ -1,4 +1,4 @@
 [submodule "unyt"]
 	path = unyt
 	url = git@github.com:unytco/unyt.git
-	branch = develop-0.7
+	branch = develop
