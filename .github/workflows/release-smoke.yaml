@@ -29,8 +29,75 @@ on:
 # macOS and Windows are separate lanes: neither has an equivalent of dpkg's
 # dependency metadata, so they need their own answer rather than a matrix row.
 jobs:
+  # ── the distro list, read from the script that owns it ──────────────────────
+  # One job per distro means a matrix, and a matrix normally hard-codes its
+  # values in YAML — which would be a SECOND copy of a list that already exists
+  # in run-smoke.sh. Two copies drift the moment someone adds a distro to one and
+  # not the other, and the drift is invisible in the worst way: the workflow
+  # quietly stops testing the image nobody remembered to add here, and every job
+  # still reports green. So the list is asked for, not repeated.
+  #
+  # This job also runs the oracle regression test ONCE rather than per distro:
+  # it guards the assertions every container check depends on, so a broken oracle
+  # should stop the matrix rather than run it four times.
+  linux-images:
+    name: "linux smoke setup (image list + oracle)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GIT_PAT }}
+          fetch-depth: 1
+
+      # <1s, no Docker, and it guards the oracle every other check depends on.
+      # Three invocation bugs have shipped in that oracle, each of which made an
+      # assertion incapable of failing — a regression test nothing runs is a
+      # regression test you do not have.
+      - name: Oracle regression test
+        run: bash scripts/smoke/test-oracle.sh
+
+      - name: Read the distro matrix from run-smoke.sh
+        id: list
+        run: |
+          # Built by hand rather than with jq: no dependency to assume, and the
+          # slug (":" is not legal in an artifact name) is derived here so the
+          # matrix carries both forms.
+          json="["
+          count=0
+          while IFS= read -r img; do
+            [ -n "$img" ] || continue
+            slug="$(printf '%s' "$img" | tr ':/' '--')"
+            [ "$count" -eq 0 ] || json="$json,"
+            json="$json{\"image\":\"$img\",\"slug\":\"$slug\"}"
+            count=$((count + 1))
+          done < <(bash scripts/smoke/run-smoke.sh --print-images)
+          json="$json]"
+
+          # AN EMPTY MATRIX RUNS ZERO JOBS AND THE WORKFLOW GOES GREEN — the same
+          # shape as every "nothing was scanned" bug this suite has already been
+          # bitten by, one level up in the workflow. If the list cannot be read,
+          # say so here rather than reporting a clean release nobody tested.
+          if [ "$count" -eq 0 ]; then
+            echo "::error::read no distro images from run-smoke.sh — the matrix would be empty and every Linux job would silently not exist"
+            exit 1
+          fi
+          echo "read $count image(s): $json"
+          echo "images=$json" >> "$GITHUB_OUTPUT"
+
   linux:
-    name: "linux install smoke"
+    name: "linux install smoke (${{ matrix.image }})"
+    needs: linux-images
+    # `needs` here is the matrix PROVIDER, not a gate on the release: this job
+    # consumes the list, nothing consumes this job. The non-blocking property is
+    # unchanged — see the note on the final step.
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.linux-images.outputs.images) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,13 +106,6 @@ jobs:
         with:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
-
-      # First, and outside the containers: <1s, no Docker, and it guards the
-      # oracle every other check depends on. Three invocation bugs have shipped
-      # in that oracle, each of which made an assertion incapable of failing — a
-      # regression test nothing runs is a regression test you do not have.
-      - name: Oracle regression test
-        run: bash scripts/smoke/test-oracle.sh
 
       - name: Download the released Linux artifacts
         id: download
@@ -67,6 +127,8 @@ jobs:
       - name: Run the smoke in pristine containers
         id: smoke
         continue-on-error: true
+        env:
+          IMAGE: ${{ matrix.image }}
         run: |
           # Redirect the whole loop rather than piping it: a pipeline runs in a
           # subshell and `rc` set inside it would be lost, so every failure would
@@ -74,7 +136,11 @@ jobs:
           rc=0
           for artifact in "${{ steps.download.outputs.deb }}" "${{ steps.download.outputs.appimage }}"; do
             echo "##### $(basename "$artifact") #####"
-            bash scripts/smoke/run-smoke.sh "$artifact" || rc=1
+            # ONE image, named by the matrix. Both Linux bundles are still smoked
+            # in the same job: they fail differently but they fail on the same
+            # distro, so pairing them the way macOS pairs arch to artifact keeps
+            # a red job naming one platform rather than one file format.
+            bash scripts/smoke/run-smoke.sh "$artifact" "$IMAGE" || rc=1
           done >"$RUNNER_TEMP/smoke.log" 2>&1
           cat "$RUNNER_TEMP/smoke.log"
           exit "$rc"
@@ -84,9 +150,10 @@ jobs:
         env:
           SMOKE: ${{ steps.smoke.outcome || 'did not run' }}
           RELEASE: ${{ inputs.release }}
+          IMAGE: ${{ matrix.image }}
         run: |
           {
-            echo "### Release smoke — \`$RELEASE\`"
+            echo "### Release smoke — \`$RELEASE\` ($IMAGE)"
             echo ""
             echo '```'
             # Only the result rows, never `/^# summary/,$p` — with two artifacts
@@ -104,14 +171,14 @@ jobs:
           # Annotate, so a report-only failure is visible on the run page without
           # anyone opening the summary of a green job.
           if [ "$SMOKE" != success ]; then
-            echo "::error title=Release smoke failed::see the job summary for which check failed on which distro"
+            echo "::error title=Release smoke failed on $IMAGE::see the job summary for which check failed"
           fi
 
       - name: Upload the smoke log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-smoke-log
+          name: release-smoke-log-${{ matrix.slug }}
           path: ${{ runner.temp }}/smoke.log
           if-no-files-found: warn
 

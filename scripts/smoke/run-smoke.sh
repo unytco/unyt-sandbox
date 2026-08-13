@@ -25,19 +25,6 @@ if [ "${1:-}" = "--print-computed-depends" ]; then
   shift
 fi
 
-ARTIFACT="${1:?usage: run-smoke.sh [--print-computed-depends] <artifact.deb|artifact.AppImage> [image ...]}"
-shift || true
-[ -f "$ARTIFACT" ] || { echo "::error::artifact not found: $ARTIFACT" >&2; exit 1; }
-ARTIFACT="$(cd "$(dirname "$ARTIFACT")" && pwd)/$(basename "$ARTIFACT")"
-
-# The two Linux bundles need different sequences: a .deb declares dependencies
-# that apt must resolve, an AppImage declares nothing and bundles them instead.
-case "$ARTIFACT" in
-  *.deb)      DRIVER=container-checks.sh ;;
-  *.AppImage) DRIVER=container-checks-appimage.sh ;;
-  *) echo "::error::unsupported artifact '$ARTIFACT' (expected .deb or .AppImage)" >&2; exit 1 ;;
-esac
-
 # ── THE MATRIX ────────────────────────────────────────────────────────────────
 # One list, deliberately spanning BOTH ends of the supported range, because the
 # two ends fail differently and each hides the other's bug:
@@ -59,6 +46,32 @@ esac
 # debian:12 (2.36) was dropped: it sits between the two Ubuntu LTSs and exercises
 # nothing they don't.
 UNYT_SMOKE_IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:13 ubuntu:26.04)
+
+# THE MATRIX, READABLE FROM OUTSIDE. release-smoke.yaml runs one job per image
+# and builds that matrix by asking this script, rather than repeating the list in
+# YAML — two copies of it would drift the moment someone adds a distro here and
+# not there, and the drift would be invisible: the workflow would simply stop
+# testing the image nobody remembered to add. Declared once, below; read here.
+# Deliberately before the artifact argument is required, since listing the matrix
+# needs no artifact.
+if [ "${1:-}" = "--print-images" ]; then
+  printf '%s\n' "${UNYT_SMOKE_IMAGES[@]}"
+  exit 0
+fi
+
+ARTIFACT="${1:?usage: run-smoke.sh [--print-computed-depends] <artifact.deb|artifact.AppImage> [image ...]}"
+shift || true
+[ -f "$ARTIFACT" ] || { echo "::error::artifact not found: $ARTIFACT" >&2; exit 1; }
+ARTIFACT="$(cd "$(dirname "$ARTIFACT")" && pwd)/$(basename "$ARTIFACT")"
+
+# The two Linux bundles need different sequences: a .deb declares dependencies
+# that apt must resolve, an AppImage declares nothing and bundles them instead.
+case "$ARTIFACT" in
+  *.deb)      DRIVER=container-checks.sh ;;
+  *.AppImage) DRIVER=container-checks-appimage.sh ;;
+  *) echo "::error::unsupported artifact '$ARTIFACT' (expected .deb or .AppImage)" >&2; exit 1 ;;
+esac
+
 
 IMAGES=("$@")
 [ ${#IMAGES[@]} -gt 0 ] || IMAGES=("${UNYT_SMOKE_IMAGES[@]}")
