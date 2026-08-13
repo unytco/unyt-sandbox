@@ -1,0 +1,81 @@
+# ##########################################################################
+# #                                                                        #
+# #   TEMPORARY — DELETE THIS FILE BEFORE MERGING PR #82                   #
+# #                                                                        #
+# ##########################################################################
+#
+# WHAT THIS IS. A throwaway trigger whose only job is to make release-smoke.yaml
+# actually EXECUTE on GitHub, against the already-published v0.100.0 release,
+# while the branch is still open. Nothing in it is meant to survive: it exists
+# because the workflow it calls has never run anywhere, and a release pipeline
+# that has only ever been reasoned about is not one anybody should trust.
+#
+# WHY IT HAS TO EXIST AT ALL. release-smoke.yaml declares `workflow_dispatch`,
+# but GitHub only offers dispatch for workflows present on the DEFAULT branch —
+# so from this branch it cannot be triggered by hand, and that path stays dormant
+# until the PR merges. `push` and `pull_request` are different: for same-repo
+# events GitHub takes the workflow file from the HEAD ref, so a file added on
+# this branch runs on this branch. That is the whole trick, and it is also why
+# this file can be deleted with no trace once the real workflow reaches `main`.
+#
+# IT CALLS THE REAL THING. `uses: ./.github/workflows/release-smoke.yaml` runs
+# the shipped workflow at this commit — not a copy, not a trimmed variant. If it
+# passes, the thing being merged is the thing that passed. Do not "simplify" this
+# into an inlined copy of those jobs; a proving run against a variant proves
+# nothing about what ships.
+#
+# EXPECT RED ON THE FIRST ROUND, AND READ IT CAREFULLY. Everything below has been
+# executed only against stub toolchains on Linux. The likely first failures are
+# ours, not the artifact's: the bash 3.2 / BSD userland on a real macOS runner,
+# and the real wording of hdiutil / spctl / stapler / syspolicy_check / signtool,
+# which the stubs MODEL rather than reproduce. Diagnose a red as a harness or
+# wording problem first — but do not assume it: a genuine finding about the
+# v0.100.0 artifacts is possible here and would be the most valuable outcome.
+#
+# DELETE BEFORE MERGE. If this file reaches `main`, every push to that branch
+# starts a full three-platform smoke run at macOS's 10x and Windows's 2x billing.
+name: "zz-TEMPORARY-smoke-proving"
+
+on:
+  # Every push to the PR branch gives a fresh run — the iteration loop this
+  # exists for. Narrowed by `paths` so an unrelated commit does not start a
+  # ~34-minute Linux matrix plus two multiplier-billed platforms for nothing;
+  # every file that can change the outcome is listed.
+  push:
+    branches: [feat/release-install-smoke-test]
+    paths:
+      - ".github/workflows/release-smoke.yaml"
+      - ".github/workflows/zz-TEMPORARY-smoke-proving.yaml"
+      - "scripts/smoke/**"
+  # On-demand path: label the PR `ci:smoke` to force a run without pushing.
+  # NOTE: that label does not exist in this repo yet (only GitHub's defaults do)
+  # — create it, or this trigger simply never fires.
+  pull_request:
+    types: [labeled]
+
+# A second push while a run is in flight cancels the first rather than paying for
+# both. release-smoke.yaml's steps are written `if: ${{ !cancelled() }}`, so a
+# cancelled run stops cleanly instead of reporting a half-finished verdict.
+concurrency:
+  group: smoke-proving-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    name: "prove release-smoke runs (v0.100.0)"
+    # `types: [labeled]` fires for ANY label, so without this guard adding
+    # `documentation` to the PR would start a full multiplier-billed run. Push
+    # events carry no `label` object at all, and the missing field evaluates to
+    # null rather than erroring, so the first clause carries them.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.label.name == 'ci:smoke'
+    # The v0.100.0 release, by NUMERIC ID rather than tag: these are published as
+    # draft prereleases, which `gh release download <tag>` cannot see, and the id
+    # is what download-release-asset.sh resolves fastest. Verified against the
+    # API — id 368727714 is tag v0.100.0, prerelease, carrying all six artifacts
+    # the three lanes ask for.
+    uses: ./.github/workflows/release-smoke.yaml
+    with:
+      release: "368727714"
+    secrets: inherit
