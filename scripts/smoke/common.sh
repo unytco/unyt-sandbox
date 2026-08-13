@@ -67,6 +67,20 @@ UNYT_RE_FAILED='panicked at|Status update: .* -> (ConductorError|AppInstallation
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
 
+# A prior version's identity being carried into this one
+# (unyt/src-tauri/src/runtime/boot/identity.rs). On a cold install there is no
+# prior lair to carry, so this line MUST NOT appear — its presence means the run
+# is a warm start over leaked state and is not testing what users hit.
+#
+# NOTE: `has_existing_key: true` is NOT evidence of leakage and must not be
+# asserted false. On an authenticated build (any release), hc-auth mints an agent
+# key during boot and `resolve_agent_key` then REUSES it, so `reused` — and hence
+# `has_existing_key` — is legitimately true on a first install
+# (unyt/src-tauri/src/joining/mod.rs first_run_has_existing_key = reused ||
+# carried_forward). The carried-forward half is the one that indicates leakage.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+UNYT_RE_CARRIED_IDENTITY='identity: agent identity carried forward'
+
 # The webview breadcrumb (unyt/src-tauri/src/runtime/events.rs `ui_ready`),
 # emitted from the frontend's first mount. Required whenever the artifact carries
 # it — see smoke_supports_ui_ready.
@@ -97,6 +111,7 @@ smoke_supports_ui_ready() {
 smoke_match_backend_ready(){ grep -qE -e "$UNYT_RE_BACKEND_READY"; }
 smoke_first_backend_ready(){ grep -oE -e "($UNYT_RE_BACKEND_READY).*" | head -1; }
 smoke_match_ui_ready()     { grep -qF -e "$UNYT_RE_UI_READY"; }
+smoke_match_carried()      { grep -qF -e "$UNYT_RE_CARRIED_IDENTITY"; }
 smoke_match_failed()       { grep -qE -e "$UNYT_RE_FAILED"; }
 smoke_first_failures()     { grep -oE -e "($UNYT_RE_FAILED).*" | head -3; }
 smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }

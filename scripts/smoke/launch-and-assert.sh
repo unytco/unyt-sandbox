@@ -181,6 +181,19 @@ else
   echo "NOTE: this artifact predates the ui_ready breadcrumb — webview paint NOT verified" >&2
 fi
 
+# ── 1c. this was a COLD install ───────────────────────────────────────────────
+# The sandbox is wiped above and the container is --rm, but that is the setup's
+# claim, not a measurement. If a prior version's identity had been carried into
+# this boot, the run would be a warm start and would not be testing the path a
+# user actually hits on first install.
+if smoke_all_logs "$SANDBOX" | smoke_match_carried; then
+  echo "::error::a prior identity was carried into this boot — the sandbox was not clean," >&2
+  echo "  so this run tested a warm start, not the first install it claims to." >&2
+  dump_logs
+  exit 1
+fi
+echo "OK: cold install (no prior identity carried forward)" >&2
+
 # ── 2. stays up ───────────────────────────────────────────────────────────────
 # Bounded by construction (a fixed window, never "wait until healthy again"), so
 # a permanently flapping conductor fails instead of hanging the job.

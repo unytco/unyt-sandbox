@@ -128,5 +128,16 @@ if smoke_supports_ui_ready "$probe"; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  a binary containing the breadcrumb must claim support" >&2; fi
 rm -f "$probe"
 
+# ── cold-install proof ───────────────────────────────────────────────────────
+# has_existing_key: true is CORRECT on an authenticated build's first install
+# (hc-auth mints a key at boot and resolve_agent_key reuses it), so it must not
+# be used as the freshness signal. Carried-forward identity is the real one.
+check "a carried-forward identity is detected" yes \
+  '2026-08-12T20:00:00.000000Z  INFO unyt::runtime: identity: agent identity carried forward into the new version' smoke_match_carried
+check "a cold install shows no carry" no \
+  "$P LairReady -> NetworkSetupRequired { agent_key: \"uhCAkAAA\", has_existing_key: true }" smoke_match_carried
+check "has_existing_key: true is still a healthy backend state" yes \
+  "$P LairReady -> NetworkSetupRequired { agent_key: \"uhCAkAAA\", has_existing_key: true }" smoke_match_backend_ready
+
 echo "oracle regression: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
