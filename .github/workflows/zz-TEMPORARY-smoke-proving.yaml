@@ -56,6 +56,14 @@ on:
 # A second push while a run is in flight cancels the first rather than paying for
 # both. release-smoke.yaml's steps are written `if: ${{ !cancelled() }}`, so a
 # cancelled run stops cleanly instead of reporting a half-finished verdict.
+#
+# OPERATIONAL HAZARD, from this and `paths` above being individually correct:
+# ANY push touching scripts/smoke/** or these workflows while a run is in flight
+# CANCELS IT and starts over — including a comment-only commit that cannot
+# change the outcome, at macOS's 10x and Windows's 2x billing. While a run is
+# live, batch further commits and push once it has reported. The alternative
+# (dropping cancel-in-progress) is worse: a rapid re-push would then pay for two
+# full three-platform runs concurrently.
 concurrency:
   group: smoke-proving-${{ github.ref }}
   cancel-in-progress: true
