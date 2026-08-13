@@ -148,40 +148,83 @@ smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
 #     `libc6 (>= 2.17)` against a computed `(>= 2.34)` passed — leaving exactly
 #     the too-old-glibc install this gate exists to prevent. The declared floor
 #     must now COVER the computed one.
+# Split `>= 2.34`, `>=2.34` or `>>2.33` into "<op> <version>". Leading run of
+# relation characters is the operator, the rest is the version — a space is
+# optional in a hand-written list, and taking the LAST space-separated token
+# instead (the old approach) silently turned `>=2.34` into the "version" `>=2.34`,
+# which dpkg then accepted against anything.
+smoke_split_constraint() {
+  local c="${1:-}" op ver
+  c="${c#"${c%%[![:space:]]*}"}"; c="${c%"${c##*[![:space:]]}"}"
+  op="${c%%[!<>=]*}"
+  ver="${c#"$op"}"
+  ver="${ver#"${ver%%[![:space:]]*}"}"; ver="${ver%"${ver##*[![:space:]]}"}"
+  printf '%s %s\n' "$op" "$ver"
+}
+
+# Compare a COMPUTED dependency list against what the package DECLARES, and emit
+# one finding per line: `MISSING`, `UNCONSTRAINED`, `NOFLOOR`, `BADVERSION`,
+# `UNPARSEABLE` or `TOOLOW`, each followed by the dependency.
+#
+# Args: <declared-file> <computed-file>, one `name (op ver)` per line.
+#
+# Lives here, and takes files rather than doing its own extraction, so
+# test-oracle.sh drives the REAL comparison against fixtures — the same reason
+# the matchers live here. Every bug fixed in this function was a way for the gate
+# to accept a declaration providing no usable floor, which is the one property it
+# exists to enforce, and none was visible by reading:
+#   - package names interpolated into an ERE, where `c++` is a quantifier, so a
+#     correctly-declared `libstdc++6` was reported MISSING;
+#   - only a BARE declaration counted, so `libc6 (>= 2.17)` against a computed
+#     `(>= 2.34)` passed;
+#   - the operator was discarded, so `libc6 (<= 2.40)` — an UPPER bound, no floor
+#     at all — passed;
+#   - `dpkg --compare-versions` returns 0 for a malformed version, so the
+#     plausible hand-written `libc6 (>=2.34)` (no space) made ANY value pass.
+# The declared list is hand-maintained in tauri.conf.json and this gate's premise
+# is that it is wrong, so nothing here may assume it is well-formed.
 smoke_depends_gaps() {
   local declared_file="${1:?declared file required}" computed_file="${2:?computed file required}"
-  local dep name constraint dver cline cname cconstraint found
+  local dep name constraint cline cname cconstraint found op ver dop dver
   while read -r dep; do
     [ -n "$dep" ] || continue
-    name="${dep%% *}"
-    # `libc6 (>= 2.34)` -> constraint `>= 2.34`; no parens -> empty.
+    name="${dep%% *}"; name="${name%%:*}"   # strip any :arch qualifier
     constraint=""
-    case "$dep" in *\ \(*\)) constraint="${dep#*\(}"; constraint="${constraint%\)}" ;; esac
+    case "$dep" in *\(*\)) constraint="${dep#*\(}"; constraint="${constraint%%\)*}" ;; esac
+    # A computed entry that carries "(" but no parseable constraint (e.g. an
+    # alternation `libfoo (>= 9) | libbar`) must not silently skip the floor check.
+    if [ -z "$constraint" ] && case "$dep" in *\(*) true ;; *) false ;; esac; then
+      printf 'UNPARSEABLE %s\n' "$dep"; continue
+    fi
 
     found=""
     while read -r cline; do
       [ -n "$cline" ] || continue
-      cname="${cline%% *}"
+      cname="${cline%% *}"; cname="${cname%%:*}"
       [ "$cname" = "$name" ] || continue
       found="$cline"
       cconstraint=""
-      case "$cline" in *\ \(*\)) cconstraint="${cline#*\(}"; cconstraint="${cconstraint%\)}" ;; esac
+      case "$cline" in *\(*\)) cconstraint="${cline#*\(}"; cconstraint="${cconstraint%%\)*}" ;; esac
       break
     done <"$declared_file"
 
     if [ -z "$found" ]; then
-      printf 'MISSING %s
-' "$dep"
+      printf 'MISSING %s\n' "$dep"
     elif [ -n "$constraint" ] && [ -z "$cconstraint" ]; then
-      printf 'UNCONSTRAINED %s
-' "$dep"
+      printf 'UNCONSTRAINED %s\n' "$dep"
     elif [ -n "$constraint" ]; then
-      # Compare only the versions; the operators are `>=` in practice, and a
-      # declared floor below the computed one is the defect either way.
-      dver="${constraint##* }"
-      if ! dpkg --compare-versions "${cconstraint##* }" ge "$dver" 2>/dev/null; then
-        printf 'TOOLOW %s declared (%s)
-' "$dep" "$cconstraint"
+      read -r op ver <<<"$(smoke_split_constraint "$constraint")"
+      read -r dop dver <<<"$(smoke_split_constraint "$cconstraint")"
+      if [ "$dop" != ">=" ] && [ "$dop" != ">>" ]; then
+        # An upper bound or an equality pins nothing below itself: `libc6 (<= 2.40)`
+        # still permits installing on glibc 2.17.
+        printf 'NOFLOOR %s declared (%s) — not a lower bound\n' "$dep" "$cconstraint"
+      elif [ -z "$dver" ] || ! dpkg --validate-version "$dver" 2>/dev/null; then
+        # dpkg --compare-versions returns 0 for a malformed version, so an
+        # unvalidated one would make every comparison pass.
+        printf 'BADVERSION %s declared (%s)\n' "$dep" "$cconstraint"
+      elif ! dpkg --compare-versions "$dver" ge "$ver" 2>/dev/null; then
+        printf 'TOOLOW %s declared (%s)\n' "$dep" "$cconstraint"
       fi
     fi
   done <"$computed_file"

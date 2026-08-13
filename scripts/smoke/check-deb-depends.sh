@@ -167,6 +167,23 @@ if [ -n "$gaps" ]; then
     echo "  declared with a floor BELOW what the binary needs ($n_toolow):" >&2
     printf '%s\n' "$gaps" | sed -n 's/^TOOLOW /    /p' >&2
   fi
+  n_nofloor="$(printf '%s\n' "$gaps" | grep -c '^NOFLOOR ' || true)"
+  n_badversion="$(printf '%s\n' "$gaps" | grep -c '^BADVERSION ' || true)"
+  n_unparseable="$(printf '%s\n' "$gaps" | grep -c '^UNPARSEABLE ' || true)"
+  if [ "$n_nofloor" != 0 ]; then
+    echo "  declared with a relation that is NOT a lower bound ($n_nofloor) — an upper" >&2
+    echo "  bound or an equality constrains nothing below itself:" >&2
+    printf '%s\n' "$gaps" | sed -n 's/^NOFLOOR /    /p' >&2
+  fi
+  if [ "$n_badversion" != 0 ]; then
+    echo "  declared with an unparseable version ($n_badversion) — dpkg accepts these" >&2
+    echo "  against anything, so the floor would not be enforced:" >&2
+    printf '%s\n' "$gaps" | sed -n 's/^BADVERSION /    /p' >&2
+  fi
+  if [ "$n_unparseable" != 0 ]; then
+    echo "  computed entry could not be parsed ($n_unparseable) — refusing to skip its floor:" >&2
+    printf '%s\n' "$gaps" | sed -n 's/^UNPARSEABLE /    /p' >&2
+  fi
   echo "" >&2
   echo "  Fix: add or raise them in bundle.linux.deb.depends in unyt/src-tauri/tauri.conf.json." >&2
   echo "  tauri-bundler writes that list verbatim and never computes one." >&2

@@ -172,6 +172,33 @@ expect_gap "MISSING libglib2.0-0 (>= 2.65.1)"          "a genuinely absent depen
 reject_gap "MISSING libstdc++6"                        "libstdc++6 (the c++ ERE-quantifier bug)"
 reject_gap "libsoup-3.0-0"                             "an exactly-matching dependency"
 reject_gap "libpango-1.0-0"                            "a declared floor ABOVE the computed one"
+# F1/F2/F3: a declaration can also provide no USABLE floor while looking like one.
+# Each of these passed silently before; they are the same class as the too-low
+# floor above, which is the one property this gate exists to enforce.
+one_case() { # <declared> <expected-finding-prefix> <description>
+  local df cf out
+  df="$(mktemp)"; cf="$(mktemp)"
+  printf '%s\n' "$1" >"$df"; printf 'libc6 (>= 2.34)\n' >"$cf"
+  out="$(smoke_depends_gaps "$df" "$cf")"
+  case "$out" in
+    "$2"*) pass=$((pass + 1)) ;;
+    *) fail=$((fail + 1)); printf 'FAIL  %-58s got: %s\n' "$3" "${out:-<no finding>}" >&2 ;;
+  esac
+  rm -f "$df" "$cf"
+}
+one_case 'libc6 (<= 2.40)'            NOFLOOR    "an upper bound accepted as a floor"
+one_case 'libc6 (<< 2.40)'            NOFLOOR    "a strict upper bound accepted as a floor"
+one_case 'libc6 (= 2.40)'             NOFLOOR    "an equality accepted as a floor"
+one_case 'libc6 (>= v2.34)'           BADVERSION "a malformed version dpkg accepts against anything"
+one_case 'libc6 (>=1.0)'              TOOLOW     "a no-space constraint whose floor is too low"
+one_case 'libc6'                      UNCONSTRAINED "a bare declaration"
+one_case 'libfoo (>= 1)'              MISSING    "a wholly different package"
+# Must NOT fire: a correct declaration in each accepted shape.
+one_case 'libc6 (>= 2.34)'            ""         "an exact floor (must not fire)"
+one_case 'libc6 (>=2.34)'             ""         "a valid no-space floor (must not fire)"
+one_case 'libc6 (>> 2.40)'            ""         "a strict lower bound above the floor (must not fire)"
+one_case 'libc6:amd64 (>= 2.34)'      ""         "an arch-qualified name (must not fire)"
+
 rm -f "$dep_d" "$dep_c"
 
 # ── N1: the bundle scan must survive a file with no GLIBC_ symbols LAST ──────
@@ -206,8 +233,8 @@ echo "oracle regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 42 ]; then
-  echo "::error::only $pass assertions ran; expected at least 42 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 53 ]; then
+  echo "::error::only $pass assertions ran; expected at least 53 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]
