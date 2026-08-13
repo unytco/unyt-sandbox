@@ -642,10 +642,18 @@ check_syspolicy() {
   # failure regardless of how many individual checks passed, and only "ready for
   # distribution" is success. A wrong guess about the wording is then a false RED
   # that says so, never a false green.
-  # A line that says ZERO of something is not a failure. A verbose report's
+  # A line that says ZERO of something is not a failure. A report's
   # `0 errors, 0 warnings` would otherwise trip the `error` token and red a build
   # that passed — and a row that cries wolf on wording is the row people learn to
   # ignore. Dropped before the scan, so the vocabulary itself stays broad.
+  #
+  # ONLY A LINE THAT IS NOTHING BUT ZERO-COUNTS. Dropping any line that merely
+  # CONTAINS one would discard `Notary Ticket Missing, 0 errors in codesign`
+  # entirely — the filter eating the finding it was meant to sit beside. This
+  # form can only ever ignore a line that says nothing else, so it cannot hide a
+  # failure. The narrower cost is that `Summary: 0 errors` still trips the scan;
+  # that is the safe direction, and the surface is small because this script
+  # never passes --verbose.
   #
   # ANCHORING THE FAIL WORDS TO LINE STARTS WAS CONSIDERED AND IS WRONG. Of the
   # three documented failure lines, only `Severity: Fatal` begins with its
@@ -653,7 +661,8 @@ check_syspolicy() {
   # carry it at the END. Anchoring would stop matching two of the three and
   # reopen the false green this pattern exists to close — cheap to type, and a
   # regression.
-  scan="$(printf '%s' "$out" | grep -viE '(^|[^0-9])0 (errors?|warnings?|issues?|problems?)')"
+  scan="$(printf '%s' "$out" |
+    grep -viE '^[[:space:]]*0 (errors?|warnings?|issues?|problems?)([[:space:],;]*(and )?0 (errors?|warnings?|issues?|problems?))*[[:space:].]*$')"
   if [ "$rc" -ne 0 ] ||
     printf '%s' "$scan" | grep -qiE 'fail|missing|error|fatal|severity|rejected|unacceptable|denied|not (notarized|signed|accepted|ready)'; then
     echo "::error::syspolicy_check says this build is not ready for distribution (exit $rc)" >&2

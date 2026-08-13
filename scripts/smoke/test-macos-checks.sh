@@ -390,6 +390,12 @@ case "${STUB_BREAK:-}" in
     echo "0 warnings"
     echo "Notary Ticket Missing"
     exit 0 ;;
+  # THE SAME LINE, which the two-line case above cannot test. A filter that drops
+  # any line CONTAINING a zero-count discards this failure whole — the filter
+  # eating the finding it was meant to sit beside.
+  syspolicy_fatal_same_line)
+    echo "Notary Ticket Missing, 0 errors in codesign"
+    exit 0 ;;
 esac
 echo "App passed all pre-distribution checks and is ready for distribution."
 exit 0
@@ -789,6 +795,16 @@ expect_only_failure "passes Apple's own distribution assessment" \
 # unnoticed. Mutation testing showed exactly that.
 expect_err "not ready for distribution" "the finding survives the filter, not just the row"
 
+# The zero-count ON THE SAME LINE as the failure. A filter that drops any line
+# containing one discards this whole, and the row then lands on cannot-tell —
+# red, but for the wrong reason and only by luck of the pass check reading the
+# unfiltered output. Pinned to the failure branch so the filter cannot quietly
+# widen into eating findings.
+run_scenario break-syspolicy-fatal-same-line STUB_BREAK=syspolicy_fatal_same_line
+expect_only_failure "passes Apple's own distribution assessment" \
+  "a failure carrying its own zero-count on one line"
+expect_err "not ready for distribution" "the failure is read, not filtered away with the count"
+
 # ── 9. deployment target ──────────────────────────────────────────────────────
 # The documented real-world failure: a bundled dependency built against a newer
 # deployment target than the app claims. It launches on the OS the Info.plist
@@ -924,8 +940,8 @@ echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 268 ]; then
-  echo "::error::only $pass assertions ran; expected at least 268 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 282 ]; then
+  echo "::error::only $pass assertions ran; expected at least 282 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]
