@@ -25,6 +25,26 @@ on:
       release:
         required: true
         type: string
+    # DECLARED, SO A CALLER CANNOT PASS EVERYTHING. `secrets: inherit` at the
+    # call site would hand this workflow the whole caller's scope — and the
+    # release workflow that calls it holds the Apple signing certificate, its
+    # password, and the Tauri signing private key. None of that is needed to
+    # download a build and run shell scripts against it in a container, and
+    # handing it over would make a report-only post-release check into a
+    # signing-secret exposure path: every smoke script, every container, and
+    # every action they pull would be inside the blast radius.
+    #
+    # ANY FUTURE CALLER MUST LIST SECRETS EXPLICITLY, never `inherit`. Declaring
+    # them here is what makes that enforceable rather than a convention: an
+    # inheriting caller would still only be able to satisfy what is declared.
+    secrets:
+      GIT_PAT:
+        # Required, not optional, because there is no degraded mode: the release
+        # assets sit on a DRAFT prerelease, invisible without authentication, so
+        # an absent token does not produce a smaller check — it produces a 404
+        # that reads like a missing artifact. Failing at the call boundary says
+        # what is actually wrong.
+        required: true
 
 # macOS and Windows are separate lanes: neither has an equivalent of dpkg's
 # dependency metadata, so they need their own answer rather than a matrix row.

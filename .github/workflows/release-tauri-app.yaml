@@ -258,7 +258,17 @@ jobs:
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}
-    secrets: inherit
+    # EXPLICIT, NOT `inherit`. This job sits above a build holding the Apple
+    # signing certificate, its password and the Tauri signing private key, and
+    # `secrets: inherit` would pass all of them to a workflow whose entire job is
+    # to download an already-published artifact and run shell scripts against it
+    # inside containers. Nothing in that path needs them, so a report-only
+    # post-release check would have become a signing-secret exposure path — every
+    # smoke script, every container image and every action they pull inside the
+    # blast radius. It needs exactly one secret, the PAT that can see a draft
+    # release, so it gets exactly that one.
+    secrets:
+      GIT_PAT: ${{ secrets.GIT_PAT }}
 
   # release-tauri-android-app:
   #   needs: publish-happ
