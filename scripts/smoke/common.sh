@@ -136,7 +136,19 @@ smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
 # one finding per line: `MISSING <dep>`, `UNCONSTRAINED <dep>`, or
 # `TOOLOW <dep> declared <constraint>`.
 #
-# Args: <declared-file> <computed-file>, one `name (op ver)` per line.
+# Args: <declared-file> <computed-file> [provides-file]
+#   declared/computed: one `name (op ver)` per line.
+#   provides: optional, one `<package> <provides-name>...` per line — the names a
+#   computed package declares `Provides:`. Ubuntu's time_t transition renamed
+#   libgtk-3-0 -> libgtk-3-0t64 and libglib2.0-0 -> libglib2.0-0t64 on 24.04+ and
+#   debian:13, and dpkg-shlibdeps resolves to whatever the CURRENT image calls
+#   them — so a single hand-written declared list can never name both. The t64
+#   packages declare `Provides:` the old names (verified on 24.04, debian:13 and
+#   26.04, versioned), and a versioned dependency against a versioned Provides
+#   resolves, so declaring the non-t64 name installs correctly on all four
+#   images. This file's job is to agree with that reality: without the map the
+#   gate reports a correctly-installing package as MISSING, and a gate that goes
+#   red on a correct package is the one nobody reads.
 #
 # Lives here, and takes files rather than doing its own extraction, so
 # test-oracle.sh drives the REAL comparison against fixtures — the same reason
@@ -166,7 +178,19 @@ smoke_split_constraint() {
 # one finding per line: `MISSING`, `UNCONSTRAINED`, `NOFLOOR`, `BADVERSION`,
 # `UNPARSEABLE` or `TOOLOW`, each followed by the dependency.
 #
-# Args: <declared-file> <computed-file>, one `name (op ver)` per line.
+# Args: <declared-file> <computed-file> [provides-file]
+#   declared/computed: one `name (op ver)` per line.
+#   provides: optional, one `<package> <provides-name>...` per line — the names a
+#   computed package declares `Provides:`. Ubuntu's time_t transition renamed
+#   libgtk-3-0 -> libgtk-3-0t64 and libglib2.0-0 -> libglib2.0-0t64 on 24.04+ and
+#   debian:13, and dpkg-shlibdeps resolves to whatever the CURRENT image calls
+#   them — so a single hand-written declared list can never name both. The t64
+#   packages declare `Provides:` the old names (verified on 24.04, debian:13 and
+#   26.04, versioned), and a versioned dependency against a versioned Provides
+#   resolves, so declaring the non-t64 name installs correctly on all four
+#   images. This file's job is to agree with that reality: without the map the
+#   gate reports a correctly-installing package as MISSING, and a gate that goes
+#   red on a correct package is the one nobody reads.
 #
 # Lives here, and takes files rather than doing its own extraction, so
 # test-oracle.sh drives the REAL comparison against fixtures — the same reason
@@ -185,7 +209,8 @@ smoke_split_constraint() {
 # is that it is wrong, so nothing here may assume it is well-formed.
 smoke_depends_gaps() {
   local declared_file="${1:?declared file required}" computed_file="${2:?computed file required}"
-  local dep name constraint cline cname cconstraint found op ver dop dver
+  local provides_file="${3:-}"
+  local dep name constraint cline cname cconstraint found op ver dop dver alias pline aliases matched
   while read -r dep; do
     [ -n "$dep" ] || continue
     name="${dep%% *}"; name="${name%%:*}"   # strip any :arch qualifier
@@ -197,11 +222,26 @@ smoke_depends_gaps() {
       printf 'UNPARSEABLE %s\n' "$dep"; continue
     fi
 
+    # The declared list may legitimately name something this package PROVIDES
+    # rather than the package itself; collect those aliases so the lookup below
+    # accepts either.
+    aliases="$name"
+    if [ -n "$provides_file" ] && [ -f "$provides_file" ]; then
+      while read -r pline; do
+        [ -n "$pline" ] || continue
+        [ "${pline%% *}" = "$name" ] || continue
+        aliases="$aliases ${pline#* }"
+        break
+      done <"$provides_file"
+    fi
+
     found=""
     while read -r cline; do
       [ -n "$cline" ] || continue
       cname="${cline%% *}"; cname="${cname%%:*}"
-      [ "$cname" = "$name" ] || continue
+      matched=""
+      for alias in $aliases; do [ "$cname" = "$alias" ] && { matched=1; break; }; done
+      [ -n "$matched" ] || continue
       found="$cline"
       cconstraint=""
       case "$cline" in *\(*\)) cconstraint="${cline#*\(}"; cconstraint="${cconstraint%%\)*}" ;; esac

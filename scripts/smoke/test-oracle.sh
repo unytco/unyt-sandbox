@@ -199,6 +199,34 @@ one_case 'libc6 (>=2.34)'             ""         "a valid no-space floor (must n
 one_case 'libc6 (>> 2.40)'            ""         "a strict lower bound above the floor (must not fire)"
 one_case 'libc6:amd64 (>= 2.34)'      ""         "an arch-qualified name (must not fire)"
 
+# Provides resolution: a declared name the computed package PROVIDES must count
+# as declared, because that is what apt does — the t64 rename means the declared
+# list can only name one of the two, and the install is ground truth.
+prov_d="$(mktemp)"; prov_c="$(mktemp)"; prov_p="$(mktemp)"
+printf 'libgtk-3-0 (>= 3.21.5)\nlibglib2.0-0 (>= 2.66.0)\n' >"$prov_d"
+printf 'libgtk-3-0t64 (>= 3.21.5)\nlibglib2.0-0t64 (>= 2.66.0)\nlibabsent (>= 1)\n' >"$prov_c"
+printf 'libgtk-3-0t64 libgtk-3-0\nlibglib2.0-0t64 libglib2.0-0\n' >"$prov_p"
+prov_out="$(smoke_depends_gaps "$prov_d" "$prov_c" "$prov_p")"
+if printf '%s\n' "$prov_out" | grep -q 'libgtk-3-0t64'; then
+  fail=$((fail + 1)); echo "FAIL  a provided name should count as declared (libgtk-3-0t64)" >&2
+else pass=$((pass + 1)); fi
+if printf '%s\n' "$prov_out" | grep -q 'libglib2.0-0t64'; then
+  fail=$((fail + 1)); echo "FAIL  a provided name should count as declared (libglib2.0-0t64)" >&2
+else pass=$((pass + 1)); fi
+# MUST still fire: Provides resolution must not become a blanket amnesty.
+if printf '%s\n' "$prov_out" | grep -q 'MISSING libabsent'; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  a genuinely absent dependency must still be MISSING" >&2; fi
+# MUST still fire: a provided name does not excuse a too-low floor.
+printf 'libgtk-3-0 (>= 1.0)\n' >"$prov_d"
+printf 'libgtk-3-0t64 (>= 3.21.5)\n' >"$prov_c"
+if smoke_depends_gaps "$prov_d" "$prov_c" "$prov_p" | grep -q '^TOOLOW '; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  a too-low floor must still fire through a provided name" >&2; fi
+# Without the map, behaviour is unchanged (so nothing silently depends on it).
+printf 'libgtk-3-0 (>= 3.21.5)\n' >"$prov_d"
+if smoke_depends_gaps "$prov_d" "$prov_c" | grep -q '^MISSING libgtk-3-0t64'; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  without a provides map the t64 name should read as MISSING" >&2; fi
+rm -f "$prov_d" "$prov_c" "$prov_p"
+
 rm -f "$dep_d" "$dep_c"
 
 # ── N1: the bundle scan must survive a file with no GLIBC_ symbols LAST ──────
@@ -233,8 +261,8 @@ echo "oracle regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 53 ]; then
-  echo "::error::only $pass assertions ran; expected at least 53 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 58 ]; then
+  echo "::error::only $pass assertions ran; expected at least 58 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

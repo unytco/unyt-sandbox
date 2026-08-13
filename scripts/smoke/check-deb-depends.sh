@@ -32,6 +32,24 @@
 # The fix when B fails is additive: add the missing entries to
 # `bundle.linux.deb.depends` in unyt/src-tauri/tauri.conf.json.
 #
+# TWO RULES FOR WRITING THAT LIST, both learned the hard way and neither
+# expressible in the config itself, since JSON takes no comments:
+#
+#  1. USE THE NON-t64 NAMES. Ubuntu's time_t transition renamed libgtk-3-0 ->
+#     libgtk-3-0t64 and libglib2.0-0 -> libglib2.0-0t64 on 24.04+ and Debian 13,
+#     and one declared list cannot name both. The t64 packages declare versioned
+#     `Provides:` of the old names, and a versioned dependency resolves against a
+#     versioned Provides — verified by installing a .deb carrying the real binary
+#     and the non-t64 names on all four images. Check A's per-image expectation
+#     files still record the t64 names, because that is what dpkg-shlibdeps
+#     computes there; the Provides map above is what reconciles the two.
+#
+#  2. USE THE MAXIMUM FLOOR ACROSS THE MATRIX, not the oldest image's.
+#     libglib2.0-0 computes (>= 2.65.1) on ubuntu:22.04 and (>= 2.66.0) on the
+#     rest. Declaring the lower value would read as TOOLOW on three of the four
+#     images; the higher one is satisfied by jammy's 2.72, so it is the only
+#     value that is both true everywhere and green everywhere.
+#
 # ON lintian — CONSIDERED, NOT USED. Its `missing-dependency-on-libc` tag asks a
 # subset of what check B already answers, and answers it less precisely: this
 # gate is per-image (so it survives Ubuntu's libgtk-3-0 -> libgtk-3-0t64 rename)
@@ -148,7 +166,22 @@ fi
 # regression test drives this exact code rather than a copy of it.
 declared_f="$work/declared.txt"; printf '%s\n' "$declared" >"$declared_f"
 computed_f="$work/computed.txt"; printf '%s\n' "$computed" >"$computed_f"
-gaps="$(smoke_depends_gaps "$declared_f" "$computed_f")"
+# Build the Provides map for the computed names ON THIS IMAGE: apt is the only
+# authority for whether `libgtk-3-0t64` satisfies a declared `libgtk-3-0`, and
+# the answer differs per distro. Verified: the t64 packages declare versioned
+# Provides of the old names on 24.04, debian:13 and 26.04, and a synthetic .deb
+# declaring the non-t64 names installs on all four images.
+provides_f="$work/provides.txt"; : >"$provides_f"
+while read -r cdep; do
+  [ -n "$cdep" ] || continue
+  cn="${cdep%% *}"; cn="${cn%%:*}"
+  pv="$(apt-cache show "$cn" 2>/dev/null | sed -n 's/^Provides: //p' | head -1 || true)"
+  # `libgtk-3-0 (= 3.24.41)` -> `libgtk-3-0`; commas separate alternatives.
+  pv="$(printf '%s' "$pv" | tr ',' '\n' | sed 's/(.*)//; s/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' | tr '\n' ' ' || true)"
+  [ -n "$pv" ] && printf '%s %s\n' "$cn" "$pv" >>"$provides_f"
+done <"$computed_f"
+
+gaps="$(smoke_depends_gaps "$declared_f" "$computed_f" "$provides_f")"
 
 if [ -n "$gaps" ]; then
   echo "::error::the package UNDER-DECLARES its dependencies:" >&2
