@@ -41,7 +41,17 @@ else
   assets="$(gh api "repos/$REPO/releases/$release_id" --jq '.assets[].name')"
 fi
 
-has() { printf '%s\n' "$assets" | grep -qE "$1\$" && echo true || echo false; }
+# A case glob, not a regex: every suffix contains a `.`, which as an ERE metacharacter matches any
+# character, so `linux.deb` would also answer true for an asset ending `linuxXdeb`.
+has() {
+  local name
+  while IFS= read -r name; do
+    case "$name" in
+      *"$1") echo true; return ;;
+    esac
+  done <<<"$assets"
+  echo false
+}
 
 deb="$(has "$DEB_SUFFIX")"
 appimage="$(has "$APPIMAGE_SUFFIX")"

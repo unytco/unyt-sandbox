@@ -882,6 +882,57 @@ try {
   }
   $script:Results.Clear()
 
+  # ── uninstall demands its directory BEFORE it removes anything ──────────────
+  # Entry present, InstallDir absent — the one combination the loop above cannot
+  # reach, because with no state at all the entry guard fires first.
+  # A REAL PROGRAM behind UninstallString: aimed at a path no runner has, the run
+  # throws first and "never started the uninstaller" becomes unable to fail.
+  if ($IsWindows) {
+    $stub = Join-Path $root 'uninstall-stub.cmd'
+    Set-Content -LiteralPath $stub -Value '@exit /b 0' -Encoding ascii
+  }
+  else {
+    $stub = Join-Path $root 'uninstall-stub.sh'
+    Set-Content -LiteralPath $stub -Value "#!/bin/sh`nexit 0" -Encoding ascii
+    & chmod +x $stub
+  }
+  $stateNoDir = Join-Path $root 'state-entry-only'
+  New-Item -ItemType Directory -Path $stateNoDir -Force | Out-Null
+  $env:UNYT_SMOKE_STATE = $stateNoDir
+  $env:UNYT_SMOKE_LOG = $noteLog
+  try {
+    Assert-That 'the stub is a program the check really would have run' `
+    (Invoke-Silently -FilePath $stub -Arguments @('/S')).ExitCode 0
+    Remove-Item -LiteralPath $noteLog -Force -ErrorAction SilentlyContinue
+    $script:Results.Clear()
+    Save-SmokeState -Name 'Entry' -Value ([PSCustomObject]@{
+        KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt Sandbox'
+        DisplayName          = 'Unyt Sandbox'
+        DisplayVersion       = '0.101.0-dev.0'
+        InstallLocation      = 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
+        UninstallString      = "`"$stub`""
+        QuietUninstallString = $null
+      })
+    $check = Get-Check -Id 'uninstall'
+    Invoke-Check -Name $check.Name -Body $check.Body
+    Assert-That 'uninstall with no recorded directory FAILS' $script:Results[0].Verdict 'FAIL'
+    $log = @(Get-Content -LiteralPath $noteLog -ErrorAction SilentlyContinue)
+    $said = @($log | Where-Object { $_ -like '::error::*' }) -join "`n"
+    Assert-True "'uninstall' names the check that should have recorded the directory" `
+    ($said -match [regex]::Escape('installs the application executable'))
+    Assert-True "'uninstall' says the directory is what is missing" `
+    ($said -match [regex]::Escape('no install directory was recorded'))
+    # Invoke-Silently narrates every start, so the stub's absence from the log is
+    # the uninstaller having never been launched.
+    Assert-False "'uninstall' never started the uninstaller" `
+    (($log -join "`n") -match [regex]::Escape($stub))
+  }
+  finally {
+    $env:UNYT_SMOKE_STATE = $null
+    $env:UNYT_SMOKE_LOG = $null
+  }
+  $script:Results.Clear()
+
   # ── the whole-suite run reaches every check ─────────────────────────────────
   # Asserted from the NARRATION, not the row count: Invoke-AllChecks adds a FAIL
   # row for any check that did not report, so counting rows would be satisfied by
@@ -959,8 +1010,8 @@ Write-Output "windows check regression: $script:Pass passed, $script:Fail failed
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding
 # assertions.
-if ($script:Pass -lt 232) {
-  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 232 — the test file is truncated or a block was skipped")
+if ($script:Pass -lt 237) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 237 — the test file is truncated or a block was skipped")
   exit 1
 }
 if ($script:Fail -gt 0) { exit 1 }

@@ -505,6 +505,72 @@ sum_case 'one|pass
 two|warn
 three|pass
 ' 0 "CRLF from PowerShell still matches its rows" "warn" crlf
+# The table reads a row's SECOND field and stops, so an extra field rides along
+# unseen and the check reports the pass it did not earn.
+sum_case 'one|pass
+two|pass|and something else
+three|pass
+' 1 "a row carrying more than a verdict" "malformed result row"
+# The other half of the same contract: a row nobody looks up. A renamed check
+# reports under its old name forever and the table never mentions it.
+sum_case 'one|pass
+two|pass
+three|pass
+nobody-declares-this|pass
+' 1 "a row naming a check that is not declared" "no check declares it"
+sum_case 'one|pass
+two|probably
+three|pass
+' 1 "a verdict outside pass/warn/FAIL" "reported the verdict"
+# THE RESULT COLUMN, not the annotation. That column is what reaches
+# $GITHUB_STEP_SUMMARY; a row vetted away and still printing its claimed verdict is
+# the green a reader believes, whatever an annotation above it says.
+sum_out() { # <rows> — the summary's own stdout and stderr
+  printf '%s' "$1" >"$sum_dir/results"
+  bash "$here/summarise-checks.sh" --label L --results "$sum_dir/results" \
+    -- bash -c 'printf "a\tone\nb\ttwo\nc\tthree\n"' 2>&1
+}
+sum_cell() { # <rows> <expected RESULT for check `two`> <description>
+  local out; out="$(sum_out "$1")"
+  if printf '%s\n' "$out" | grep -qE "^L +two +$2\$"; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); printf 'FAIL  %-58s\n%s\n' "$3" "$out" >&2; fi
+}
+sum_cell 'one|pass
+two|pass|and something else
+three|pass
+' MALFORMED "a row carrying more than a verdict must not print as one"
+# The third field UNSET rather than junk: read gives it the empty string, so testing
+# it for emptiness admitted the row and the table printed the pass it claimed.
+sum_case 'one|pass
+two|pass|
+three|pass
+' 1 "a row with a trailing empty field" "malformed result row"
+sum_cell 'one|pass
+two|pass|
+three|pass
+' MALFORMED "and it does not print as one either"
+sum_cell 'one|pass
+two|probably
+three|pass
+' MALFORMED "a verdict outside pass/warn/FAIL must not print as itself"
+sum_cell 'one|pass
+two|
+three|pass
+' MALFORMED "an empty verdict is malformed, not a check that never reported"
+# One defect, one annotation. Pre-fix an empty verdict produced two — malformed AND
+# never reported — for a single broken row.
+out="$(sum_out 'one|pass
+two|
+three|pass
+')"
+n="$(printf '%s\n' "$out" | grep -c '::error::' || true)"
+if [ "$n" = 1 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL  %-58s %s annotations\n%s\n' "an empty verdict is one defect" "$n" "$out" >&2; fi
+# read drops an unterminated final line; the table's awk does not. The last row is
+# the last check on the lane.
+sum_case 'one|pass
+three|pass
+two|pass|junk' 1 "a malformed row with no trailing newline" "malformed result row"
 rm -rf "$sum_dir"
 
 # ── the workflow wires up exactly the checks the scripts declare ─────────────
@@ -527,8 +593,10 @@ if [ -f "$wf" ]; then
   # THE SUFFIXES MUST MATCH THE DOWNLOADERS. Each lane skips when the inventory
   # says its artifact is absent, so a suffix that drifts from what the lane
   # downloads does not fail — it skips that lane forever, silently.
-  for suffix in $(grep -oE '^[A-Z]+_SUFFIX="[^"]+"' scripts/smoke/release-inventory.sh | cut -d'"' -f2) \
-                $(grep -oE '"[a-z0-9_]+_darwin\.dmg"' scripts/smoke/release-inventory.sh | tr -d '"' | sort -u); do
+  # $here, not a relative path: run from any other directory the greps find nothing
+  # and this loop asserts nothing at all.
+  for suffix in $(grep -oE '^[A-Z]+_SUFFIX="[^"]+"' "$here/release-inventory.sh" | cut -d'"' -f2) \
+                $(grep -oE '"[a-z0-9_]+_darwin\.dmg"' "$here/release-inventory.sh" | tr -d '"' | sort -u); do
     if grep -qF -- "$suffix" "$wf"; then pass=$((pass + 1)); else
       fail=$((fail + 1))
       printf 'FAIL  %-58s %s\n' "inventory suffix no lane downloads" "$suffix" >&2
@@ -558,6 +626,52 @@ if [ -f "$wf" ]; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "release-smoke.yaml job without non-blocking" \
       "$(printf '%s' "$unflagged" | tr '\n' ' ')" >&2
+  fi
+
+  # THE STEP RUN, not the shape of its source. Asserting that some line containing
+  # `continue` precedes the summarise call is satisfied by a comment, and stays green
+  # when the guard moves and the bug comes back with it. Extracted verbatim from the
+  # yaml and driven against a stub summariser, with $GITHUB_STEP_SUMMARY caught in a
+  # file — the summary is the artifact, and a lane absent from it reads as a verdict.
+  # shellcheck disable=SC2016  # sed scripts and the stub below are literals, not expansions
+  win="$(sed -n '/^  windows:/,$p' "$wf" | sed -n '/^          rc=0$/,/^          exit "\$rc"$/p' | sed 's/^          //')"
+  if [ -n "$win" ]; then
+    win_dir="$(mktemp -d)"
+    mkdir -p "$win_dir/scripts/smoke"
+    cat >"$win_dir/scripts/smoke/summarise-checks.sh" <<'STUB'
+#!/usr/bin/env bash
+while [ $# -gt 0 ]; do [ "$1" = --label ] && echo "SUMMARISED $2"; shift; done
+STUB
+    win_run() { # <EXPECT_EXE> <EXPECT_MSI> — the step's own shell options
+      ( cd "$win_dir" && rm -f published.md &&
+        RUNNER_TEMP="$win_dir" GITHUB_STEP_SUMMARY="$win_dir/published.md" \
+          LABEL=L RELEASE=r BLOCKING_NOTE="" EXE=e MSI=m \
+          EXPECT_EXE="$1" EXPECT_MSI="$2" bash -eo pipefail -c "$win" >/dev/null 2>&1
+        echo "rc=$?"; cat published.md )
+    }
+    got="$(win_run false true)"
+    if [ "$(printf '%s\n' "$got" | grep -c 'SUMMARISED')" = 1 ] &&
+       printf '%s\n' "$got" | grep -q 'SUMMARISED L/\.msi' &&
+       printf '%s\n' "$got" | grep -qx 'rc=0'; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "an absent installer must not be summarised" \
+        "$(printf '%s' "$got" | tr '\n' ' ')" >&2
+    fi
+    if printf '%s\n' "$got" | grep -q 'exe — not in this release'; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "and the summary must say the lane was skipped" \
+        "$(printf '%s' "$got" | tr '\n' ' ')" >&2
+    fi
+    if printf '%s\n' "$(win_run false false)" | grep -qx 'rc=0'; then
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "a lane that smoked neither installer read clean" \
+        "an empty table publishes as a passing verdict" >&2
+    else pass=$((pass + 1)); fi
+    rm -rf "$win_dir"
+  else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the Windows summary step could not be extracted" \
+      "the rc=0 and exit anchors it is sliced between moved" >&2
   fi
 
   # The flag is only safe because a hand-run smoke cannot be handed a green run
@@ -679,6 +793,14 @@ x64_windows.exe|exe
 x64_windows.msi|msi
 DROPS
 
+got="$(inv 'x_linuxXdeb
+x_linux.AppImage
+x_x64_windows.exe')"
+if printf '%s\n' "$got" | grep -qx 'deb=false'; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a suffix must match literally, not as a regex" "$got" >&2
+fi
+
 # One macOS build failing costs one matrix row, not the lane.
 got="$(inv "$(printf '%s\n' "$full" | grep -v aarch64_darwin)")"
 if printf '%s\n' "$got" | grep -q 'dmgs=\[{"runner":"macos-15-intel"' &&
@@ -718,8 +840,8 @@ fi
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 135 ]; then
-  echo "::error::only $pass assertions ran; expected at least 135 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 154 ]; then
+  echo "::error::only $pass assertions ran; expected at least 154 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

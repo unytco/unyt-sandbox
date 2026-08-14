@@ -596,33 +596,46 @@ jobs:
           RELEASE: ${{ inputs.release }}
         run: |
           rc=0
+          summarised=0
+          table="${RUNNER_TEMP//\\//}/summary.txt"
+          : >"$table"
           # As on Linux: absent from the release is a skip, present-but-missing
           # is a fault, and a skipped step reports nothing either way.
           for want in EXE MSI; do
             eval "expect=\${EXPECT_$want:-}"
             if [ "$expect" != true ]; then
-              echo "no ${want} in this release — nothing to smoke, lane skipped"
-            elif [ -z "${!want:-}" ]; then
+              # Into the TABLE, which is what reaches the step summary: a lane simply
+              # missing from it reads as a complete verdict for the release. No
+              # summarise-checks run, though — it would call every check DID NOT RUN.
+              printf '\n##### .%s — not in this release, not smoked #####\n' "${want,,}" >>"$table"
+              continue
+            fi
+            if [ -z "${!want:-}" ]; then
               echo "::error::the $want artifact is on the release but never downloaded, so its six checks never ran"
               rc=1
             fi
-          done
-          table="${RUNNER_TEMP//\\//}/summary.txt"
-          : >"$table"
-          for artifact in exe msi; do
-            printf '\n##### .%s #####\n' "$artifact" >>"$table"
+            printf '\n##### .%s #####\n' "${want,,}" >>"$table"
             bash scripts/smoke/summarise-checks.sh \
-              --label "$LABEL/.$artifact" \
-              --results "${RUNNER_TEMP//\\//}/results-$artifact" \
+              --label "$LABEL/.${want,,}" \
+              --results "${RUNNER_TEMP//\\//}/results-${want,,}" \
               -- pwsh -NoProfile -File scripts/smoke/check-windows.ps1 -PrintChecks \
               >>"$table" 2>&1 || rc=1
+            summarised=$((summarised + 1))
           done
+          # The job starts only when the inventory says one of them is here, so zero
+          # lanes means that gate broke — and a table with no rows publishes as clean.
+          if [ "$summarised" -eq 0 ]; then
+            echo "::error::neither installer was smoked, so this lane examined nothing"
+            rc=1
+          fi
           cat "$table"
           {
             echo "### Windows release smoke — \`$RELEASE\` ($LABEL)"
             echo ""
             echo '```'
-            head -50 "$table"
+            # 100, as on Linux: this lane's table is two installers plus their
+            # diagnostics, and 50 dropped most of the second one's rows unmarked.
+            head -100 "$table"
             echo '```'
             echo ""
             echo "An install/uninstall cycle plus static checks — see \`scripts/smoke/check-windows.ps1\`. $BLOCKING_NOTE"

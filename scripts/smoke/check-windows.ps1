@@ -864,6 +864,13 @@ Register-Check -Id 'uninstall' -Name 'uninstalls cleanly' -Body {
     Write-Note "::error::no uninstall entry, so nothing can be removed — the '$((Get-Check -Id 'registers').Name)' check did not pass"
     return $false
   }
+  # Before the uninstaller runs, not during the poll below: read late, the app is already
+  # gone by the time the check finds it cannot verify the removal.
+  $installDir = Get-SmokeState -Name 'InstallDir'
+  if (-not $installDir) {
+    Write-Note "::error::no install directory was recorded, so removal cannot be verified — the '$((Get-Check -Id 'executable').Name)' check did not pass"
+    return $false
+  }
   $cmd = Get-UninstallCommand -Entry $entry
   if (-not $cmd) {
     Write-Note '::error::the uninstall entry carries no usable UninstallString'
@@ -890,7 +897,7 @@ Register-Check -Id 'uninstall' -Name 'uninstalls cleanly' -Body {
   do {
     Start-Sleep -Seconds 2
     $verdict = Test-RemovalComplete -EntryKeyPath $entry.KeyPath `
-      -CurrentEntries @(Get-UninstallEntry) -InstallDir (Get-SmokeState -Name 'InstallDir')
+      -CurrentEntries @(Get-UninstallEntry) -InstallDir $installDir
   } while (-not $verdict.Ok -and (Get-Date) -lt $deadline)
   if (-not $verdict.Ok) {
     Write-Note '::error::60s after the uninstaller exited 0, it has not finished removing the app:'
@@ -899,6 +906,37 @@ Register-Check -Id 'uninstall' -Name 'uninstalls cleanly' -Body {
   }
   Write-Note 'OK: the uninstaller removed the program and its registration'
   return $true
+}
+
+# ABOVE the LibraryOnly guard with the bodies, not below with the run: three of them
+# call it, so left below it they threw "not recognized" under the test harness and the
+# harness never saw a single body past its own guard.
+# Per-user (NSIS) and both views of per-machine (MSI), so nothing depends on
+# knowing which the installer chose. Off Windows every root simply reads absent.
+$script:UninstallRoots = @(
+  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+)
+function Get-UninstallEntry {
+  $out = [System.Collections.Generic.List[object]]::new()
+  foreach ($root in $script:UninstallRoots) {
+    if (-not (Test-Path -LiteralPath $root)) { continue }
+    foreach ($key in (Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+      $p = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
+      if (-not $p) { continue }
+      $out.Add([PSCustomObject]@{
+          KeyPath              = $key.PSPath
+          DisplayName          = $p.PSObject.Properties.Name -contains 'DisplayName' ? $p.DisplayName : $null
+          DisplayVersion       = $p.PSObject.Properties.Name -contains 'DisplayVersion' ? $p.DisplayVersion : $null
+          InstallLocation      = $p.PSObject.Properties.Name -contains 'InstallLocation' ? $p.InstallLocation : $null
+          UninstallString      = $p.PSObject.Properties.Name -contains 'UninstallString' ? $p.UninstallString : $null
+          QuietUninstallString = $p.PSObject.Properties.Name -contains 'QuietUninstallString' ? $p.QuietUninstallString : $null
+        })
+    }
+  }
+  # Returned plainly; callers wrap. See Get-ImportedDll.
+  return $out.ToArray()
 }
 
 # ABOVE the LibraryOnly guard: the list is what the workflow builds its steps
@@ -970,34 +1008,6 @@ if ($kind -eq 'unsupported') {
   Write-Note "::error::unsupported artifact '$Artifact' (expected .exe or .msi)"
   if ($script:Requested) { Write-RowAndExit }
   Write-SummaryAndExit
-}
-
-# Per-user (NSIS) and both views of per-machine (MSI), so nothing depends on
-# knowing which the installer chose.
-$script:UninstallRoots = @(
-  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
-  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-)
-function Get-UninstallEntry {
-  $out = [System.Collections.Generic.List[object]]::new()
-  foreach ($root in $script:UninstallRoots) {
-    if (-not (Test-Path -LiteralPath $root)) { continue }
-    foreach ($key in (Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
-      $p = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
-      if (-not $p) { continue }
-      $out.Add([PSCustomObject]@{
-          KeyPath              = $key.PSPath
-          DisplayName          = $p.PSObject.Properties.Name -contains 'DisplayName' ? $p.DisplayName : $null
-          DisplayVersion       = $p.PSObject.Properties.Name -contains 'DisplayVersion' ? $p.DisplayVersion : $null
-          InstallLocation      = $p.PSObject.Properties.Name -contains 'InstallLocation' ? $p.InstallLocation : $null
-          UninstallString      = $p.PSObject.Properties.Name -contains 'UninstallString' ? $p.UninstallString : $null
-          QuietUninstallString = $p.PSObject.Properties.Name -contains 'QuietUninstallString' ? $p.QuietUninstallString : $null
-        })
-    }
-  }
-  # Returned plainly; callers wrap. See Get-ImportedDll.
-  return $out.ToArray()
 }
 
 # ONE DEFINITION OF THE SEQUENCE, driven two ways: one check per CI step, or the
