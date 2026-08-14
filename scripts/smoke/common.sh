@@ -270,6 +270,198 @@ smoke_depends_gaps() {
   done <"$computed_file"
 }
 
+# ── the check runner ─────────────────────────────────────────────────────────
+# The shape both container drivers present: a registry of checks, ONE definition
+# of the sequence, and a `--only <id>` mode that runs exactly one of them,
+# resuming from a state directory an earlier invocation left behind. release-
+# smoke.yaml drives that mode so each check is its own CI step.
+#
+# It lives here, driven by test-oracle.sh, for the same reason the matchers do:
+# every bug in this suite has been in the invocation rather than the logic, and a
+# copy of this dispatcher in each driver would be two places for the next one to
+# hide. A driver sets UNYT_SMOKE_CHECKS (`id|display name|function`, IN RUN
+# ORDER) and UNYT_SMOKE_GATE (the id nothing downstream works without), then
+# calls smoke_dispatch.
+#
+# shellcheck disable=SC2034  # read by the scripts that source this file
+smoke_results=()
+
+smoke_check_field() { # <id> <2=name|3=function>
+  local entry rest
+  for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
+    [ "${entry%%|*}" = "$1" ] || continue
+    rest="${entry#*|}"
+    case "$2" in
+      2) printf '%s\n' "${rest%%|*}" ;;
+      3) printf '%s\n' "${rest#*|}" ;;
+    esac
+    return 0
+  done
+  return 1
+}
+smoke_check_name() { smoke_check_field "$1" 2; }
+smoke_check_fn()   { smoke_check_field "$1" 3; }
+
+# `<id><TAB><display name>`, in run order. The single source of truth for what
+# the sequence contains: release-smoke.yaml's guard reads it to prove every
+# declared check reported, so a step nobody wired up is a red run rather than a
+# check that quietly stopped existing.
+smoke_print_checks() {
+  local entry rest
+  for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
+    rest="${entry#*|}"
+    printf '%s\t%s\n' "${entry%%|*}" "${rest%%|*}"
+  done
+}
+
+# ── state between checks ──────────────────────────────────────────────────────
+# A GitHub Actions step is a separate process, so what check 1 learned — the
+# package name, the installed binary, whether it got that far at all — has to
+# outlive it. Inside the container that is just a file in /tmp.
+#
+# READ BACK BY SOURCING, EVEN WITHIN ONE PROCESS. The whole-run path re-loads
+# between checks rather than keeping the values in scope, so it exercises the
+# same file the split path depends on; a value a check forgot to record fails
+# locally instead of only in CI.
+#
+# AND THE FILE IS THE ONLY SOURCE, which is why loading UNSETS first. Sourcing
+# alone cannot remove a variable that is no longer in the file, so a GATE_OK
+# left over from an earlier artifact's run would outlive the reset and let every
+# downstream check report on an install that is not there. A driver declares
+# UNYT_SMOKE_STATE_VARS and smoke_state_set refuses anything else, so a fifth
+# value cannot be added without joining the list that gets cleared.
+smoke_state_dir()   { printf '%s\n' "${UNYT_SMOKE_STATE:-/tmp/unyt-smoke-state}"; }
+smoke_state_file()  { printf '%s/state.env\n' "$(smoke_state_dir)"; }
+smoke_state_reset() { mkdir -p "$(smoke_state_dir)" && : >"$(smoke_state_file)"; }
+smoke_state_set() {
+  local name entry found=""
+  for name in "${UNYT_SMOKE_STATE_VARS[@]}"; do
+    [ "$name" = "$1" ] && { found=1; break; }
+  done
+  for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
+    [ -z "$found" ] || break
+    [ "$(smoke_state_var "${entry%%|*}")" = "$1" ] && found=1
+  done
+  if [ -z "$found" ]; then
+    echo "::error::'$1' is not in UNYT_SMOKE_STATE_VARS, so loading would not clear it" >&2
+    return 1
+  fi
+  mkdir -p "$(smoke_state_dir)"
+  printf '%s=%q\n' "$1" "$2" >>"$(smoke_state_file)"
+}
+smoke_state_load() {
+  local f v entry
+  for v in "${UNYT_SMOKE_STATE_VARS[@]}"; do unset "$v"; done
+  for entry in "${UNYT_SMOKE_CHECKS[@]}"; do unset "$(smoke_state_var "${entry%%|*}")"; done
+  f="$(smoke_state_file)"
+  # shellcheck disable=SC1090  # a file this script wrote, named at runtime
+  [ -f "$f" ] && . "$f"
+  return 0
+}
+# `binary-compat` is not a legal shell variable name.
+smoke_state_var()   { printf 'RAN_%s\n' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"; }
+
+# ── the order guard ───────────────────────────────────────────────────────────
+# THE ORDER IS LOAD-BEARING (see container-checks.sh), and running one check per
+# invocation is exactly how it could stop being honoured — nothing about
+# `--only depends` says the pristine install has already happened. So the
+# sequence is enforced rather than assumed: a check refuses unless every check
+# before it has RUN, and unless the gate check PASSED.
+#
+# Ran, not passed, for the predecessors: two independent checks must both report
+# in CI, so one going red may not silence the next. The gate is the exception —
+# with no install there is nothing downstream to look at.
+smoke_order_ok() { # <id>
+  local id="$1" entry eid var missing=""
+  for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
+    eid="${entry%%|*}"
+    [ "$eid" = "$id" ] && break
+    var="$(smoke_state_var "$eid")"
+    [ -n "${!var:-}" ] || missing="${missing:+$missing, }$(smoke_check_name "$eid")"
+  done
+  if [ -n "$missing" ]; then
+    echo "::error::this check has to run after: $missing" >&2
+    echo "  Running a later check first installs tooling of its own, and any of it could satisfy" >&2
+    echo "  a dependency the package failed to declare — turning the exact bug this suite exists" >&2
+    echo "  to find into a pass." >&2
+    return 1
+  fi
+  if [ "$id" != "$UNYT_SMOKE_GATE" ] && [ -z "${GATE_OK:-}" ]; then
+    echo "::error::the '$(smoke_check_name "$UNYT_SMOKE_GATE")' check did not pass, so there is" >&2
+    echo "  nothing here to check. This row is that failure, not a second one." >&2
+    return 1
+  fi
+  return 0
+}
+
+# THE ONE PLACE A CHECK IS INVOKED, so `--only` and the whole run cannot drift
+# into treating the same check differently.
+smoke_run_one() { # <id>
+  local id="$1" name fn rc=0
+  name="$(smoke_check_name "$id")" || { echo "::error::no such check: $id" >&2; return 2; }
+  fn="$(smoke_check_fn "$id")"
+  # The first check starts a fresh run. Both Linux bundles are smoked in the same
+  # job, so a state file an earlier artifact left behind would otherwise let a
+  # later check report on the wrong install.
+  [ "$id" != "$UNYT_SMOKE_GATE" ] || smoke_state_reset
+  echo "" >&2
+  echo "===== $name =====" >&2
+  smoke_order_ok "$id" && "$fn" || rc=1
+  # Recorded whatever the verdict: the next check needs to know this one RAN.
+  # A FAILED write fails THIS check, rather than being swallowed — the marker is
+  # the whole basis of the order guarantee, and an unwritable state directory
+  # would otherwise produce a pass row whose successor then blames the wrong
+  # check (or, for the last check in a sequence, nothing at all).
+  if ! smoke_state_set "$(smoke_state_var "$id")" 1; then
+    echo "::error::could not record that '$name' ran in $(smoke_state_file) — the checks after" >&2
+    echo "  it would be refused as though it had never happened." >&2
+    rc=1
+  fi
+  if [ "$rc" -eq 0 ]; then smoke_results+=("$name|pass"); else smoke_results+=("$name|FAIL"); fi
+  return "$rc"
+}
+
+# Rows on stdout, narration on stderr, so whatever reads the log can tell a
+# check's verdict from its commentary. Also appended to UNYT_SMOKE_RESULTS when
+# set: run-smoke.sh reads the row back out of the container, and a row that only
+# ever existed on a pipe is lost the moment the container is.
+smoke_emit_rows() {
+  local row
+  [ "${#smoke_results[@]}" -gt 0 ] || return 0
+  for row in "${smoke_results[@]}"; do
+    printf '%s\n' "$row"
+    [ -z "${UNYT_SMOKE_RESULTS:-}" ] || printf '%s\n' "$row" >>"$UNYT_SMOKE_RESULTS"
+  done
+}
+
+# Exit 2 rather than 1 for a bad invocation: a check that went red and a check
+# that was never named are different answers, and a caller that mistypes an id
+# must not read as an artifact that failed.
+smoke_dispatch() { # print | only <id> | all
+  local entry rc=0
+  case "${1:?smoke_dispatch needs a mode}" in
+    print)
+      smoke_print_checks
+      exit 0 ;;
+    only)
+      smoke_state_load
+      smoke_run_one "${2:?--only needs a check id}" || rc=$?
+      smoke_emit_rows
+      exit "$rc" ;;
+    all)
+      for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
+        smoke_state_load
+        smoke_run_one "${entry%%|*}" || rc=1
+      done
+      echo "" >&2
+      smoke_emit_rows
+      exit "$rc" ;;
+    *)
+      echo "::error::unknown dispatch mode '$1'" >&2
+      exit 2 ;;
+  esac
+}
+
 # The app's rolling log dir inside a smoke sandbox ($1 = sandbox root; the smoke
 # scripts point XDG_DATA_HOME at <sandbox>/data). Files are named
 # unyt.v<major>.<minor>.log.YYYY-MM-DD.

@@ -26,6 +26,15 @@
   "wrapped:" below go through `@(...)` exactly as production does; keep them,
   and add one whenever production wraps, coerces, splits or re-types a result.
 
+  ONE CHECK PER CI STEP IS A SECOND CALL SITE, AND IT IS A PROCESS. The workflow
+  runs `check-windows.ps1 -PrintChecks` to build a step per check and
+  `-Only <id>` for each one, so what it consumes is that script's stdout and
+  exit status — not the functions inside it. Those assertions start a real child
+  pwsh rather than calling a function, for the same reason the wrapped ones
+  exist: the shape a caller sees is the shape that has to be pinned. What the
+  steps hand each other, they hand over disk, so the JSON round trip is driven
+  through the functions that actually consume the state as well.
+
   It runs on ANY platform, which is what makes it worth having: this repo has no
   Windows machine, so without it the checks would ship having never been
   observed to go either way. The import parser is fed synthetic PE images
@@ -448,6 +457,33 @@ try {
   (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir $good).Ok
   Assert-That 'and both problems are reported at once' `
   (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($c) -InstallDir $good).Problems.Count 2
+  # A HALF THAT COULD NOT RUN HAS NOT PASSED. Every case above hands it both
+  # inputs; the check now gets InstallDir out of a FILE an earlier step wrote, so
+  # it is simply absent whenever that step went red — and the leftover-program
+  # half used to fall straight through, leaving Problems empty and Ok true. That
+  # is "uninstalls cleanly: pass" with the whole program still on disk.
+  Assert-False 'no recorded install directory fails rather than skipping that half' `
+  (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir $null).Ok
+  # The diagnosis, not just the colour: this and "left the program behind" are
+  # both red, and the actionable difference is that one means the uninstaller
+  # failed while the other means nobody could tell either way.
+  Assert-True 'and says the question could not be answered' `
+  (((Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir $null).Problems -join ' ') `
+      -match 'no install directory was recorded')
+  # Same rule on the other half: an empty key matches no entry, so it would
+  # report a clean deregistration having compared against nothing.
+  Assert-False 'an empty entry key fails rather than matching nothing' `
+  (Test-RemovalComplete -EntryKeyPath '' -CurrentEntries @($a, $c) -InstallDir (Join-Path $root 'nope')).Ok
+  Assert-That 'and that is the only problem it reports' `
+  (Test-RemovalComplete -EntryKeyPath '' -CurrentEntries @($a, $c) -InstallDir (Join-Path $root 'nope')).Problems.Count 1
+  Assert-That 'neither half answerable reports both, and never Ok' `
+  (Test-RemovalComplete -EntryKeyPath '' -CurrentEntries @() -InstallDir $null).Problems.Count 2
+  Assert-False 'verifying nothing is not a clean removal' `
+  (Test-RemovalComplete -EntryKeyPath '' -CurrentEntries @() -InstallDir $null).Ok
+  # An install directory that is GONE is still the good case — only an unknown
+  # one is unanswerable, or a successful uninstall could never report clean.
+  Assert-True 'a recorded directory that the uninstaller removed still passes' `
+  (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir (Join-Path $root 'nope')).Ok
 
   # ── Invoke-Check: a body that does not answer is a FAILURE ──────────────────
   # The suite's defining bug class, guarded at the harness level: `[bool](&
@@ -500,6 +536,479 @@ try {
   $r = Invoke-Silently -FilePath $pwshExe -Arguments @('-NoProfile', '-File', $argCounter, $spacedPath) -TimeoutSeconds 60
   Assert-That 'a path containing a space arrives as ONE argument' $r.ExitCode 1
 
+  # ── the check registry ──────────────────────────────────────────────────────
+  # The list is the contract between this script and the workflow: a step per
+  # check is generated from it, and a guard step matches the reported rows back
+  # against it. Pinned against LITERALS, never against the registry itself — an
+  # assertion that reads the ids out of the thing it is checking agrees with
+  # whatever it finds, which is an assertion that cannot fail.
+  $expectedIds = @('install', 'registers', 'executable', 'signed', 'imports', 'uninstall')
+  $expectedChecks = @(
+    "install`tinstalls silently"
+    "registers`tregisters an uninstall entry for this version"
+    "executable`tinstalls the application executable"
+    "signed`tthe installer is Authenticode-signed and trusted"
+    "imports`timports nothing the machine is not guaranteed to have"
+    "uninstall`tuninstalls cleanly"
+  )
+  $expectedNames = @($expectedChecks | ForEach-Object { ($_ -split "`t", 2)[1] })
+  Assert-That 'the registry is exactly the six checks, in run order' (Get-CheckId) $expectedIds
+  Assert-That 'and no id is registered twice' @(Get-CheckId | Sort-Object -Unique).Count 6
+  Assert-That 'each id carries its display name' (Get-CheckListing) $expectedChecks
+  foreach ($id in $expectedIds) {
+    Assert-True "'$id' resolves to a runnable body" ((Get-Check -Id $id).Body -is [scriptblock])
+    Assert-True "'$id' resolves to a display name" ([bool](Get-Check -Id $id).Name)
+  }
+  # An unknown id must be an error: a step that ran no check and exited 0 is a
+  # check that silently stopped existing.
+  $threw = $false
+  try { Get-Check -Id 'installs' | Out-Null } catch { $threw = $true }
+  Assert-True 'an unknown id is refused rather than resolving to nothing' $threw
+  # A repeated id would REPLACE the first body, so one of the two checks would
+  # never run while the printed list still promised both.
+  $threw = $false
+  try { Register-Check -Id 'install' -Name 'a second installs silently' -Body { $true } } catch { $threw = $true }
+  Assert-True 'a duplicate id is refused' $threw
+  Assert-That 'and the registry is left as it was' @(Get-CheckId).Count 6
+
+  # ── the contract the workflow actually invokes ──────────────────────────────
+  # A step IS one invocation of the script, so its stdout and its exit status are
+  # what the workflow consumes. Driven as a child process for that reason — the
+  # functions above are not what a step sees.
+  $checkScript = Join-Path $here 'check-windows.ps1'
+  function Invoke-CheckScript {
+    param([string[]]$ScriptArgs = @())
+    # 'Continue' locally, because a non-zero child is the thing being asserted:
+    # under this file's 'Stop' a failing native command is itself a terminating
+    # error on PowerShell 7.4+, so the status could never be read.
+    $ErrorActionPreference = 'Continue'
+    $out = & $pwshExe -NoProfile -File $checkScript @ScriptArgs 2>&1
+    # A lone trailing CR is the line terminator a Windows runner's child writes,
+    # which is transport rather than output.
+    return [PSCustomObject]@{
+      ExitCode = $LASTEXITCODE
+      Output   = @($out | ForEach-Object { $_.ToString().TrimEnd("`r") })
+    }
+  }
+
+  $printed = Invoke-CheckScript -ScriptArgs @('-PrintChecks')
+  Assert-That '-PrintChecks needs no artifact and exits 0' $printed.ExitCode 0
+  Assert-That '-PrintChecks prints one line per check' $printed.Output.Count 6
+  Assert-That '-PrintChecks prints <id><TAB><name>, in run order' $printed.Output $expectedChecks
+
+  # An artifact that is neither installer: nothing is ever executed on the
+  # machine down this path, which is what makes it safe to drive the real script
+  # from a test that also runs on the Windows runner.
+  $notInstaller = Join-Path $root 'artifact.zip'
+  Set-Content -LiteralPath $notInstaller -Value 'not an installer'
+
+  # EXIT 2, NOT MERELY NON-ZERO. 2 is what check-macos.sh and common.sh reserve
+  # for a bad invocation, and the distinction is the point: a mistyped id exiting
+  # 1 reads as an artifact that failed a check, and the next person debugs the
+  # build instead of the command line. An assertion for "non-zero" would hold for
+  # 1, 2, 255 or a crash — which is exactly how a wrong code goes unnoticed.
+  #
+  # The diagnosis is read off the ::error:: line rather than the exception text:
+  # PowerShell's error view truncates to the console width, so the id list is
+  # exactly the part a wider or narrower runner would cut.
+  $unknown = Invoke-CheckScript -ScriptArgs @('-Only', 'not-a-check', '-Artifact', $notInstaller)
+  $unknownSaid = @($unknown.Output | Where-Object { $_ -like '::error::*' }) -join "`n"
+  Assert-That '-Only with an unknown id exits 2, the bad-invocation code' $unknown.ExitCode 2
+  Assert-True 'and names the id it did not recognise' ($unknownSaid -match [regex]::Escape('not-a-check'))
+  Assert-True 'and lists every id it does know, in full' `
+  ($unknownSaid -match [regex]::Escape(($expectedIds -join ', ')))
+
+  # The rest of the bad-invocation class, so none of it can read as a checked
+  # artifact that failed.
+  $noArtifact = Invoke-CheckScript -ScriptArgs @('-Only', 'signed')
+  Assert-That 'no artifact at all is a bad invocation' $noArtifact.ExitCode 2
+  Assert-True 'and says how to invoke it' `
+  ((@($noArtifact.Output | Where-Object { $_ -like '::error::*' }) -join "`n") -match 'usage:')
+  $missingFile = Invoke-CheckScript -ScriptArgs @((Join-Path $root 'no-such-artifact.exe'))
+  Assert-That 'an artifact path that resolves to nothing is a bad invocation' $missingFile.ExitCode 2
+  Assert-True 'and names the path it could not find' `
+  ((@($missingFile.Output | Where-Object { $_ -like '::error::*' }) -join "`n") -match 'no such artifact')
+
+  # ONE ROW, AND IT IS THE REQUESTED CHECK'S. A step that reported some other
+  # check's name would leave its own unaccounted for by the guard that matches
+  # the rows against -PrintChecks — and the check it named would look reported
+  # when it never ran.
+  $unsupported = Invoke-CheckScript -ScriptArgs @('-Only', 'uninstall', '-Artifact', $notInstaller)
+  Assert-That '-Only reports the requested check, whatever went wrong' `
+  @($unsupported.Output | Where-Object { $_ -match '\|(pass|FAIL|warn)$' }) 'uninstalls cleanly|FAIL'
+  Assert-That 'and exits 1 on it' $unsupported.ExitCode 1
+  Assert-False '-Only prints no summary table' (($unsupported.Output -join "`n") -match '# summary')
+
+  # The no-flag invocation is unchanged: every check, then the table.
+  $whole = Invoke-CheckScript -ScriptArgs @($notInstaller)
+  Assert-That 'the whole-suite path still refuses an unsupported artifact' $whole.ExitCode 1
+  Assert-True 'and still prints its summary table' `
+  (($whole.Output -join "`n") -match 'installs silently\s+FAIL')
+
+  # ── state that outlives the process ─────────────────────────────────────────
+  # One check per step means the entry check 2 found reaches checks 3 and 6
+  # through JSON on disk rather than through a variable. Under StrictMode a
+  # dropped field does not read back as $null, it THROWS on access — and
+  # Invoke-Check records a throw as a FAIL, so a serialisation that quietly loses
+  # a property reports a perfectly good install as broken.
+  $stateRound = Join-Path $root 'state-roundtrip'
+  # The shape a real registry read produces: every field present, some of them
+  # $null, and a path with a space in it (%LOCALAPPDATA%\Unyt Sandbox).
+  $spaced = [PSCustomObject]@{
+    KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt Sandbox'
+    DisplayName          = 'Unyt Sandbox'
+    DisplayVersion       = '0.100.0'
+    InstallLocation      = 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
+    UninstallString      = '"C:\Users\runneradmin\AppData\Local\Unyt Sandbox\uninstall.exe"'
+    QuietUninstallString = $null
+  }
+  $touched = @('KeyPath', 'DisplayName', 'DisplayVersion', 'InstallLocation', 'UninstallString', 'QuietUninstallString')
+  $env:UNYT_SMOKE_STATE = $stateRound
+  try {
+    Save-SmokeState -Name 'Entry' -Value $spaced
+    # THE DISK IS THE ONLY SOURCE while a state directory is set, and that is
+    # what everything below depends on: if a live in-memory copy were
+    # authoritative, every round-trip assertion here would read the original
+    # object and never touch serialisation at all — the defect they exist to
+    # catch could not be exhibited. Proven by rewriting the file underneath and
+    # reading again; a copy still in scope would make the tamper invisible.
+    Assert-True 'a state directory makes the value a file on disk' `
+    (Test-Path -LiteralPath (Join-Path $stateRound 'Entry.json'))
+    # The stored SHAPE, asserted before anything reads through it: the tamper
+    # fixture below is written in that shape, so without this a change to it
+    # would surface as an exception somewhere downstream rather than as a named
+    # failure saying the format moved.
+    Assert-True 'and it is stored under the {"Value": ...} wrapper' `
+    ((Get-Content -LiteralPath (Join-Path $stateRound 'Entry.json') -Raw) -match '"Value"\s*:')
+    Set-Content -LiteralPath (Join-Path $stateRound 'Entry.json') `
+      -Value '{"Value":{"KeyPath":"rewritten underneath"}}'
+    # Read defensively so a moved format is a named assertion failure rather than
+    # a StrictMode throw that aborts the whole run.
+    $tampered = Get-SmokeState -Name 'Entry'
+    $tamperedKey = if ($tampered -and $tampered.PSObject.Properties.Name -contains 'KeyPath') {
+      $tampered.KeyPath
+    }
+    else { '<unreadable — the stored shape moved>' }
+    Assert-That 'and every read goes back to that file' $tamperedKey 'rewritten underneath'
+
+    Save-SmokeState -Name 'Entry' -Value $spaced
+    $back = Get-SmokeState -Name 'Entry'
+    foreach ($p in $touched) {
+      Assert-True "the round trip keeps $p, $null-valued or not" ($back.PSObject.Properties.Name -contains $p)
+    }
+    # Read the way the checks read them, under this file's own StrictMode.
+    $threw = $false
+    try { foreach ($p in $touched) { $null = $back.$p } } catch { $threw = $true }
+    Assert-False 'every property the checks touch reads back without throwing' $threw
+    Assert-That 'a path with a space survives verbatim' $back.InstallLocation $spaced.InstallLocation
+    Assert-That 'a $null property comes back $null rather than missing' $back.QuietUninstallString $null
+    # THE REAL CONSUMERS, not just the fields: these are what checks 2 and 6 put
+    # the entry through, and they are where a lost property actually bites.
+    Assert-That 'the round-tripped entry yields the same uninstall command' `
+    (Get-UninstallCommand -Entry $back) (Get-UninstallCommand -Entry $spaced)
+    Assert-That 'and it is still the uppercase NSIS silent switch' `
+    (Get-UninstallCommand -Entry $back) '"C:\Users\runneradmin\AppData\Local\Unyt Sandbox\uninstall.exe" /S'
+    Assert-That 'the round-tripped entry gives the same version verdict' `
+    (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0').Ok `
+    (Test-UninstallEntry -Entry $spaced -ExpectedVersion '0.100.0').Ok
+    Assert-True 'and that verdict is still the passing one' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0').Ok
+    Assert-False 'while a mismatch still fails after a round trip' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.99.0').Ok
+
+    # The before-install snapshot is an ARRAY, so it round-trips through the
+    # shape check 2 actually reads it in — `@(Get-SmokeState ...)`.
+    #
+    # WHAT THESE TWO DO NOT PROVE, stated so nobody reads them as cover for the
+    # storage wrapper: `return` unrolls a list at the function boundary whether
+    # or not Save-SmokeState wraps the payload, so both hold with the wrapper
+    # removed. What pins the wrapper is the stored-shape assertion above; these
+    # pin only that a snapshot survives in the shape check 2 reads it in.
+    Save-SmokeState -Name 'Before' -Value @()
+    Assert-That 'wrapped: an EMPTY snapshot comes back empty, not missing' @(Get-SmokeState -Name 'Before').Count 0
+    Save-SmokeState -Name 'Before' -Value @($spaced)
+    Assert-That 'wrapped: a ONE-entry snapshot stays a list of one' @(Get-SmokeState -Name 'Before').Count 1
+    $other = [PSCustomObject]@{ KeyPath = 'HKCU:\...\Other'; DisplayName = 'Other'; DisplayVersion = '1' }
+    Assert-That 'wrapped: nothing looks new against a round-tripped snapshot' `
+    @(Get-NewUninstallEntry -Before @(Get-SmokeState -Name 'Before') -After @($spaced)).Count 0
+    Assert-That 'wrapped: and a new entry is still spotted against it' `
+    @(Get-NewUninstallEntry -Before @(Get-SmokeState -Name 'Before') -After @($spaced, $other)).Count 1
+
+    Save-SmokeState -Name 'Installed' -Value $true
+    Assert-True 'the installed flag survives the round trip' (Get-SmokeState -Name 'Installed')
+    Assert-That 'and comes back a boolean, not the string "True"' `
+    (Get-SmokeState -Name 'Installed').GetType().Name 'Boolean'
+    # $null, and not an error — this is what makes a missing prerequisite a FAIL
+    # in the check that needed it rather than a crash or a skip.
+    Assert-That 'a value that was never stored is absent' (Get-SmokeState -Name 'InstallDir') $null
+
+    # BOTH INSTALLERS ARE SMOKED ON THE SAME RUNNER, so a cycle that did not
+    # start clean would read the previous artifact's state: an .msi whose own
+    # registration failed would find the .exe's entry, and check 6 would
+    # uninstall THAT while reporting it as the .msi's clean uninstall.
+    Save-SmokeState -Name 'InstallDir' -Value 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
+    Clear-SmokeState
+    foreach ($name in @('Before', 'Installed', 'Entry', 'InstallDir')) {
+      Assert-That "starting a cycle drops the previous $name" (Get-SmokeState -Name $name) $null
+    }
+    Assert-That 'and leaves no state file behind to be read back' `
+    @(Get-ChildItem -LiteralPath $stateRound -Filter '*.json' -ErrorAction SilentlyContinue).Count 0
+    # The reset walks a list, so a value the list does not know about would
+    # survive it. Refusing an unlisted name is what keeps the two in step.
+    $threw = $false
+    try { Save-SmokeState -Name 'SomethingNew' -Value 'x' } catch { $threw = $true }
+    Assert-True 'a state value the reset does not know about is refused' $threw
+
+    # AT THE CALL SITE, not only as a function: the reset has to be the FIRST
+    # thing the install check does, so a cycle cannot read the previous one's
+    # state even when this one then fails. Here the body fails immediately after
+    # it — the registry read it needs lives below the LibraryOnly guard — which
+    # is precisely the window being pinned.
+    Save-SmokeState -Name 'Installed' -Value $true
+    Save-SmokeState -Name 'Entry' -Value $spaced
+    Save-SmokeState -Name 'InstallDir' -Value 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
+    $script:Results.Clear()
+    $install = Get-Check -Id 'install'
+    Invoke-Check -Name $install.Name -Body $install.Body
+    Assert-That 'the install check fails with no real run behind it' $script:Results[0].Verdict 'FAIL'
+    foreach ($name in @('Installed', 'Entry', 'InstallDir')) {
+      Assert-That "and it dropped the previous cycle's $name before failing" (Get-SmokeState -Name $name) $null
+    }
+    $script:Results.Clear()
+  }
+  finally { $env:UNYT_SMOKE_STATE = $null }
+
+  # ── the handoff between two REAL processes ──────────────────────────────────
+  # Everything above round-trips the state inside one process. The actual call
+  # site is two: what check 3 writes, check 5 reads in a process that never saw
+  # it. Driven with the state a passing check 2 would have left, against a
+  # directory that really holds a program — the whole handoff, minus the install
+  # itself, which is the one part no machine here can do.
+  $installed = Join-Path $root 'handoff/Unyt Sandbox'
+  New-Item -ItemType Directory -Path $installed -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $installed 'unyt-sandbox.exe') -Value 'x'
+  # Named like a release asset and never executed: -Only executable reads the
+  # state and inspects that directory, and touches the artifact only to name it.
+  $fakeExe = Join-Path $root 'unyt_0.100.0_Unyt.Sandbox_default-arc_x64_windows.exe'
+  Set-Content -LiteralPath $fakeExe -Value 'x'
+  $env:UNYT_SMOKE_STATE = Join-Path $root 'handoff/state'
+  try {
+    # QUOTED, the way NSIS really writes InstallLocation, so the normalisation
+    # check 3 does is what the next step inherits rather than the raw value.
+    Save-SmokeState -Name 'Entry' -Value ([PSCustomObject]@{
+        KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt Sandbox'
+        DisplayName          = 'Unyt Sandbox'
+        DisplayVersion       = '0.100.0'
+        InstallLocation      = "`"$installed`""
+        UninstallString      = $null
+        QuietUninstallString = $null
+      })
+    $step = Invoke-CheckScript -ScriptArgs @('-Only', 'executable', '-Artifact', $fakeExe)
+    Assert-That 'a step reads the entry a previous PROCESS left behind' `
+    @($step.Output | Where-Object { $_ -match '\|(pass|FAIL|warn)$' }) 'installs the application executable|pass'
+    Assert-That 'and a passing step exits 0' $step.ExitCode 0
+    Assert-That 'and hands the NORMALISED directory on to the next step' `
+    (Get-SmokeState -Name 'InstallDir') $installed
+  }
+  finally { $env:UNYT_SMOKE_STATE = $null }
+
+  # With no state directory the suite is one process and state stays in memory,
+  # exactly as the no-flag invocation has always run — and the reset has to
+  # reach that copy too, or the whole-suite run of the second artifact would
+  # inherit the first's.
+  Save-SmokeState -Name 'InstallDir' -Value 'C:\Program Files\Unyt Sandbox'
+  Assert-That 'with no state directory a value is kept in memory' `
+  (Get-SmokeState -Name 'InstallDir') 'C:\Program Files\Unyt Sandbox'
+  Clear-SmokeState
+  Assert-That 'and the reset clears the in-memory copy as well' (Get-SmokeState -Name 'InstallDir') $null
+
+  # ── the row a step prints ───────────────────────────────────────────────────
+  # -Only puts exactly one line on stdout, and the workflow matches it against
+  # -PrintChecks to prove the check reported at all.
+  $rowsFile = Join-Path $root 'rows.txt'
+  $env:UNYT_SMOKE_RESULTS = $rowsFile
+  try {
+    Assert-That 'the row is <display name>|<verdict>' `
+    (Write-CheckRow -Name 'installs silently' -Verdict 'pass') 'installs silently|pass'
+    Assert-That 'a warn row says warn, not pass' `
+    (Write-CheckRow -Name 'the installer is Authenticode-signed and trusted' -Verdict 'warn') `
+      'the installer is Authenticode-signed and trusted|warn'
+    Assert-That 'every row also lands in UNYT_SMOKE_RESULTS' @(Get-Content -LiteralPath $rowsFile).Count 2
+    Assert-That 'appended in the order they were produced' `
+    @(Get-Content -LiteralPath $rowsFile)[0] 'installs silently|pass'
+  }
+  finally { $env:UNYT_SMOKE_RESULTS = $null }
+  Assert-That 'the row still prints with no results file configured' `
+  (Write-CheckRow -Name 'uninstalls cleanly' -Verdict 'FAIL') 'uninstalls cleanly|FAIL'
+
+  # ── a step's exit status IS its verdict ─────────────────────────────────────
+  # THE DECLARED-STATE DESIGN, now at step level. Split one check per step the
+  # signing check is a step of its own, so its warn has to exit 0 or the amber
+  # row turns the job red after all — a declared warning silently becoming a
+  # failure, which is the same bug as a failure silently becoming a skip.
+  foreach ($case in @(
+      @{ Body = { $true }; Verdict = 'pass'; Status = 0 },
+      @{ Body = { 'warn' }; Verdict = 'warn'; Status = 0 },
+      @{ Body = { $false }; Verdict = 'FAIL'; Status = 1 }
+    )) {
+    $script:Results.Clear()
+    Invoke-Check 'one check, one step' $case.Body
+    Assert-That "-Only: a $($case.Verdict) body records $($case.Verdict)" $script:Results[0].Verdict $case.Verdict
+    Assert-That "-Only: and the rule maps it to $($case.Status)" `
+    (Get-OverallStatus -Results @($script:Results)) $case.Status
+  }
+  $script:Results.Clear()
+
+  # AND THE SAME THING AT THE ACTUAL EXIT, IN A REAL PROCESS. Everything above
+  # composes the rule in-process; the step's status is whatever Write-RowAndExit
+  # passes to `exit`, and rewriting that to `if pass 0 else 1` leaves every
+  # assertion above green while turning the signing step red on every Windows
+  # run. No artifact off Windows can produce a warn — Get-AuthenticodeSignature
+  # is not there to return NotSigned — so the row is seeded and the real function
+  # driven in a child that dot-sources the library.
+  function Invoke-RowExit {
+    param([Parameter(Mandatory)][string]$Verdict)
+    $ErrorActionPreference = 'Continue'
+    $quoted = $checkScript.Replace("'", "''")
+    $cmd = ". '$quoted' -LibraryOnly; " +
+    "Add-Result -Name 'the installer is Authenticode-signed and trusted' -Verdict '$Verdict'; " +
+    'Write-RowAndExit'
+    $out = & $pwshExe -NoProfile -Command $cmd 2>&1
+    return [PSCustomObject]@{
+      ExitCode = $LASTEXITCODE
+      Output   = @($out | ForEach-Object { $_.ToString().TrimEnd("`r") })
+    }
+  }
+  $warnExit = Invoke-RowExit -Verdict 'warn'
+  Assert-That 'a warn step really exits 0 — the amber row keeps the job green' $warnExit.ExitCode 0
+  Assert-That 'while its row still says warn, not pass' `
+  @($warnExit.Output | Where-Object { $_ -match '\|' }) 'the installer is Authenticode-signed and trusted|warn'
+  Assert-That 'a passing step really exits 0' (Invoke-RowExit -Verdict 'pass').ExitCode 0
+  Assert-That 'a FAIL step really exits 1' (Invoke-RowExit -Verdict 'FAIL').ExitCode 1
+
+  # ── a missing prerequisite is a FAILURE, and it says which ──────────────────
+  # Split one check per step, the state a check needs can simply not be there:
+  # the earlier step failed, or never ran. That has to be red, and it has to name
+  # the check that should have produced it — "the earlier check did not run" and
+  # "this check passed" being the same colour is the bug class this whole suite
+  # exists for, and a red row that does not say what is missing reads as a
+  # failure of the wrong check.
+  #
+  # Driven through Invoke-Check against an EMPTY state directory — the real
+  # driver over the real bodies — and the message is read back out of
+  # UNYT_SMOKE_LOG, which is where a step's narration actually goes. Only the
+  # ::error:: lines are matched, so the banner Invoke-Check prints (which carries
+  # a check's own name) cannot satisfy the assertion by accident.
+  #
+  # WHICH DIAGNOSIS FIRED, not just that the row went red. `Needs` alone does not
+  # distinguish 'executable' from 'uninstall' — both name the same prerequisite —
+  # so each also pins its own sentence, and a body that started reporting some
+  # other check's problem would be caught rather than merely staying red.
+  $stateEmpty = Join-Path $root 'state-empty'
+  New-Item -ItemType Directory -Path $stateEmpty -Force | Out-Null
+  $noteLog = Join-Path $root 'notes.log'
+  $env:UNYT_SMOKE_STATE = $stateEmpty
+  $env:UNYT_SMOKE_LOG = $noteLog
+  try {
+    foreach ($case in @(
+        @{ Id = 'registers'; Needs = 'installs silently'
+          Says = 'nothing was installed, so there is nothing to find'
+        },
+        @{ Id = 'executable'; Needs = 'registers an uninstall entry for this version'
+          Says = 'no uninstall entry, so no install location to check'
+        },
+        @{ Id = 'imports'; Needs = 'installs the application executable'
+          Says = 'no install directory, so nothing was scanned'
+        },
+        @{ Id = 'uninstall'; Needs = 'registers an uninstall entry for this version'
+          Says = 'no uninstall entry, so nothing can be removed'
+        }
+      )) {
+      Remove-Item -LiteralPath $noteLog -Force -ErrorAction SilentlyContinue
+      $script:Results.Clear()
+      $check = Get-Check -Id $case.Id
+      Invoke-Check -Name $check.Name -Body $check.Body
+      Assert-That "'$($case.Id)' with no state FAILS rather than passing" $script:Results[0].Verdict 'FAIL'
+      $said = @(Get-Content -LiteralPath $noteLog -ErrorAction SilentlyContinue |
+          Where-Object { $_ -like '::error::*' }) -join "`n"
+      Assert-True "'$($case.Id)' names '$($case.Needs)' as the check that is missing" `
+      ($said -match [regex]::Escape($case.Needs))
+      Assert-True "'$($case.Id)' gives its OWN diagnosis, not a sibling's" `
+      ($said -match [regex]::Escape($case.Says))
+    }
+  }
+  finally {
+    $env:UNYT_SMOKE_STATE = $null
+    $env:UNYT_SMOKE_LOG = $null
+  }
+  $script:Results.Clear()
+
+  # ── the whole-suite run reaches every check ─────────────────────────────────
+  # The six calls used to be six literal statements; driving them from the
+  # registry is what makes it possible to walk a shorter list, and a run that
+  # walked an empty one would print an empty table and "All checks passed".
+  #
+  # ASSERTED FROM THE NARRATION, not from the row count: Invoke-AllChecks adds a
+  # FAIL row for any check that did not report, so counting rows would be
+  # satisfied by the very guard being tested. Only the banner Invoke-Check prints
+  # proves a body was actually entered.
+  #
+  # Every body FAILS here and none of them reaches the machine: checks 1 and 4
+  # need what only the real run sets up — the registry read defined below the
+  # LibraryOnly guard, and a resolved artifact path — while 2, 3, 5 and 6 stop at
+  # their prerequisite guards against the empty state directory.
+  Remove-Item -LiteralPath $noteLog -Force -ErrorAction SilentlyContinue
+  $script:Results.Clear()
+  $env:UNYT_SMOKE_STATE = $stateEmpty
+  $env:UNYT_SMOKE_LOG = $noteLog
+  try { Invoke-AllChecks }
+  finally {
+    $env:UNYT_SMOKE_STATE = $null
+    $env:UNYT_SMOKE_LOG = $null
+  }
+  $ran = (Get-Content -LiteralPath $noteLog -Raw)
+  foreach ($name in $expectedNames) {
+    Assert-True "the whole-suite run actually entered '$name'" `
+    ($ran -match "===== $([regex]::Escape($name)) =====")
+  }
+  Assert-That 'and reported a row per check, in registry order' `
+  @($script:Results | ForEach-Object { $_.Name }) $expectedNames
+  Assert-False 'with nothing left unreported' ($ran -match 'never reported')
+  Assert-That 'and every one went red rather than passing on nothing' `
+  @($script:Results | Where-Object { $_.Verdict -eq 'FAIL' }).Count 6
+
+  # THE GUARD AT ITS CALL SITE, driven with a short list — which is the very
+  # thing it exists to catch. Asserting only the healthy run checks for the
+  # ABSENCE of the message, so deleting the producer would satisfy it; this makes
+  # the producer's output the thing under test.
+  Remove-Item -LiteralPath $noteLog -Force -ErrorAction SilentlyContinue
+  $script:Results.Clear()
+  $env:UNYT_SMOKE_STATE = $stateEmpty
+  $env:UNYT_SMOKE_LOG = $noteLog
+  try { Invoke-AllChecks -Ids @('registers') }
+  finally {
+    $env:UNYT_SMOKE_STATE = $null
+    $env:UNYT_SMOKE_LOG = $null
+  }
+  $short = Get-Content -LiteralPath $noteLog -Raw
+  Assert-That 'a run that walked a short list still reports a row per check' @($script:Results).Count 6
+  Assert-That 'and nothing is left unreported once the guard has run' `
+  @(Get-UnreportedCheck -Results @($script:Results)).Count 0
+  Assert-True 'the log says checks never reported' ($short -match 'never reported')
+  Assert-True 'and names one that did not run' ($short -match [regex]::Escape('uninstalls cleanly'))
+  Assert-That 'a check that never ran is recorded FAIL, never pass' `
+  @($script:Results | Where-Object { $_.Name -eq 'uninstalls cleanly' -and $_.Verdict -eq 'FAIL' }).Count 1
+  $script:Results.Clear()
+
+  # The unreported guard itself: it is what turns "did not run" into a red row
+  # rather than an absent one.
+  $rows = @($expectedNames | ForEach-Object { [PSCustomObject]@{ Name = $_; Verdict = 'pass' } })
+  Assert-That 'a run that reported every check has nothing unreported' `
+  @(Get-UnreportedCheck -Results $rows).Count 0
+  Assert-That 'a run missing one names it' `
+  (Get-UnreportedCheck -Results @($rows | Where-Object { $_.Name -ne 'uninstalls cleanly' })) 'uninstalls cleanly'
+  Assert-That 'a run that reported nothing names all six' `
+  (Get-UnreportedCheck -Results @()) $expectedNames
+  $script:Results.Clear()
+
   # Reached only if every assertion above ran. See the guard in `finally`.
   $script:Completed = $true
 }
@@ -519,8 +1028,8 @@ Write-Output "windows check regression: $script:Pass passed, $script:Fail failed
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding
 # assertions.
-if ($script:Pass -lt 100) {
-  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 100 — the test file is truncated or a block was skipped")
+if ($script:Pass -lt 223) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 223 — the test file is truncated or a block was skipped")
   exit 1
 }
 if ($script:Fail -gt 0) { exit 1 }

@@ -309,12 +309,295 @@ else
   echo "SKIP  N1 bundle-scan regression (no objdump)" >&2
 fi
 
+# ── the check runner: one check per invocation ───────────────────────────────
+# The Linux drivers are now run one check at a time (release-smoke.yaml gives
+# each its own CI step), and the machinery for that lives in common.sh so this
+# file can drive it — same reason the matchers do. What it has to get right is
+# entirely about what happens BETWEEN invocations, and every way of getting it
+# wrong looks like a pass:
+#   - a check that runs out of order, after tooling has been installed, cannot
+#     find the under-declared dependency it exists to find;
+#   - a check whose predecessor never ran must not report on an install that is
+#     not there;
+#   - a stale state file must not let a later check believe in an install the
+#     current run never made.
+#
+# DRIVEN AS A CHILD PROCESS, through a fake driver built here, because
+# smoke_dispatch ends in `exit` and because the real thing is a fresh process per
+# check. Calling the functions in-process would test a shape production never
+# uses — the trap the Windows harness fell into (see its header).
+runner_dir="$(mktemp -d)"
+cat >"$runner_dir/driver.sh" <<'DRIVER'
+#!/usr/bin/env bash
+set -uo pipefail
+# shellcheck source=/dev/null
+. "$SMOKE_HERE/common.sh"
+UNYT_SMOKE_CHECKS=(
+  "one|check one|c_one"
+  "two|check two|c_two"
+  "three|check three|c_three"
+)
+UNYT_SMOKE_GATE=one
+UNYT_SMOKE_STATE_VARS=(GATE_OK MARK)
+c_one() {
+  [ "${FAKE_BREAK:-}" = one ] && return 1
+  smoke_state_set MARK hello && smoke_state_set GATE_OK 1
+}
+c_two() {
+  [ "${FAKE_BREAK:-}" = two ] && return 1
+  [ "${MARK:-}" = hello ] || { echo "::error::MARK did not survive the invocation" >&2; return 1; }
+  return 0
+}
+c_three() { [ "${FAKE_BREAK:-}" = three ] && return 1; return 0; }
+MODE=all; ONLY=""
+case "${1:-}" in
+  --print-checks) MODE=print ;;
+  --only) MODE=only; ONLY="${2:-}" ;;
+esac
+smoke_dispatch "$MODE" "$ONLY"
+DRIVER
+
+RUNNER_OUT=""; RUNNER_ERR=""; RUNNER_RC=0
+drive() { # <state-dir> [args...]
+  local state="$1"; shift
+  RUNNER_ERR="$runner_dir/stderr.log"
+  RUNNER_OUT="$(SMOKE_HERE="$here" UNYT_SMOKE_STATE="$state" \
+    bash "$runner_dir/driver.sh" "$@" 2>"$RUNNER_ERR")"
+  RUNNER_RC=$?
+}
+expect_rows() { # <expected stdout> <description>
+  if [ "$RUNNER_OUT" = "$1" ]; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s rows were:\n%s\n' "$2" "${RUNNER_OUT:-<none>}" >&2
+}
+expect_runner_rc() { # <rc> <description>
+  if [ "$RUNNER_RC" = "$1" ]; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s exit was %s, expected %s\n' "$2" "$RUNNER_RC" "$1" >&2
+}
+expect_runner_err() { # <substring> <description>
+  if grep -qF -e "$1" "$RUNNER_ERR"; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s no "%s" in the diagnosis\n' "$2" "$1" >&2
+}
+
+# The list every other piece reads: the workflow's step ids, and the guard's
+# expectation of what should have reported.
+drive "$runner_dir/s0" --print-checks
+expect_rows "$(printf 'one\tcheck one\ntwo\tcheck two\nthree\tcheck three')" \
+  "--print-checks is <id><TAB><name> in run order"
+expect_runner_rc 0 "--print-checks exits 0"
+
+# The whole run, unchanged: every check, in order, one row each.
+drive "$runner_dir/s1"
+expect_rows "$(printf 'check one|pass\ncheck two|pass\ncheck three|pass')" "the whole run reports every check"
+expect_runner_rc 0 "a clean whole run exits 0"
+
+# A FAILING CHECK MUST NOT SILENCE THE NEXT ONE. Both are independent, and CI
+# needs both rows — the whole point of a step per check.
+FAKE_BREAK=two drive "$runner_dir/s2"
+expect_rows "$(printf 'check one|pass\ncheck two|FAIL\ncheck three|pass')" \
+  "a failed check still lets the next one report"
+expect_runner_rc 1 "a whole run with a failure exits 1"
+
+# One check per invocation, sharing a state directory — the CI shape. `check two`
+# reads MARK, which only exists if the state file carried it across processes.
+drive "$runner_dir/s3" --only one
+expect_rows "check one|pass" "--only prints exactly one row"
+expect_runner_rc 0 "a passing --only exits 0"
+drive "$runner_dir/s3" --only two
+expect_rows "check two|pass" "state crosses the process boundary"
+expect_runner_rc 0 "the second --only exits 0"
+
+# THE ORDER GUARD. Running a later check first is how the split could quietly
+# stop honouring the sequence that makes the closure check mean anything.
+drive "$runner_dir/s4" --only two
+expect_rows "check two|FAIL" "a check whose predecessor never ran FAILS"
+expect_runner_rc 1 "and exits non-zero"
+expect_runner_err "has to run after: check one" "the diagnosis names the missing predecessor"
+
+drive "$runner_dir/s5" --only one
+drive "$runner_dir/s5" --only three
+expect_rows "check three|FAIL" "one skipped predecessor is still refused"
+expect_runner_err "has to run after: check two" "and the skipped one is named"
+
+# THE GATE. With the first check failed there is no install to look at, and the
+# rest must say so rather than reporting on nothing.
+FAKE_BREAK=one drive "$runner_dir/s6" --only one
+expect_rows "check one|FAIL" "a failing gate check reports FAIL"
+drive "$runner_dir/s6" --only two
+expect_rows "check two|FAIL" "the gate having failed refuses the next check"
+expect_runner_err "'check one' check did not pass" "and says which check it is waiting on"
+
+drive "$runner_dir/s7" --only one
+FAKE_BREAK=one drive "$runner_dir/s7" --only one
+expect_rows "check one|FAIL" "re-running the gate check can still fail"
+drive "$runner_dir/s7" --only two
+expect_rows "check two|FAIL" "a previous run's GATE_OK does not survive into this one"
+expect_runner_err "'check one' check did not pass" "and the gate is what refuses it"
+
+# A STALE STATE FILE MUST NOT OUTLIVE ITS RUN, and this is the case that says so:
+# the WHOLE-RUN path, where every check shares one shell. Loading state is
+# sourcing, and sourcing cannot REMOVE a variable that is no longer in the file —
+# so a GATE_OK left in the directory by an earlier run stays in scope for the
+# whole run that follows, and every check after a FAILED install reports on the
+# install before it. The unset-on-load is what stops that, and only a single
+# process can show it: with a step per check there is no scope to leak into.
+mkdir -p "$runner_dir/s11"
+printf 'GATE_OK=1\nMARK=hello\n' >"$runner_dir/s11/state.env"
+FAKE_BREAK=one drive "$runner_dir/s11"
+expect_rows "$(printf 'check one|FAIL\ncheck two|FAIL\ncheck three|FAIL')" \
+  "a stale state file does not carry a previous run's install into this one"
+expect_runner_err "'check one' check did not pass" "the gate refuses them, not a stale GATE_OK"
+
+# THE STATE FILE IS THE ONLY SOURCE OF STATE, and that includes whatever the
+# caller happens to have in its environment. A RAN_* or a GATE_OK inherited from
+# the shell would otherwise satisfy the order guard for checks that never ran —
+# the same leak as a stale file, arriving by the other door.
+RUNNER_ERR="$runner_dir/stderr.log"
+RUNNER_OUT="$(SMOKE_HERE="$here" UNYT_SMOKE_STATE="$runner_dir/s12" \
+  RAN_ONE=1 RAN_TWO=1 GATE_OK=1 bash "$runner_dir/driver.sh" --only three 2>"$RUNNER_ERR")"
+RUNNER_RC=$?
+expect_rows "check three|FAIL" "an inherited RAN_/GATE_OK does not count as having run"
+expect_runner_rc 1 "and the check goes red rather than reporting on nothing"
+expect_runner_err "has to run after: check one, check two" "both predecessors are still named"
+
+# An id nobody declared is an INVOCATION error (2), not a failing artifact (1).
+drive "$runner_dir/s8" --only nosuch
+expect_runner_rc 2 "an unknown check id exits 2, not 1"
+expect_runner_err "no such check: nosuch" "and names the id"
+
+# UNYT_SMOKE_RESULTS accumulates across invocations: that file is what the
+# summary reads, and on Linux it is read back out of a container that may since
+# have died.
+res="$runner_dir/results"
+: >"$res"
+UNYT_SMOKE_RESULTS="$res" drive "$runner_dir/s9" --only one
+UNYT_SMOKE_RESULTS="$res" drive "$runner_dir/s9" --only two
+if [ "$(cat "$res")" = "$(printf 'check one|pass\ncheck two|pass')" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL  %-58s results file held:\n%s\n' "UNYT_SMOKE_RESULTS collects a row per invocation" "$(cat "$res")" >&2
+fi
+
+# A state value nobody declared would never be cleared on load, which is the
+# stale-state bug wearing its other hat.
+UNYT_SMOKE_CHECKS=("one|check one|c_one") UNYT_SMOKE_GATE=one
+UNYT_SMOKE_STATE_VARS=(GATE_OK)
+if UNYT_SMOKE_STATE="$runner_dir/s10" smoke_state_set SNEAKY 1 2>/dev/null; then
+  fail=$((fail + 1)); echo "FAIL  an undeclared state variable was accepted" >&2
+else pass=$((pass + 1)); fi
+
+rm -rf "$runner_dir"
+
+# ── the did-it-run guard ─────────────────────────────────────────────────────
+# summarise-checks.sh is what turns "one step per check" from a reporting change
+# into a safe one: with the checks spread across steps, a check can stop
+# happening, and a shorter table is exactly as green as a clean one.
+sum_dir="$(mktemp -d)"
+sum_case() { # <rows> <expected-rc> <description> [expected-substring] [line-ending]
+  local rows="$1" want="$2" desc="$3" want_text="${4:-}" eol="${5:-}" out rc list
+  list='printf "a\tone\nb\ttwo\nc\tthree\n"'
+  if [ "$eol" = crlf ]; then
+    rows="${rows//$'\n'/$'\r\n'}"
+    list='printf "a\tone\r\nb\ttwo\r\nc\tthree\r\n"'
+  fi
+  printf '%s' "$rows" >"$sum_dir/results"
+  out="$(bash "$here/summarise-checks.sh" --label L --results "$sum_dir/results" \
+    -- bash -c "$list" 2>&1)"
+  rc=$?
+  if [ "$rc" = "$want" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); printf 'FAIL  %-58s exit %s, expected %s\n' "$desc" "$rc" "$want" >&2; fi
+  [ -n "$want_text" ] || return 0
+  if printf '%s' "$out" | grep -qF -e "$want_text"; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); printf 'FAIL  %-58s no "%s" in:\n%s\n' "$desc" "$want_text" "$out" >&2; fi
+}
+sum_case 'one|pass
+two|pass
+three|pass
+' 0 "every check reported and passed"
+# The one that matters: a check that never reported is not a pass, and the table
+# says so in the column people actually read.
+sum_case 'one|pass
+three|pass
+' 1 "a check that never reported" "DID NOT RUN"
+sum_case 'one|pass
+two|pass
+two|pass
+three|pass
+' 1 "a check wired up twice" "REPORTED 2x"
+sum_case '' 1 "nothing reported at all" "DID NOT RUN"
+sum_case 'one|pass
+two|FAIL
+three|pass
+' 1 "a failed check"
+# `warn` is the Windows signing lane's declared state: visible, and green.
+sum_case 'one|pass
+two|warn
+three|pass
+' 0 "a declared warn does not fail the job" "warn"
+# FAILS CLOSED when it cannot read what to expect — with no list, nothing can be
+# found missing and every table reads clean.
+bash "$here/summarise-checks.sh" --label L --results "$sum_dir/results" -- false >/dev/null 2>&1
+if [ $? -eq 2 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  an unreadable check list must be an invocation error" >&2; fi
+bash "$here/summarise-checks.sh" --label L --results "$sum_dir/results" -- true >/dev/null 2>&1
+if [ $? -eq 2 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  an empty check list must be an invocation error" >&2; fi
+# BOTH SIDES OF THE BOUNDARY BETWEEN pwsh AND bash EMIT CRLF, and the Windows
+# summary compares one against the other from git-bash. Left unstripped, every
+# declared name carries a trailing `\r`, nothing matches, and a flawless run
+# reports twelve checks as DID NOT RUN. Invisible to every other test here
+# because Linux pwsh — which is the only pwsh this repo can run — emits LF.
+sum_case 'one|pass
+two|warn
+three|pass
+' 0 "CRLF from PowerShell still matches its rows" "warn" crlf
+rm -rf "$sum_dir"
+
+# ── the workflow wires up exactly the checks the scripts declare ─────────────
+# The did-it-run guard catches a missing step at the next release, as a red run.
+# This catches it now, which is cheaper: a check added to a registry with no CI
+# step is otherwise invisible until someone smokes a release.
+#
+# The Windows lane is deliberately absent — enumerating it needs pwsh, which is
+# not on every machine that runs this file. It is covered at runtime by the same
+# guard as the rest.
+wf="$here/../../.github/workflows/release-smoke.yaml"
+if [ -f "$wf" ]; then
+  # Every id the workflow asks for, by either name: the Linux lane goes through
+  # run-smoke.sh (`--exec`), the macOS lane calls its script directly (`--only`).
+  wired="$(grep -oE -- '(--only|--exec) [a-z][a-z-]*' "$wf" | awk '{print $2}' | sort -u)"
+  for spec in container-checks.sh container-checks-appimage.sh check-macos.sh; do
+    missing=""
+    while read -r id; do
+      printf '%s\n' "$wired" | grep -qx -- "$id" || missing="${missing:+$missing }$id"
+    done < <(bash "$here/$spec" --print-checks | cut -f1)
+    if [ -z "$missing" ]; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s no CI step runs: %s\n' "$spec declares a check nobody wired up" "$missing" >&2
+    fi
+  done
+  # The other direction — an id in the workflow that no script owns — is left to
+  # runtime: it exits 2 there as an invocation error, which is a red step naming
+  # the typo. Asserting it here would need the Windows registry too, and that
+  # needs pwsh.
+else
+  echo "SKIP  workflow/registry correspondence (no release-smoke.yaml)" >&2
+fi
+
+# The real drivers declare real checks. Cheap, and it is what the workflow's
+# `--only <id>` arguments are written against.
+for drv in container-checks.sh container-checks-appimage.sh; do
+  n="$(bash "$here/$drv" --print-checks | grep -c $'\t' || true)"
+  if [ "$n" -ge 3 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); printf 'FAIL  %s --print-checks listed %s check(s)\n' "$drv" "$n" >&2; fi
+done
+
 echo "oracle regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 58 ]; then
-  echo "::error::only $pass assertions ran; expected at least 58 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 107 ]; then
+  echo "::error::only $pass assertions ran; expected at least 107 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

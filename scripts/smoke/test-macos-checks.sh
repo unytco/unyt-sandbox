@@ -17,6 +17,16 @@
 # test-oracle.sh: it drives the real call sites, because a copy of the logic
 # would pass while the real script stayed broken.
 #
+# TWO PATHS, ONE SET OF CHECKS. The CI job runs each check as its own GitHub
+# Actions step, so the script is driven BOTH ways here: `check-macos.sh <dmg>`
+# runs the lot in one process, and `--only <id> <dmg>` runs exactly one, nine
+# times over, sharing a state directory. The split invents a failure mode the
+# single-process path cannot have — a check that cannot find what check 1
+# extracted, because the two are no longer the same process — so the block at the
+# bottom drives every check through --only as well, including with no mount
+# having run at all. A check that goes quiet when it is alone in the process has
+# stopped being able to fail just as surely as one whose guard was deleted.
+#
 # THE ONE THING TO TAKE FROM THIS FILE: assert WHICH DIAGNOSIS fired, never just
 # that the row went red. Four separate guards here were deleted during mutation
 # testing without a single assertion noticing — the ad-hoc signature guard, the
@@ -120,12 +130,32 @@ LC_X86='Load command 9
 # ── the stub toolchain ────────────────────────────────────────────────────────
 # One directory of executables, prepended to PATH. Each reads $STUB_BREAK to
 # decide whether to behave or to misbehave in exactly one way.
+#
+# THE ONES THAT MATTER RECORD WHAT THEY WERE CALLED WITH, into
+# $STUB_FIXTURE/calls/<tool>. Two things are invisible without it. A `detach` is
+# one: nothing an assertion can read changes when an image is unmounted, so
+# `--cleanup` deleting its detach went unnoticed. The other is WHAT a check was
+# pointed at: checks 4, 5 and 9 name the population they swept, so an assertion
+# can pin it, but 6, 7 and 8 sweep nothing — without a record, a check aimed at
+# the disk image, or at a path that does not exist, produces the same green row
+# as one reading the bundle the mount check extracted.
+#
+# And those three now READ their target instead of ignoring it, so being aimed at
+# nothing is a failure rather than a canned pass. `-e`, not `-f`: spctl and
+# stapler are pointed at the .app BUNDLE, which is a directory.
 make_stubs() {
   local bin="$1"
-  mkdir -p "$bin"
+  mkdir -p "$bin" "$(dirname "$bin")/calls"
 
   cat >"$bin/hdiutil" <<'EOF'
 #!/usr/bin/env bash
+# Recorded WITH whether the target was still there, because for --cleanup the
+# ORDER of its two jobs is the whole point: detaching a mountpoint after the
+# directory holding it has been removed is not detaching it, and on a real Mac
+# that is an rm -rf walking into a still-attached image. A stubbed mount is an
+# ordinary directory, so this marker is the only trace that ordering leaves.
+if [ -e "${@: -1}" ]; then printf '%s\n' "$*"; else printf '%s [target-gone]\n' "$*"; fi \
+  >>"$STUB_FIXTURE/calls/hdiutil"
 case "${1:-}" in
   attach)
     [ "${STUB_BREAK:-}" = mount ] && { echo "hdiutil: attach failed - no mountable file systems" >&2; exit 1; }
@@ -313,7 +343,9 @@ EOF
 
   cat >"$bin/spctl" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_FIXTURE/calls/spctl"
 target="${@: -1}"
+[ -e "$target" ] || { echo "spctl: $target: No such file or directory" >&2; exit 1; }
 case "${STUB_BREAK:-}" in
   gatekeeper_rejected)
     echo "$target: rejected" >&2
@@ -338,7 +370,13 @@ EOF
 
   cat >"$bin/xcrun" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_FIXTURE/calls/xcrun"
 if [ "${1:-}" = stapler ] && [ "${2:-}" = validate ]; then
+  if [ ! -e "${3:-}" ]; then
+    echo "Processing: ${3:-}"
+    echo "The staple and validate action failed! Error 66."
+    exit 66
+  fi
   if [ "${STUB_BREAK:-}" = stapler ]; then
     echo "Processing: $3"
     echo "The staple and validate action failed! Error 65."
@@ -353,6 +391,12 @@ EOF
 
   cat >"$bin/syspolicy_check" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_FIXTURE/calls/syspolicy_check"
+# Before STUB_BREAK, because a tool pointed at nothing cannot report on a build
+# whatever else is being simulated. No fail-vocabulary in the message on purpose:
+# the non-zero status is what has to carry it, which is the branch check 8 leans
+# on when Apple documents no status at all.
+[ -e "${2:-}" ] || { echo "syspolicy_check: ${2:-}: No such file or directory"; exit 74; }
 case "${STUB_BREAK:-}" in
   syspolicy_usage) echo "Usage: syspolicy_check <check> <path>"; exit 64 ;;
   syspolicy) echo "App failed pre-distribution checks: not notarized"; exit 1 ;;
@@ -500,33 +544,76 @@ EOF
 # so a row is read only from the table and never from a `===== name =====`
 # header that happens to contain the same words.
 OUT=""; RC=0; ERR=""
+SCEN_DIR=""; SCEN_DMG=""; SCEN_STATE=""; ONLY_SEQ=0
 # The FIX_* knobs are set by the caller as prefix assignments. They are cleared
-# again HERE, on the way out: bash's scoping for a prefix assignment to a
-# function is subtle enough that a leaked FIX_VERSION would silently mis-build
-# every scenario after it, and a fixture that is not what the assertion assumes
-# is the one failure mode a test cannot report.
+# again in build_scenario, the only thing that reads them: bash's scoping for a
+# prefix assignment to a function is subtle enough that a leaked FIX_VERSION
+# would silently mis-build every scenario after it, and a fixture that is not
+# what the assertion assumes is the one failure mode a test cannot report.
 scenario_reset() {
   FIX_VERSION=""; FIX_CLAIM=""; FIX_FLAVOUR=""; FIX_MUTATE=""; FIX_DMG_NAME=""
   FIX_NO_MACHO=""; FIX_NO_SORT_V=""; FIX_UNIVERSAL=""; FIX_UNIVERSAL_X86=""
 }
 scenario_reset
 
+# The fixture and the stub toolchain, without running anything. Split out of
+# run_scenario because the --only path drives ONE scenario through SEVERAL
+# invocations — each check is its own process there, which is the whole point of
+# the split — so building and running can no longer be one step.
+build_scenario() { # <name>
+  local name="$1"
+  SCEN_DIR="$ROOT/$name"
+  mkdir -p "$SCEN_DIR"
+  build_fixture "$SCEN_DIR" "${FIX_VERSION:-0.100.0}" "${FIX_CLAIM:-10.13}" "${FIX_FLAVOUR:-x86}"
+  make_stubs "$SCEN_DIR/bin"
+  [ -n "${FIX_MUTATE:-}" ] && "$FIX_MUTATE" "$SCEN_DIR"
+  SCEN_DMG="$SCEN_DIR/${FIX_DMG_NAME:-unyt_0.100.0_Unyt.Sandbox_default-arc_x64_darwin.dmg}"
+  SCEN_STATE="$SCEN_DIR/state"
+  mv "$SCEN_DIR/artifact.dmg" "$SCEN_DMG"
+  scenario_reset
+}
+
 run_scenario() { # <name> [env assignments...]
   local name="$1"; shift
-  local dir="$ROOT/$name"
-  mkdir -p "$dir"
-  build_fixture "$dir" "${FIX_VERSION:-0.100.0}" "${FIX_CLAIM:-10.13}" "${FIX_FLAVOUR:-x86}"
-  make_stubs "$dir/bin"
-  [ -n "${FIX_MUTATE:-}" ] && "$FIX_MUTATE" "$dir"
-  local dmg="$dir/${FIX_DMG_NAME:-unyt_0.100.0_Unyt.Sandbox_default-arc_x64_darwin.dmg}"
-  mv "$dir/artifact.dmg" "$dmg"
-  ERR="$dir/stderr.log"
+  build_scenario "$name"
+  ERR="$SCEN_DIR/stderr.log"
   OUT="$(env "$@" \
-    PATH="$dir/bin:$PATH" \
-    STUB_FIXTURE="$dir" \
-    bash "$SCRIPT" "$dmg" 2>"$ERR")"
+    PATH="$SCEN_DIR/bin:$PATH" \
+    STUB_FIXTURE="$SCEN_DIR" \
+    bash "$SCRIPT" "$SCEN_DMG" 2>"$ERR")"
   RC=$?
-  scenario_reset
+}
+
+# One --only invocation against an already-built scenario, with ONE state
+# directory shared across calls. That sharing is itself under test: on the split
+# path each check runs in its own process, so what check 1 extracts has to reach
+# check 9 through UNYT_SMOKE_STATE rather than through a variable.
+# Each invocation gets its own stderr log, so an expect_err after any of them
+# reads that call's diagnosis and not the previous call's.
+only_check() { # <id> [env assignments...]
+  local id="$1"; shift
+  ONLY_SEQ=$((ONLY_SEQ + 1))
+  ERR="$SCEN_DIR/stderr-$ONLY_SEQ-$id.log"
+  OUT="$(env "$@" \
+    PATH="$SCEN_DIR/bin:$PATH" \
+    STUB_FIXTURE="$SCEN_DIR" \
+    UNYT_SMOKE_STATE="$SCEN_STATE" \
+    bash "$SCRIPT" --only "$id" "$SCEN_DMG" 2>"$ERR")"
+  RC=$?
+}
+
+# The modes that take no check id — --print-checks, --report, --cleanup — against
+# the same state directory, so they see whatever only_check left in it.
+mode_check() { # <tag> <script args...>
+  local tag="$1"; shift
+  ONLY_SEQ=$((ONLY_SEQ + 1))
+  ERR="$SCEN_DIR/stderr-$ONLY_SEQ-$tag.log"
+  OUT="$(env \
+    PATH="$SCEN_DIR/bin:$PATH" \
+    STUB_FIXTURE="$SCEN_DIR" \
+    UNYT_SMOKE_STATE="$SCEN_STATE" \
+    bash "$SCRIPT" "$@" 2>"$ERR")"
+  RC=$?
 }
 
 # A row's verdict, read from the summary table's last column.
@@ -552,15 +639,58 @@ expect_err() { # <substring> <description>
   fail=$((fail + 1))
   printf 'FAIL  %-58s no "%s" in the diagnosis\n' "$2" "$1" >&2
 }
-expect_rc() { # <expected-nonzero|zero> <description>
+# An EXACT code as well as zero/nonzero, because the script draws a distinction
+# inside "nonzero" that a workflow relies on: 1 is a check that FAILED, 2 is an
+# invocation that was wrong. Collapsing them lets a mistyped check id read as a
+# failing artifact — someone debugs the build instead of the call — and
+# zero/nonzero alone cannot see that happen.
+expect_rc() { # <zero|nonzero|N> <description>
   local ok=no
   case "$1" in
     zero)    [ "$RC" -eq 0 ] && ok=yes ;;
     nonzero) [ "$RC" -ne 0 ] && ok=yes ;;
+    *)       [ "$RC" -eq "$1" ] && ok=yes ;;
   esac
   if [ "$ok" = yes ]; then pass=$((pass + 1)); return; fi
   fail=$((fail + 1))
   printf 'FAIL  %-58s exit status was %s, expected %s\n' "$2" "$RC" "$1" >&2
+}
+# The other direction, for output whose ABSENCE is the property. A header printed
+# unconditionally cannot tell a report that listed something from one that listed
+# nothing; only asserting that the list itself is missing can.
+expect_no_err() { # <substring> <description>
+  if ! grep -qF -e "$1" "$ERR"; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s "%s" was in the diagnosis and should not have been\n' "$2" "$1" >&2
+}
+# What a tool was actually POINTED AT, read back from the stub's own record.
+# Checks 4, 5 and 9 pin the population they swept; 6, 7 and 8 have no population,
+# so this is their equivalent — the tool has to have been aimed at the bundle the
+# mount check left in the state directory, not at the disk image and not at a
+# path that does not exist.
+expect_target() { # <tool> <substring> <description>
+  local rec="$SCEN_DIR/calls/$1"
+  if [ -f "$rec" ] && grep -qF -e "$2" "$rec"; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s was never pointed at "%s"\n' "$3" "$1" "$2" >&2
+  [ -f "$rec" ] && sed 's/^/      /' "$rec" >&2
+}
+# ...and the call a tool must NOT have made, or must not have made in that state.
+expect_no_target() { # <tool> <substring> <description>
+  local rec="$SCEN_DIR/calls/$1"
+  if [ ! -f "$rec" ] || ! grep -qF -e "$2" "$rec"; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s made a call matching "%s"\n' "$3" "$1" "$2" >&2
+  sed 's/^/      /' "$rec" >&2
+}
+# The WHOLE of stdout, which on the --only path is exactly one row. Asserting all
+# of it is what proves "exactly one row": a step that printed a summary table, a
+# second row, or nothing at all fails here even when its verdict was right, and
+# the workflow reads that stdout as the check's answer.
+expect_only_row() { # <check name> <pass|FAIL> <description>
+  if [ "$OUT" = "$1|$2" ]; then pass=$((pass + 1)); return; fi
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s expected exactly "%s", got "%s"\n' "$3" "$1|$2" "$OUT" >&2
 }
 
 CHECKS=(
@@ -574,6 +704,10 @@ CHECKS=(
   "passes Apple's own distribution assessment"
   "deployment target within the supported floor"
 )
+# The ids --only takes, in the same order and pairing as CHECKS above. That
+# pairing is what --print-checks declares to the workflow, so the split block
+# below asserts the script's list against this one rather than trusting it.
+CHECK_IDS=(mount version arch paths signed gatekeeper stapled syspolicy deployment)
 # Every check EXCEPT the named one must still pass — a scenario that turned two
 # rows red would mean the breakage leaked, and a check that goes red for
 # something other than its own subject is not the check it claims to be.
@@ -965,13 +1099,434 @@ else
   grep 'Mach-O file' "$ROOT/baseline-x86/stderr.log" >&2 || true
 fi
 
+# ── the split path: one check per invocation ──────────────────────────────────
+# Everything above drives `check-macos.sh <dmg>`: nine checks, one process, the
+# extracted bundle held in shell variables. The CI job does not run it that way —
+# it runs each check as its own GitHub Actions step, so the step list reads like
+# the summary table instead of hiding it inside one green blob. That makes each
+# check a SEPARATE PROCESS and moves check 1's output into a state directory on
+# disk, which is a NEW way for a check to stop being able to fail: one that
+# cannot find its prerequisite could pass on empty input, or not run at all, and
+# from outside the two look identical. So every check is driven through --only
+# here as well, and the assertions are the same shape as above — which row, and
+# which diagnosis, never merely that something went red.
+
+# The baseline, check by check, in one shared state directory. Nine processes
+# where the whole-run path has one, and every row must still be green.
+build_scenario only-baseline
+i=0
+for id in "${CHECK_IDS[@]}"; do
+  only_check "$id"
+  expect_only_row "${CHECKS[$i]}" pass "--only $id: the baseline passes on its own"
+  expect_rc zero "--only $id exits 0 on a pass"
+  # WHAT EACH CHECK ACTUALLY READ, not merely that its row was green. A green row
+  # on this path says nothing on its own: every one of these checks would also go
+  # green pointed at the wrong thing, or at nothing, if its own guards were the
+  # only thing standing there. The two that sweep are pinned to the population
+  # they swept; the three that sweep nothing are pinned to the path they were
+  # handed, which is the only trace they leave.
+  case "$id" in
+    signed) expect_err "all 3 Mach-O file(s) signed" \
+      "--only signed re-derives the enumeration from the state directory" ;;
+    deployment) expect_err "3 across 3 Mach-O file(s)" \
+      "--only deployment reads every slice of every file the state directory holds" ;;
+    gatekeeper) expect_target spctl "$SCEN_STATE/Unyt Sandbox.app" \
+      "--only gatekeeper assesses the bundle the mount check extracted" ;;
+    stapled) expect_target xcrun "$SCEN_STATE/Unyt Sandbox.app" \
+      "--only stapled validates the ticket on that same bundle" ;;
+    syspolicy) expect_target syspolicy_check "$SCEN_STATE/Unyt Sandbox.app" \
+      "--only syspolicy assesses that same bundle" ;;
+  esac
+  i=$((i + 1))
+done
+
+# --print-checks IS the contract between this script and the workflow: the guard
+# step reads it to prove every check reported, so it is asserted whole — ids and
+# names, paired, in run order. A list that lost an entry would give the workflow
+# eight steps and no way to know a check went missing.
+build_scenario only-print-checks
+mode_check print --print-checks
+expected_checks="$(
+  i=0
+  for id in "${CHECK_IDS[@]}"; do
+    printf '%s\t%s\n' "$id" "${CHECKS[$i]}"
+    i=$((i + 1))
+  done
+)"
+if [ "$OUT" = "$expected_checks" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  --print-checks did not list the nine ids and names in order" >&2
+  printf '%s\n' "$OUT" | sed 's/^/      /' >&2
+fi
+expect_rc zero "--print-checks exits 0 and needs no artifact"
+
+# EACH CHECK, BROKEN, ALONE IN ITS PROCESS. The scenarios far above prove each
+# check can fail on the whole-run path; these prove it still can when nothing
+# else has run in the same process — a check leaning on state a predecessor left
+# in a variable would go quiet here, and quiet is green.
+build_scenario only-break-mount
+only_check mount STUB_BREAK=mount
+expect_only_row "mounts and yields a .app bundle" FAIL "--only mount: an image that will not mount"
+expect_rc 1 "--only mount exits 1 on an unmountable image, the FAILED-check code"
+expect_err "no mountable file systems" "--only mount: hdiutil's own diagnosis reaches the log"
+
+FIX_VERSION=0.99.0 build_scenario only-break-version
+only_check mount
+expect_only_row "mounts and yields a .app bundle" pass "--only version: its prerequisite mounts first"
+only_check version
+expect_only_row "the bundled app is the version the artifact claims" FAIL \
+  "--only version: a DMG named 0.100.0 packaging 0.99.0"
+expect_rc nonzero "--only version goes red on a mismatch"
+expect_err "but packages version 0.99.0" "--only version names both versions"
+
+build_scenario only-break-arch
+only_check mount STUB_BIN_ARCH=arm64 STUB_RUNNER_ARCH=x86_64
+expect_only_row "mounts and yields a .app bundle" pass "--only arch: its prerequisite mounts first"
+only_check arch STUB_BIN_ARCH=arm64 STUB_RUNNER_ARCH=x86_64
+expect_only_row "the bundle's architecture matches the runner" FAIL \
+  "--only arch: an aarch64 bundle on an Intel runner"
+expect_rc nonzero "--only arch goes red on a mispaired runner"
+expect_err "but the runner is x86_64" "--only arch names the runner it was paired with"
+
+FIX_MUTATE=mutate_homebrew build_scenario only-break-paths
+only_check mount
+expect_only_row "mounts and yields a .app bundle" pass "--only paths: its prerequisite mounts first"
+only_check paths
+expect_only_row "no build-machine library paths in any Mach-O" FAIL \
+  "--only paths: a bundled dylib linking against /opt/homebrew"
+expect_rc nonzero "--only paths goes red on a build-machine prefix"
+expect_err "loads /opt/homebrew/opt/openssl@3" "--only paths names the offending load path"
+
+build_scenario only-break-signed
+only_check mount STUB_BREAK=adhoc
+expect_only_row "mounts and yields a .app bundle" pass "--only signed: its prerequisite mounts first"
+only_check signed STUB_BREAK=adhoc
+expect_only_row "every Mach-O in the bundle is signed" FAIL \
+  "--only signed: an ad-hoc signed dylib that VERIFIES but no Developer ID signed"
+expect_rc nonzero "--only signed goes red on an ad-hoc signature"
+expect_err "AD-HOC signature" "--only signed: the ad-hoc guard is what rejects it"
+
+build_scenario only-break-gatekeeper
+only_check mount STUB_BREAK=gatekeeper_unnotarized
+expect_only_row "mounts and yields a .app bundle" pass "--only gatekeeper: its prerequisite mounts first"
+only_check gatekeeper STUB_BREAK=gatekeeper_unnotarized
+expect_only_row "Gatekeeper accepts it as notarized software" FAIL \
+  "--only gatekeeper: accepted, but NOT as notarized Developer ID"
+expect_rc nonzero "--only gatekeeper goes red on an unnotarized acceptance"
+expect_err "NOT as notarized Developer ID" "--only gatekeeper: the source line is what rejects it"
+
+build_scenario only-break-stapled
+only_check mount STUB_BREAK=stapler
+expect_only_row "mounts and yields a .app bundle" pass "--only stapled: its prerequisite mounts first"
+only_check stapled STUB_BREAK=stapler
+expect_only_row "the notarization ticket is stapled" FAIL \
+  "--only stapled: a notarized build with no stapled ticket"
+expect_rc nonzero "--only stapled goes red on a missing ticket"
+expect_err "no stapled notarization ticket" "--only stapled diagnoses the missing ticket"
+
+# THE FALSE GREEN THAT SHIPPED on a906f15, re-run on the split path: a missing
+# notary ticket carrying its own zero-count, beside the sentence that says the
+# build is ready. Both halves of that trap have to survive the restructuring.
+build_scenario only-break-syspolicy
+only_check mount STUB_BREAK=syspolicy_green_trap
+expect_only_row "mounts and yields a .app bundle" pass "--only syspolicy: its prerequisite mounts first"
+only_check syspolicy STUB_BREAK=syspolicy_green_trap
+expect_only_row "passes Apple's own distribution assessment" FAIL \
+  "--only syspolicy: a missing notary ticket beside 'ready for distribution' is NOT a pass"
+expect_rc nonzero "--only syspolicy goes red on the green trap"
+expect_err "not ready for distribution" "--only syspolicy: the finding wins over the pass sentence"
+
+FIX_MUTATE=mutate_dylib_too_new build_scenario only-break-deployment
+only_check mount
+expect_only_row "mounts and yields a .app bundle" pass "--only deployment: its prerequisite mounts first"
+only_check deployment
+expect_only_row "deployment target within the supported floor" FAIL \
+  "--only deployment: a bundled dylib requiring macOS 12.0"
+expect_rc nonzero "--only deployment goes red on a too-new dependency"
+expect_err "requires macOS 12.0" "--only deployment names the version it cannot accept"
+
+# A CHECK WHOSE PREREQUISITE NEVER RAN — the failure mode the split path invents.
+# With the extracted bundle living in a directory instead of a variable, a check
+# that cannot find it could sweep an empty list and report clean. Every one of
+# the eight must go red INSTEAD, and must name the check that has to run first:
+# "the check did not run" and "the check passed" are the two things this whole
+# suite exists to keep apart.
+build_scenario only-no-mount
+i=0
+for id in "${CHECK_IDS[@]}"; do
+  name="${CHECKS[$i]}"
+  i=$((i + 1))
+  [ "$id" = mount ] && continue
+  only_check "$id"
+  expect_only_row "$name" FAIL "--only $id with no mount in the state directory FAILs"
+  # EXACTLY 1, the FAILED-check code. This is the one place the two nonzero codes
+  # are genuinely confusable — a missing prerequisite looks like a wrong call —
+  # and reporting it as 2 would say the invocation was bad when the truth is that
+  # the check did not pass.
+  expect_rc 1 "--only $id with no mount exits 1: a FAILED check, not a wrong invocation"
+  expect_err "mounts and yields a .app bundle" "--only $id names the prerequisite it is missing"
+done
+
+# An id nobody runs must be an ERROR, not a silent no-op: a workflow stepping
+# through a mistyped id would otherwise show a green step for a check that never
+# happened, which is the one outcome this suite refuses to allow.
+build_scenario only-unknown-id
+only_check no-such-check
+expect_rc 2 "--only with an unknown id exits 2, the INVOCATION-was-wrong code"
+expect_err "unknown check id 'no-such-check'" "the unknown id is named back"
+if [ -z "$OUT" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  --only with an unknown id printed a row for a check that does not exist" >&2
+fi
+
+# EVERY invocation error, on the exact code. 2 rather than 1 is the whole point —
+# a caller that cannot tell them apart debugs the artifact when the call was
+# wrong — and it is about to be relied on by the workflow and by the Windows
+# lane, so it is asserted at every site rather than at the interesting one.
+mode_check only-noartifact --only version
+expect_rc 2 "--only without an artifact exits 2"
+expect_err "usage: check-macos.sh --only" "the usage error says what the invocation should look like"
+
+mode_check only-noid --only
+expect_rc 2 "--only with no id at all exits 2"
+
+mode_check report-noartifact --report
+expect_rc 2 "--report without an artifact exits 2"
+expect_err "usage: check-macos.sh --report" "the --report usage error says what it wanted"
+
+mode_check print-extra --print-checks "$SCEN_DMG"
+expect_rc 2 "--print-checks with an argument exits 2"
+expect_err "takes no other argument" "--print-checks says it wanted nothing else"
+
+mode_check cleanup-extra --cleanup "$SCEN_DMG"
+expect_rc 2 "--cleanup with an argument exits 2"
+
+mode_check unknown-option --bogus
+expect_rc 2 "an unknown option exits 2"
+expect_err "unknown option '--bogus'" "the unknown option is named back"
+
+# A state directory outlives its invocation, so a re-run of check 1 has to
+# extract OVER the previous bundle rather than inside it: a nested copy still
+# looks like a valid bundle while doubling the Mach-O enumeration, which is a
+# wrong answer wearing a right one's clothes.
+build_scenario only-remount
+only_check mount
+only_check mount
+expect_only_row "mounts and yields a .app bundle" pass "--only mount is repeatable in one state directory"
+expect_err "3 Mach-O file(s) in the bundle" "a re-mount re-extracts rather than nesting a second bundle"
+only_check paths
+expect_only_row "no build-machine library paths in any Mach-O" pass \
+  "the checks after a re-mount still see exactly the one bundle"
+
+# A FAILED re-mount must not leave the previous run's state standing. The state
+# directory outlives the process, so without invalidation the checks after it
+# would assess a bundle THIS invocation never produced — a verdict about the
+# wrong thing, delivered in green.
+only_check mount STUB_BREAK=mount
+expect_only_row "mounts and yields a .app bundle" FAIL "a re-mount that fails goes red"
+only_check signed
+expect_only_row "every Mach-O in the bundle is signed" FAIL \
+  "after a failed re-mount the checks do not assess the previous run's bundle"
+expect_err "mounts and yields a .app bundle" "a failed mount invalidates the state it did not produce"
+
+# A MOUNT THAT CANNOT RECORD WHAT IT EXTRACTED. The state file is check 1's only
+# output to the checks after it, so writing it is part of the check, not
+# bookkeeping after it: without that, check 1 reports pass and every check after
+# it goes red naming check 1 as the one that never ran — true, and useless.
+# A DIRECTORY in the state file's place rather than a chmod, because a
+# permission bit means nothing to a run that happens to be root and this
+# assertion has to hold either way.
+build_scenario only-unwritable-state
+mkdir -p "$SCEN_STATE/state.env"
+only_check mount
+expect_only_row "mounts and yields a .app bundle" FAIL \
+  "a mount that cannot record its state does not report pass"
+expect_rc nonzero "a mount that handed on nothing goes red"
+expect_err "could not write" "the mount check itself says why nothing was handed on"
+
+# A STATE DIRECTORY WHOSE PATH CARRIES A SPACE. The bundle already does — it is
+# "Unyt Sandbox.app" — and the state directory is one more path the workflow
+# hands in, so the same quoting has to hold for it or check 1's output never
+# reaches check 9. The same class of bug, one level out from the one this suite
+# already guards.
+build_scenario only-spaced-state
+SCEN_STATE="$SCEN_DIR/state dir"
+only_check mount
+expect_only_row "mounts and yields a .app bundle" pass \
+  "--only mount extracts into a state directory with a space in its path"
+# ...and ONE directory, not the two an unquoted mkdir makes of that path. Nothing
+# else can see the difference: the bundle still lands in the right place either
+# way, because the next `mkdir -p` recreates the parent the split left out. The
+# stray sibling is the only trace, so it is what gets asserted.
+if [ ! -d "$SCEN_DIR/state" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  a state path with a space was split into two directories" >&2
+fi
+only_check signed
+expect_only_row "every Mach-O in the bundle is signed" pass \
+  "a later check reads the bundle back out of a state path with a space"
+mode_check cleanup-spaced --cleanup
+if [ ! -d "$SCEN_STATE" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  --cleanup did not remove a state directory whose path has a space" >&2
+fi
+
+# THE STATE FILE EXISTING IS NOT THE STATE EXISTING. Same rule one level down: a
+# directory that lost its extracted copy hands a check a path to nothing, and a
+# sweep over nothing is the empty scan every guard in this suite refuses.
+build_scenario only-stale-state
+only_check mount
+rm -rf "$SCEN_STATE/Unyt Sandbox.app"
+only_check signed
+expect_only_row "every Mach-O in the bundle is signed" FAIL \
+  "--only against a state directory whose bundle has gone"
+expect_rc nonzero "a state file pointing at nothing goes red"
+expect_err "mounts and yields a .app bundle" "stale state names the prerequisite rather than sweeping nothing"
+
+# The rows the workflow collects. Nine steps append to one file, and the guard
+# step compares it against --print-checks — so the file has to accumulate, in
+# order, alongside the stdout row rather than instead of it.
+#
+# AND A FAILING ROW HAS TO REACH IT. Asserting only passing rows leaves the file
+# unable to carry a FAIL at all: a run that wrote `pass` into it regardless of
+# the verdict would satisfy every passing assertion, and the file is what the
+# summary and the did-it-run guard read. stdout being right does not make the
+# file right — they are two writes of the same verdict.
+build_scenario only-results-file
+only_check mount UNYT_SMOKE_RESULTS="$SCEN_DIR/rows.txt"
+only_check version UNYT_SMOKE_RESULTS="$SCEN_DIR/rows.txt"
+only_check stapled STUB_BREAK=stapler UNYT_SMOKE_RESULTS="$SCEN_DIR/rows.txt"
+expect_only_row "the notarization ticket is stapled" FAIL \
+  "the failing invocation whose row the file must carry"
+if [ "$(cat "$SCEN_DIR/rows.txt" 2>/dev/null)" = "$(printf '%s\n%s\n%s\n' \
+  "mounts and yields a .app bundle|pass" \
+  "the bundled app is the version the artifact claims|pass" \
+  "the notarization ticket is stapled|FAIL")" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  UNYT_SMOKE_RESULTS did not carry one true row per --only invocation" >&2
+  sed 's/^/      /' "$SCEN_DIR/rows.txt" 2>/dev/null >&2
+fi
+
+# --report never gates. It exists so the log carries the DMG's own assessment and
+# the main binary's linkage; a report block that could turn a step red would be a
+# check pretending not to be one.
+#
+# THE LIST, NOT THE HEADING ABOVE IT. "what the main binary links against" is
+# printed either way, so asserting it cannot tell a report that listed the
+# linkage from one that listed nothing — and the linkage is the whole content.
+build_scenario only-report
+only_check mount
+mode_check report --report "$SCEN_DMG"
+expect_rc zero "--report exits 0"
+expect_err "/usr/lib/libSystem.B.dylib" "--report lists what the main binary actually links against"
+expect_target spctl "$SCEN_DMG" "--report assesses the disk image itself, which nothing else does"
+
+build_scenario only-report-no-state
+mode_check report-no-state --report "$SCEN_DMG"
+expect_rc zero "--report exits 0 even with nothing extracted"
+expect_err "nothing extracted in" "--report says what it could not report on rather than failing"
+expect_no_err "/usr/lib/libSystem.B.dylib" \
+  "--report with nothing extracted lists no linkage — the same heading, no content"
+
+# --report is the one caller that carries on after failing to load state, so it
+# is where a HALF-loaded state would show: a state file naming a bundle that is
+# gone would otherwise have it list the linkage of a path to nothing — an empty
+# list that reads exactly like a binary with no dependencies.
+build_scenario only-report-stale-state
+only_check mount
+rm -rf "$SCEN_STATE/Unyt Sandbox.app"
+mode_check report-stale --report "$SCEN_DMG"
+expect_rc zero "--report exits 0 against a state directory whose bundle has gone"
+expect_err "nothing extracted in" "--report says so rather than listing the linkage of a path to nothing"
+expect_no_err "/usr/lib/libSystem.B.dylib" "a stale state directory produces no linkage list"
+
+# --cleanup is the only thing that removes a caller's state directory: the EXIT
+# trap must not, or the next step in the job would find nothing.
+build_scenario only-cleanup
+only_check mount
+if [ -f "$SCEN_STATE/state.env" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  --only mount left no state file for the checks after it" >&2
+fi
+mode_check cleanup --cleanup
+expect_rc zero "--cleanup exits 0"
+if [ ! -d "$SCEN_STATE" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  --cleanup left the state directory behind" >&2
+fi
+mode_check cleanup-again --cleanup
+expect_rc zero "--cleanup exits 0 with nothing to clean"
+
+# THE DETACH, which is the mode's entire reason for existing: a --only run killed
+# between attach and detach leaves the image mounted, and on a runner that
+# persists between jobs nothing else ever unmounts it. Removing the mountpoint
+# directory would look identical from outside, so only the stub's record of
+# having been ASKED to detach can see this.
+build_scenario only-cleanup-detach
+mkdir -p "$SCEN_STATE/mnt"
+mode_check cleanup-detach --cleanup
+expect_rc zero "--cleanup exits 0 with an image left attached"
+expect_target hdiutil "detach" "--cleanup detaches the mount a killed run left behind"
+expect_target hdiutil "$SCEN_STATE/mnt" "--cleanup detaches THAT mountpoint, derived from the state directory"
+# BEFORE the directory goes, not after. The EXIT trap would detach either way, so
+# ordering is the only thing the explicit detach in --cleanup buys — and getting
+# it wrong means rm -rf walking into an image that is still attached.
+expect_no_target hdiutil "[target-gone]" \
+  "--cleanup detaches while the mountpoint is still there, then removes it"
+
+# THE EXIT TRAP ITSELF, via the half of its job that leaves a trace. Its detach
+# fires only on a signal arriving mid-extraction; its work-directory removal
+# happens on every run that owns one, so pointing TMPDIR at an empty directory of
+# the scenario's makes "the trap ran" observable — anything left there is a run
+# that did not clean up after itself.
+build_scenario only-trap-cleanup
+mkdir -p "$SCEN_DIR/tmp"
+SCEN_STATE=""
+only_check mount TMPDIR="$SCEN_DIR/tmp"
+expect_only_row "mounts and yields a .app bundle" pass \
+  "--only with no state directory still mounts, out of a temp directory of its own"
+if [ -z "$(ls -A "$SCEN_DIR/tmp" 2>/dev/null)" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  the EXIT trap left its own work directory behind" >&2
+  ls -A "$SCEN_DIR/tmp" | sed 's/^/      /' >&2
+fi
+
+# THE SORT GUARD IS PER PROCESS, so it has to run in every mode. Each --only step
+# is its own process, and one that skipped the guard would report a floor
+# comparison it cannot make — quietly permissive, which reads as a pass. Refusing
+# to print even the check LIST is the right severity here: with no version
+# ordering nothing this script says about a floor can be trusted, and a workflow
+# that got a list would go on to run nine steps that cannot be right.
+FIX_NO_SORT_V=1 build_scenario only-break-sort
+only_check deployment
+expect_rc nonzero "--only stops on a sort without -V instead of reporting"
+expect_err "does not do version ordering" "--only diagnoses a sort without -V"
+mode_check print-no-sort --print-checks
+expect_rc nonzero "--print-checks stops on a sort without -V too"
+
 COMPLETED=1
 echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 293 ]; then
-  echo "::error::only $pass assertions ran; expected at least 293 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 430 ]; then
+  echo "::error::only $pass assertions ran; expected at least 430 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]

@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 # Does the macOS build a release shipped actually run on an ordinary user's Mac?
 #
-#   check-macos.sh <artifact.dmg>
+#   check-macos.sh <artifact.dmg>           every check, then the summary table
+#   check-macos.sh --print-checks           <id><TAB><name>, one per line, in run order
+#   check-macos.sh --only <id> <artifact>   exactly that check; one row on stdout
+#   check-macos.sh --report <artifact.dmg>  the ungated report block, nothing else
+#   check-macos.sh --cleanup                detach and remove the state directory
+#
+# EXIT STATUS: 0 the check passed, 1 it FAILED, 2 the INVOCATION was wrong (an
+# unknown id, a missing argument). Two rather than one for the last, so a caller
+# cannot read a mistyped id as a failing artifact — the same distinction check 8
+# draws between a rejected build and a rejected invocation.
+#
+# ONE CHECK PER CI STEP is what --only exists for: the workflow runs each check
+# as its own GitHub Actions step, so the step list reads like the summary table
+# instead of hiding it inside a single green blob. A step is a SEPARATE PROCESS,
+# so what check 1 mounts and extracts cannot live in a shell variable — it goes
+# into UNYT_SMOKE_STATE, and a check that cannot find it there FAILS. "The check
+# did not run" and "the check passed" must never be the same colour; that is the
+# same rule every guard below applies to its own tools, one level out.
 #
 # STATIC CHECKS ONLY, and that is a decision rather than a gap. This suite asks
 # "will this build work on a user's machine", so scaffolding may change the app's
@@ -32,8 +49,9 @@
 # summary table, and a hard rule that every check must be ABLE to fail —
 # test-macos-checks.sh proves that by driving this script end to end against
 # stubbed tools, feeding each check a deliberately broken input and requiring it
-# to go red. Nine defects in this suite made a check silently pass, and all nine
-# were found that way rather than by reading the code.
+# to go red, on both the whole-run and the --only path. Nine defects in this
+# suite made a check silently pass, and all nine were found that way rather than
+# by reading the code.
 #
 # Every check below is invoked BY NAME through run_check (and cleanup through a
 # trap), which shellcheck cannot see, so it reports each one as dead code. The
@@ -41,8 +59,43 @@
 # shellcheck disable=SC2329
 set -uo pipefail
 
-DMG="${1:?usage: check-macos.sh <artifact.dmg>}"
-[ -f "$DMG" ] || { echo "::error::artifact not found: $DMG" >&2; exit 1; }
+MODE=all
+ONLY=""
+DMG=""
+case "${1:-}" in
+  --print-checks)
+    MODE=print
+    [ "$#" -eq 1 ] || { echo "::error::--print-checks takes no other argument" >&2; exit 2; }
+    ;;
+  --cleanup)
+    MODE=cleanup
+    [ "$#" -eq 1 ] || { echo "::error::--cleanup takes no other argument" >&2; exit 2; }
+    ;;
+  --only)
+    MODE=only
+    [ "$#" -eq 3 ] || { echo "::error::usage: check-macos.sh --only <id> <artifact.dmg> (ids: --print-checks)" >&2; exit 2; }
+    ONLY="$2"
+    DMG="$3"
+    ;;
+  --report)
+    MODE=report
+    [ "$#" -eq 2 ] || { echo "::error::usage: check-macos.sh --report <artifact.dmg>" >&2; exit 2; }
+    DMG="$2"
+    ;;
+  --*)
+    echo "::error::unknown option '$1' — see the usage block at the top of this script" >&2
+    exit 2
+    ;;
+  *)
+    DMG="${1:?usage: check-macos.sh <artifact.dmg>}"
+    ;;
+esac
+# The modes that assess an artifact need one; --print-checks and --cleanup take
+# none, which is what lets the workflow read the check list before it has
+# downloaded anything.
+if [ -n "$DMG" ]; then
+  [ -f "$DMG" ] || { echo "::error::artifact not found: $DMG" >&2; exit 1; }
+fi
 
 # ── the support floor ─────────────────────────────────────────────────────────
 # The analogue of common.sh's UNYT_OLDEST_GLIBC, and the same contract: a shipped
@@ -80,12 +133,14 @@ UNYT_EXPECTED_TEAM_ID="${UNYT_EXPECTED_TEAM_ID:-}"
 UNYT_HDIUTIL_TIMEOUT="${UNYT_HDIUTIL_TIMEOUT:-120}"
 
 results=()
+LAST_RESULT=""
 record() { results+=("$1|$2"); }
 run_check() {
   local name="$1"; shift
   echo "" >&2
   echo "===== $name =====" >&2
-  if "$@"; then record "$name" pass; else record "$name" FAIL; fi
+  if "$@"; then LAST_RESULT=pass; else LAST_RESULT=FAIL; fi
+  record "$name" "$LAST_RESULT"
 }
 
 # One summary, printed from BOTH exit paths. An early abort that printed rows in
@@ -119,6 +174,10 @@ version_max() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
 # lexicographic one that puts 9.0 above 10.13 — every floor comparison below
 # would then be wrong, and wrong in the permissive direction, which is the one
 # that reads as a pass.
+#
+# BEFORE THE MODE DISPATCH, so it runs on EVERY invocation. Each --only step is
+# its own process, and a sort that cannot compare versions does not make one
+# check wrong, it makes them all quietly permissive — so no mode may skip it.
 if [ "$(printf '10.13\n9.0\n' | sort -V 2>/dev/null | tail -1)" != "10.13" ]; then
   echo "::error::this sort does not do version ordering (-V), so no deployment-target" >&2
   echo "  comparison here can be trusted. Refusing to report checks that cannot be right." >&2
@@ -227,123 +286,209 @@ macho_load_paths() {
   macho_rpaths "$1"
 }
 
-# ── 1. mount, extract, detach ─────────────────────────────────────────────────
-# Everything else runs against the COPY, so a silent failure here would leave
-# every check below assessing an empty directory. Each step is therefore checked
-# on its own, and the extracted bundle has to look like an app before we go on.
-WORK="$(mktemp -d)"
+# ── the state directory ───────────────────────────────────────────────────────
+# What check 1 extracts, and what every later check reads. UNYT_SMOKE_STATE names
+# a directory that OUTLIVES the process, which is what makes one-check-per-step
+# possible; without it we take a temp directory of our own and the run behaves
+# exactly as it always has.
+WORK=""
+STATE_FILE=""
+STATE_OWNED=""
 MOUNT=""
 APP=""
-# shellcheck disable=SC2317  # invoked through the EXIT trap
-cleanup() {
-  if [ -n "$MOUNT" ]; then
-    hdiutil detach -quiet "$MOUNT" 2>/dev/null ||
-      hdiutil detach -quiet -force "$MOUNT" 2>/dev/null || true
+EXEC_NAME=""
+MAIN_BIN=""
+
+init_state() {
+  if [ -n "${UNYT_SMOKE_STATE:-}" ]; then
+    WORK="$UNYT_SMOKE_STATE"
+    mkdir -p "$WORK" || { echo "::error::cannot create the state directory $WORK" >&2; exit 1; }
+  else
+    WORK="$(mktemp -d)"
+    STATE_OWNED=1
   fi
-  # Only ever the directory mktemp just handed us.
+  STATE_FILE="$WORK/state.env"
+  trap cleanup EXIT INT TERM
+}
+
+# shellcheck disable=SC2317  # invoked through the EXIT trap
+detach_mount() {
+  [ -n "$MOUNT" ] || return 0
+  hdiutil detach -quiet "$MOUNT" 2>/dev/null ||
+    hdiutil detach -quiet -force "$MOUNT" 2>/dev/null || true
+  MOUNT=""
+}
+# shellcheck disable=SC2317  # invoked through the EXIT trap
+remove_work() {
+  # Only ever the directory mktemp just handed us, or the one the caller named.
   case "$WORK" in
     /*/*) rm -rf "$WORK" ;;
   esac
 }
-trap cleanup EXIT INT TERM
+# shellcheck disable=SC2317  # invoked through the EXIT trap
+cleanup() {
+  detach_mount
+  # A caller's state directory has to survive this process — the next --only
+  # invocation reads the extracted bundle out of it — so only --cleanup removes
+  # that one. A temp directory of ours reaches nobody, so it goes here.
+  if [ -n "$STATE_OWNED" ]; then remove_work; fi
+}
 
-echo "===== runner =====" >&2
-echo "  $(sw_vers -productName 2>/dev/null || echo macOS) $(sw_vers -productVersion 2>/dev/null || echo '?') on $(uname -m)" >&2
-echo "  artifact: $(basename "$DMG")" >&2
+# What the mount check hands to everything after it, and nothing more: state that
+# no check reads is state that can go stale unnoticed, and EXEC_NAME is already
+# the tail of MAIN_BIN. Written with %q and read back by sourcing — the bundle is
+# "Unyt Sandbox.app", so a path with a space is the normal case here — and the
+# file is one this script wrote, in a directory it owns.
+save_state() {
+  {
+    printf 'APP=%q\n' "$APP"
+    printf 'MAIN_BIN=%q\n' "$MAIN_BIN"
+  } >"$STATE_FILE"
+}
 
-echo "" >&2
-echo "===== mount and extract =====" >&2
-mnt="$WORK/mnt"
-mkdir -p "$mnt"
-mount_ok=1
-# An explicit -mountpoint, rather than parsing hdiutil's tab-separated plist-ish
-# output for where it landed: one less thing to misparse, and it keeps the mount
-# inside the directory the trap already cleans up.
-#
-# NO -quiet: it suppresses the diagnosis as well as the noise, so a corrupt or
-# truncated download failed with nothing said about why. The output is captured
-# and printed only on failure.
-#
-# BOUNDED, and with stdin closed. A DMG carrying a software licence agreement
-# makes `hdiutil attach` WAIT FOR A KEYPRESS; on a runner that is a job hanging
-# until the six-hour ceiling with no diagnosis. </dev/null turns the prompt into
-# an immediate error, and the deadline catches anything else that stalls.
-# `timeout(1)` is not used because macOS does not ship it.
-attach_log="$WORK/hdiutil-attach.log"
-hdiutil attach -nobrowse -readonly -noverify -noautoopen \
-  -mountpoint "$mnt" "$DMG" >"$attach_log" 2>&1 </dev/null &
-hd_pid=$!
-hd_deadline=$(( $(date +%s) + UNYT_HDIUTIL_TIMEOUT ))
-hd_rc=0
-while kill -0 "$hd_pid" 2>/dev/null; do
-  if [ "$(date +%s)" -ge "$hd_deadline" ]; then
-    kill -TERM "$hd_pid" 2>/dev/null || true
-    sleep 1
-    kill -KILL "$hd_pid" 2>/dev/null || true
-    echo "::error::hdiutil did not finish attaching within ${UNYT_HDIUTIL_TIMEOUT}s — a disk image" >&2
-    echo "  carrying a licence agreement waits for a keypress, which would otherwise hang the job." >&2
-    hd_rc=124
-    break
+load_state() {
+  [ -f "$STATE_FILE" ] || return 1
+  # shellcheck source=/dev/null
+  . "$STATE_FILE"
+  if [ -n "$APP" ] && [ -d "$APP" ] && [ -n "$MAIN_BIN" ] && [ -f "$MAIN_BIN" ]; then
+    # Re-derived per invocation rather than persisted: enumerating a bundle is
+    # cheap, and a saved list could go stale against the directory it describes.
+    find_machos
+    return 0
   fi
-  sleep 1
-done
-[ "$hd_rc" -ne 0 ] || { wait "$hd_pid"; hd_rc=$?; }
-if [ "$hd_rc" -ne 0 ]; then
-  echo "::error::hdiutil could not mount $(basename "$DMG") (exit $hd_rc) — the disk image is unreadable:" >&2
-  sed 's/^/  /' "$attach_log" >&2 || true
-  mount_ok=""
-else
-  MOUNT="$mnt"
-  # `head -1` over find output is directory order, so with two .app bundles this
-  # would assess an arbitrary one — the same coin flip that made the AppImage
-  # lane watch xdg-mime instead of the app. A release DMG carries exactly one.
-  app_count="$(find "$mnt" -maxdepth 1 -name '*.app' -print | grep -c .)"
-  app_src="$(find "$mnt" -maxdepth 1 -name '*.app' -print | sort | head -1)"
-  if [ "$app_count" -gt 1 ]; then
-    echo "::error::the disk image contains $app_count .app bundles — refusing to pick one at random:" >&2
-    find "$mnt" -maxdepth 1 -name '*.app' -print | sed 's/^/  /' >&2
-    mount_ok=""
-  elif [ -z "$app_src" ]; then
-    echo "::error::the disk image mounted but contains no .app:" >&2
-    ls -la "$mnt" >&2
+  # THE FILE EXISTING IS NOT THE STATE EXISTING. A state directory that lost its
+  # extracted copy would otherwise hand a check a path to nothing, and a sweep
+  # over nothing is the empty scan every guard in this suite refuses. Clear what
+  # sourcing just set, so no caller can act on half of it.
+  APP=""; MAIN_BIN=""
+  return 1
+}
+
+# ABSENT STATE IS A FAILURE, NEVER A SKIP. A check that cannot see the extracted
+# bundle did not run, and a green row would say it did — the same rule the guards
+# inside the checks apply to their tools ("read nothing" is not "found nothing"),
+# one level out. Named here rather than inside the nine checks so that each
+# --only invocation still runs exactly the function the whole-run path runs.
+require_state() {
+  load_state && return 0
+  echo "::error::no extracted bundle in $WORK — '$(check_name mount)' has to run first," >&2
+  echo "  in the same UNYT_SMOKE_STATE directory. This check did not run; it did not pass." >&2
+  return 1
+}
+
+# ── 1. mount, extract, detach ─────────────────────────────────────────────────
+# Everything else runs against the COPY, so a silent failure here would leave
+# every check below assessing an empty directory. Each step is therefore checked
+# on its own, and the extracted bundle has to look like an app before we go on.
+check_mount() {
+  local mnt mount_ok attach_log hd_pid hd_deadline hd_rc app_count app_src
+  mnt="$WORK/mnt"
+  mkdir -p "$mnt"
+  # A failed mount must not leave an EARLIER run's state standing in a directory
+  # that outlives the process: the checks after it would then assess a bundle
+  # this invocation never produced, and report a verdict about the wrong thing.
+  rm -f "$STATE_FILE"
+  mount_ok=1
+  # An explicit -mountpoint, rather than parsing hdiutil's tab-separated plist-ish
+  # output for where it landed: one less thing to misparse, and it keeps the mount
+  # inside the directory the trap already cleans up.
+  #
+  # NO -quiet: it suppresses the diagnosis as well as the noise, so a corrupt or
+  # truncated download failed with nothing said about why. The output is captured
+  # and printed only on failure.
+  #
+  # BOUNDED, and with stdin closed. A DMG carrying a software licence agreement
+  # makes `hdiutil attach` WAIT FOR A KEYPRESS; on a runner that is a job hanging
+  # until the six-hour ceiling with no diagnosis. </dev/null turns the prompt into
+  # an immediate error, and the deadline catches anything else that stalls.
+  # `timeout(1)` is not used because macOS does not ship it.
+  attach_log="$WORK/hdiutil-attach.log"
+  hdiutil attach -nobrowse -readonly -noverify -noautoopen \
+    -mountpoint "$mnt" "$DMG" >"$attach_log" 2>&1 </dev/null &
+  hd_pid=$!
+  hd_deadline=$(( $(date +%s) + UNYT_HDIUTIL_TIMEOUT ))
+  hd_rc=0
+  while kill -0 "$hd_pid" 2>/dev/null; do
+    if [ "$(date +%s)" -ge "$hd_deadline" ]; then
+      kill -TERM "$hd_pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$hd_pid" 2>/dev/null || true
+      echo "::error::hdiutil did not finish attaching within ${UNYT_HDIUTIL_TIMEOUT}s — a disk image" >&2
+      echo "  carrying a licence agreement waits for a keypress, which would otherwise hang the job." >&2
+      hd_rc=124
+      break
+    fi
+    sleep 1
+  done
+  [ "$hd_rc" -ne 0 ] || { wait "$hd_pid"; hd_rc=$?; }
+  if [ "$hd_rc" -ne 0 ]; then
+    echo "::error::hdiutil could not mount $(basename "$DMG") (exit $hd_rc) — the disk image is unreadable:" >&2
+    sed 's/^/  /' "$attach_log" >&2 || true
     mount_ok=""
   else
-    APP="$WORK/$(basename "$app_src")"
-    # `ditto`, not `cp -R`: it is the documented way to copy a bundle and it
-    # preserves the extended attributes and symlinks a code signature is
-    # computed over. A copy that quietly drops them turns every signing check
-    # below into a test of the copy rather than of the artifact.
-    if ! ditto "$app_src" "$APP" >&2; then
-      echo "::error::ditto could not copy $app_src out of the image" >&2
+    MOUNT="$mnt"
+    # `head -1` over find output is directory order, so with two .app bundles this
+    # would assess an arbitrary one — the same coin flip that made the AppImage
+    # lane watch xdg-mime instead of the app. A release DMG carries exactly one.
+    app_count="$(find "$mnt" -maxdepth 1 -name '*.app' -print | grep -c .)"
+    app_src="$(find "$mnt" -maxdepth 1 -name '*.app' -print | sort | head -1)"
+    if [ "$app_count" -gt 1 ]; then
+      echo "::error::the disk image contains $app_count .app bundles — refusing to pick one at random:" >&2
+      find "$mnt" -maxdepth 1 -name '*.app' -print | sed 's/^/  /' >&2
+      mount_ok=""
+    elif [ -z "$app_src" ]; then
+      echo "::error::the disk image mounted but contains no .app:" >&2
+      ls -la "$mnt" >&2
+      mount_ok=""
+    else
+      APP="$WORK/$(basename "$app_src")"
+      # A state directory can outlive the invocation, so a re-run must not ditto a
+      # second bundle INSIDE the first: that doubles the Mach-O enumeration while
+      # still looking like a valid bundle, which is a wrong answer that reads as a
+      # right one.
+      rm -rf "$APP"
+      # `ditto`, not `cp -R`: it is the documented way to copy a bundle and it
+      # preserves the extended attributes and symlinks a code signature is
+      # computed over. A copy that quietly drops them turns every signing check
+      # below into a test of the copy rather than of the artifact.
+      if ! ditto "$app_src" "$APP" >&2; then
+        echo "::error::ditto could not copy $app_src out of the image" >&2
+        mount_ok=""
+      fi
+    fi
+    hdiutil detach -quiet "$MOUNT" >&2 || hdiutil detach -quiet -force "$MOUNT" >&2 || true
+    MOUNT=""
+  fi
+
+  # The copy must look like an app before anything asserts things about it.
+  EXEC_NAME=""
+  if [ -n "$mount_ok" ]; then
+    EXEC_NAME="$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist" 2>/dev/null)"
+    if [ -z "$EXEC_NAME" ] || [ ! -f "$APP/Contents/MacOS/$EXEC_NAME" ]; then
+      echo "::error::the extracted bundle has no Contents/MacOS/<CFBundleExecutable> — got '${EXEC_NAME:-<no Info.plist>}'" >&2
       mount_ok=""
     fi
   fi
-  hdiutil detach -quiet "$MOUNT" >&2 || hdiutil detach -quiet -force "$MOUNT" >&2 || true
-  MOUNT=""
-fi
 
-# The copy must look like an app before anything asserts things about it.
-EXEC_NAME=""
-if [ -n "$mount_ok" ]; then
-  EXEC_NAME="$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist" 2>/dev/null)"
-  if [ -z "$EXEC_NAME" ] || [ ! -f "$APP/Contents/MacOS/$EXEC_NAME" ]; then
-    echo "::error::the extracted bundle has no Contents/MacOS/<CFBundleExecutable> — got '${EXEC_NAME:-<no Info.plist>}'" >&2
-    mount_ok=""
+  [ -n "$mount_ok" ] || return 1
+
+  MAIN_BIN="$APP/Contents/MacOS/$EXEC_NAME"
+  echo "  extracted $(basename "$APP") (main binary: $EXEC_NAME)" >&2
+  # The state file is this check's ONLY output to the checks after it, so a mount
+  # that could not write one handed on nothing — and a green row would say it
+  # mounted, extracted AND passed the bundle along. The checks after it would
+  # then go red naming this one as the thing that never ran, which is true and
+  # useless: it is this check that knows why.
+  if ! save_state; then
+    echo "::error::could not write $STATE_FILE — the bundle was extracted but nothing after this" >&2
+    echo "  check can find it. Refusing to report a mount that handed on nothing." >&2
+    return 1
   fi
-fi
 
-if [ -z "$mount_ok" ]; then
-  # Everything downstream assesses the extracted copy; stop here rather than run
-  # nine checks against an empty directory and report their verdicts as facts.
-  record "mounts and yields a .app bundle" FAIL
-  print_summary_and_exit
-fi
-record "mounts and yields a .app bundle" pass
-MAIN_BIN="$APP/Contents/MacOS/$EXEC_NAME"
-echo "  extracted $(basename "$APP") (main binary: $EXEC_NAME)" >&2
-
-find_machos
-echo "  $(grep -c . "$MACHOS") Mach-O file(s) in the bundle" >&2
+  find_machos
+  echo "  $(grep -c . "$MACHOS") Mach-O file(s) in the bundle" >&2
+  return 0
+}
 
 # ── 2. the .app inside is the version the filename claims ─────────────────────
 # The DMG is assembled from a separately built .app, so a stale or mismatched
@@ -372,7 +517,6 @@ check_version_matches_artifact() {
   echo "OK: the bundle is version $got" >&2
   return 0
 }
-run_check "the bundled app is the version the artifact claims" check_version_matches_artifact
 
 # ── 3. the bundle's architecture matches this runner ──────────────────────────
 # Guards the MEANING of every check below: Gatekeeper, dyld and codesign all
@@ -396,7 +540,6 @@ check_arch_matches_runner() {
   echo "::error::this is a $archs build but the runner is $runner — pair the DMG with a matching runner" >&2
   return 1
 }
-run_check "the bundle's architecture matches the runner" check_arch_matches_runner
 
 # ── 4. nothing points at the build machine ────────────────────────────────────
 check_no_build_machine_paths() {
@@ -457,7 +600,6 @@ check_no_build_machine_paths() {
   echo "OK: $paths load path(s) across $total Mach-O file(s), none referencing $UNYT_BUILD_MACHINE_PREFIXES" >&2
   return 0
 }
-run_check "no build-machine library paths in any Mach-O" check_no_build_machine_paths
 
 # ── 5. every Mach-O is signed, and by whom ────────────────────────────────────
 # Per file, from a list this script built itself — NOT `codesign --deep --strict`,
@@ -545,7 +687,6 @@ check_every_macho_signed() {
   echo "OK: all $total Mach-O file(s) signed by Developer ID team$teams" >&2
   return 0
 }
-run_check "every Mach-O in the bundle is signed" check_every_macho_signed
 
 # ── 6. Gatekeeper accepts it, as NOTARIZED software ───────────────────────────
 # `accepted` alone is not enough: a locally signed or ad-hoc build can be
@@ -574,7 +715,6 @@ check_gatekeeper() {
   echo "OK: accepted by Gatekeeper as notarized Developer ID software" >&2
   return 0
 }
-run_check "Gatekeeper accepts it as notarized software" check_gatekeeper
 
 # ── 7. the notarization ticket travels with the artifact ──────────────────────
 # Notarized but unstapled works only while Apple's service is reachable: offline,
@@ -601,7 +741,6 @@ check_stapled() {
   echo "OK: the notarization ticket is stapled to the bundle" >&2
   return 0
 }
-run_check "the notarization ticket is stapled" check_stapled
 
 # ── 8. Apple's own pre-distribution assessment ────────────────────────────────
 # `syspolicy_check` (macOS 14+) is Apple's replacement for reading codesign
@@ -697,7 +836,6 @@ check_syspolicy() {
   echo "OK: passes Apple's pre-distribution assessment" >&2
   return 0
 }
-run_check "passes Apple's own distribution assessment" check_syspolicy
 
 # ── 9. deployment target within the support floor ─────────────────────────────
 # The macOS analogue of the .deb's declared-vs-computed dependency gate:
@@ -769,7 +907,6 @@ check_deployment_target() {
   [ "$status" -eq 0 ] && echo "OK: every slice is within its architecture's floor" >&2
   return "$status"
 }
-run_check "deployment target within the supported floor" check_deployment_target
 
 # ── report-only ───────────────────────────────────────────────────────────────
 # Not gated, and each for its own reason. The DMG's own assessment: Tauri
@@ -777,11 +914,147 @@ run_check "deployment target within the supported floor" check_deployment_target
 # is its business, not a property of our build — but it is the first thing
 # Gatekeeper looks at on a download, so it is worth seeing. The linkage list: it
 # is the bundle's implicit contract with the OS, and nothing else records it.
-echo "" >&2
-echo "===== report only =====" >&2
-echo "--- the disk image's own Gatekeeper assessment ---" >&2
-spctl -a -vvv -t open --context context:primary-signature "$DMG" 2>&1 | sed 's/^/  /' >&2 || true
-echo "--- what the main binary links against ---" >&2
-macho_load_paths "$MAIN_BIN" | sort -u | sed 's/^/  /' >&2
+report_only() {
+  echo "" >&2
+  echo "===== report only =====" >&2
+  echo "--- the disk image's own Gatekeeper assessment ---" >&2
+  spctl -a -vvv -t open --context context:primary-signature "$DMG" 2>&1 | sed 's/^/  /' >&2 || true
+  echo "--- what the main binary links against ---" >&2
+  if [ -n "$MAIN_BIN" ]; then
+    macho_load_paths "$MAIN_BIN" | sort -u | sed 's/^/  /' >&2
+  else
+    # Reached only via `--report` against a state directory the mount check has
+    # not filled. Still not a failure: this block never gates.
+    echo "  (nothing extracted in $WORK — run the mount check first)" >&2
+  fi
+}
 
-print_summary_and_exit
+# ── the sequence ──────────────────────────────────────────────────────────────
+# id | display name | function. THE one definition of what this suite runs and in
+# what order: the whole-run path loops over it, --only selects one entry from it,
+# and --print-checks prints it so the workflow can prove that every check
+# reported rather than that no step went red. The reasoning for each check is the
+# numbered section comment above it.
+CHECKS=(
+  "mount|mounts and yields a .app bundle|check_mount"
+  "version|the bundled app is the version the artifact claims|check_version_matches_artifact"
+  "arch|the bundle's architecture matches the runner|check_arch_matches_runner"
+  "paths|no build-machine library paths in any Mach-O|check_no_build_machine_paths"
+  "signed|every Mach-O in the bundle is signed|check_every_macho_signed"
+  "gatekeeper|Gatekeeper accepts it as notarized software|check_gatekeeper"
+  "stapled|the notarization ticket is stapled|check_stapled"
+  "syspolicy|passes Apple's own distribution assessment|check_syspolicy"
+  "deployment|deployment target within the supported floor|check_deployment_target"
+)
+
+print_checks() {
+  local entry id name
+  for entry in "${CHECKS[@]}"; do
+    IFS='|' read -r id name _ <<<"$entry"
+    printf '%s\t%s\n' "$id" "$name"
+  done
+}
+
+check_name() { # <id>
+  local entry id name
+  for entry in "${CHECKS[@]}"; do
+    IFS='|' read -r id name _ <<<"$entry"
+    if [ "$id" = "$1" ]; then printf '%s\n' "$name"; return 0; fi
+  done
+  return 1
+}
+
+runner_banner() {
+  echo "===== runner =====" >&2
+  echo "  $(sw_vers -productName 2>/dev/null || echo macOS) $(sw_vers -productVersion 2>/dev/null || echo '?') on $(uname -m)" >&2
+  echo "  artifact: $(basename "$DMG")" >&2
+}
+
+run_all() {
+  local entry id name fn
+  for entry in "${CHECKS[@]}"; do
+    IFS='|' read -r id name fn <<<"$entry"
+    run_check "$name" "$fn"
+    if [ "$id" = mount ] && [ "$LAST_RESULT" != pass ]; then
+      # Everything downstream assesses the extracted copy; stop here rather than
+      # run nine checks against an empty directory and report their verdicts as
+      # facts.
+      print_summary_and_exit
+    fi
+  done
+  report_only
+  print_summary_and_exit
+}
+
+# The prerequisite gate, then the check itself — wrapped so that run_check still
+# invokes the same nine functions the whole-run path invokes, unaltered.
+only_run() { # <id> <function>
+  case "$1" in
+    mount) ;;
+    *) require_state || return 1 ;;
+  esac
+  "$2"
+}
+
+run_only() { # <id>
+  local entry id name fn
+  for entry in "${CHECKS[@]}"; do
+    IFS='|' read -r id name fn <<<"$entry"
+    [ "$id" = "$1" ] || continue
+    run_check "$name" only_run "$id" "$fn"
+    # Exactly one row on stdout, in the `name|result` shape record() builds the
+    # summary table from, so a step reports its verdict without anything having
+    # to parse the narration on stderr.
+    printf '%s\n' "${results[0]}"
+    if [ -n "${UNYT_SMOKE_RESULTS:-}" ]; then
+      printf '%s\n' "${results[0]}" >>"$UNYT_SMOKE_RESULTS"
+    fi
+    [ "$LAST_RESULT" = pass ] && exit 0
+    exit 1
+  done
+  # An id nobody runs is not a silent no-op: the workflow would show a green step
+  # for a check that never happened, which is the one thing this suite refuses to
+  # do. Exit 2 rather than 1, so a wrong invocation cannot read as a failed check.
+  echo "::error::unknown check id '$1' — the ids are:" >&2
+  print_checks | sed 's/^/  /' >&2
+  exit 2
+}
+
+# ── dispatch ──────────────────────────────────────────────────────────────────
+case "$MODE" in
+  print)
+    # No artifact, no state directory, no trap: this is the list itself, and
+    # whatever reads it must be able to do so before anything is downloaded.
+    print_checks
+    exit 0
+    ;;
+  cleanup)
+    init_state
+    # A --only run killed between attach and detach leaves the image mounted, and
+    # the mountpoint is derived from the state directory rather than remembered,
+    # so a later process can still find it. Without UNYT_SMOKE_STATE there is by
+    # definition nothing to clean — every run's temp directory died with it — so
+    # this is a no-op that still exits 0 rather than a special case.
+    [ -d "$WORK/mnt" ] && MOUNT="$WORK/mnt"
+    detach_mount
+    remove_work
+    exit 0
+    ;;
+  report)
+    init_state
+    runner_banner
+    load_state || true
+    report_only
+    exit 0
+    ;;
+  only)
+    init_state
+    runner_banner
+    run_only "$ONLY"
+    ;;
+  all)
+    init_state
+    runner_banner
+    run_all
+    ;;
+esac
