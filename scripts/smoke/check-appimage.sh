@@ -3,27 +3,15 @@
 #
 #   check-appimage.sh <extracted-AppDir>
 #
-# An AppImage carries NO dependency metadata — there is no `Depends:` to diff, so
-# the .deb's drift gate has no equivalent here. What it has instead is a bundle of
-# libraries copied off the BUILD machine, and that is its own hazard: a library
-# bundled from a newer host imports newer glibc symbols and the whole AppImage
-# then refuses to start on an older distro, with no packaging error to explain it
-# (tauri-apps/tauri#15665 — over-bundled libwayland/glib/gstreamer breaking
-# AppImages built on newer Ubuntu).
+# No `Depends:` to diff — instead a bundle of libraries copied off the BUILD
+# machine, which is its own hazard (tauri-apps/tauri#15665).
 #
-# ON appimagelint — TRIED, DROPPED, do not retry. It asks the same ABI-floor
-# question, but it cannot answer it here: on ubuntu:22.04 it dies immediately
-# because its OWN bundled readelf requires GLIBC_2.38, which our oldest supported
-# target does not have; on ubuntu:24.04 its readelf runs but it then fails
-# FUSE-mounting the target ("process exited before we could read AppImage
-# mountpoint"), including with /dev/fuse, SYS_ADMIN and libfuse2t64 granted. The
-# check below covers the same ground without FUSE or a privileged container, and
-# more precisely — it reads every bundled ELF rather than the mounted image.
+# appimagelint was tried and dropped, do not retry: its own readelf needs
+# GLIBC_2.38 on our oldest target, and it fails FUSE-mounting on 24.04 even with
+# /dev/fuse and SYS_ADMIN.
 #
-# So the gate is the glibc ceiling across the WHOLE BUNDLE, not just the
-# executable. That distinction is load-bearing: for v0.100.0 the inner binary
-# needs 2.34 while the bundled libwebkit2gtk needs 2.35, so checking only the
-# executable would report a floor one release older than the truth.
+# The gate is the glibc ceiling across the WHOLE BUNDLE: for v0.100.0 the inner
+# binary needs 2.34 while bundled libwebkit2gtk needs 2.35.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,13 +55,9 @@ while read -r f; do
   # `|| true`: most files here import no GLIBC_ symbols at all, and under
   # `set -e` + pipefail the empty grep would abort the whole scan silently.
   v="$(objdump -T "$f" 2>/dev/null | grep -oP 'GLIBC_\K[0-9.]+' | sort -Vu | tail -1 || true)"
-  # `if`, NOT `[ -n "$v" ] && printf`: as an AND-list the body's exit status is
-  # the test's, so a LAST file with no GLIBC_ symbols made the whole `while`
-  # return 1, pipefail carried it through `| sort`, and `set -e` killed the
-  # script — silently skipping every check below, including the ceiling
-  # comparison this file exists for. Which file lands last is `find` order, so
-  # the gate was a coin flip per build, and it failed with a wrong diagnosis
-  # (looks like "too-new glibc", is actually a data-only .so).
+  # `if`, NOT `[ -n "$v" ] && printf`: as an AND-list a LAST file with no GLIBC_
+  # symbols makes the `while` return 1, pipefail carries it, and set -e skips
+  # every check below. `find` order made it a coin flip per build.
   if [ -n "$v" ]; then printf '%s %s\n' "$v" "$f"; fi
 done <"$elf_list" | sort -V >"$elf_list.versions"
 
@@ -101,10 +85,8 @@ else
 fi
 
 # ── what it still expects FROM the system ────────────────────────────────────
-# Reported, not gated: an AppImage is not required to bundle everything, and a
-# real desktop has X11/fontconfig. But nothing else records this list, and it is
-# the AppImage's implicit dependency contract — the thing a user hits when the
-# download "just doesn't start" on a minimal system.
+# Reported, not gated: nothing else records the AppImage's implicit dependency
+# contract on the host.
 echo "--- libraries NOT bundled, so required from the system ---" >&2
 external="$(ldd "$inner" 2>/dev/null | grep 'not found' | awk '{print $1}' | sort -u || true)"
 if [ -n "$external" ]; then

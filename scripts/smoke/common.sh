@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Shared constants for the release install-smoke. Sourced, never run.
 
-# The Tauri bundle identifier (unyt/src-tauri/tauri.conf.json). Tauri keys
-# app_log_dir()/app_data_dir() on it, so the app's logs land under
-# $XDG_DATA_HOME/<id>/logs. The AGENT_ID suffix the app applies to its app_dirs2
-# CONDUCTOR dir never reaches this one.
+# From unyt/src-tauri/tauri.conf.json. Tauri keys app_log_dir() on it, so logs
+# land under $XDG_DATA_HOME/<id>/logs — no AGENT_ID suffix on this one.
 UNYT_BUNDLE_ID="co.unyt.unyt.sandbox"
 
 # The glibc of the OLDEST distro we support (Ubuntu 22.04 ships 2.35) — i.e. the
@@ -16,16 +14,13 @@ UNYT_OLDEST_GLIBC="2.35"
 # ── The health oracle ─────────────────────────────────────────────────────────
 # Statuses as the app's own log writes them (unyt/src-tauri/src/runtime/status.rs
 # — `Status update: {from} -> {to}`), plus the webview breadcrumb.
-# HEALTHY IS A SET ON PURPOSE — all four are genuine first-run outcomes for a
-# shipped build, which is what lets this run with or without network access to
-# joining.unyt.dev. Do not simplify it to one.
+# HEALTHY IS A SET ON PURPOSE — all four are genuine first-run outcomes, which is
+# what lets this run with or without network access. Do not simplify it to one.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_BACKEND_READY='Status update: .* -> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|Status update: .* -> Ready\b'
 
-# Terminal failures. `ConductorDisconnected` is deliberately NOT here — it is the
-# transient first step of the heartbeat's reconnect backoff (5s -> 60s;
-# unyt/src-tauri/src/utils/holochain.rs) and only becomes `ConductorCrashed`
-# after ~5 minutes of consecutive failures.
+# `ConductorDisconnected` is deliberately NOT here: it is the transient first
+# step of the reconnect backoff, and becomes `ConductorCrashed` after ~5 min.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_FAILED='panicked at|Status update: .* -> (ConductorError|AppInstallationError|Error)\(|Status update: .* -> (ConductorCrashed|HcAuthFailed|LairInvalidPassword|NetworkUnreachable)\b'
 
@@ -34,18 +29,13 @@ UNYT_RE_FAILED='panicked at|Status update: .* -> (ConductorError|AppInstallation
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
 
-# A prior version's identity being carried into this one
-# (unyt/src-tauri/src/runtime/boot/identity.rs). On a cold install there is no
-# prior lair to carry, so this line MUST NOT appear — its presence means the run
-# is a warm start over leaked state and is not testing what users hit.
+# On a cold install there is no prior lair, so this MUST NOT appear — its
+# presence means a warm start over leaked state.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_CARRIED_IDENTITY='identity: agent identity carried forward'
 
-# The POSITIVE counterpart, logged on the cold path
-# (identity.rs: `latest_prior_holochain_dir` finds nothing). Required alongside
-# the absence above, because "the carry line is absent" is also satisfied by a
-# boot that never reached the identity check at all — an absence-only assertion
-# cannot tell "clean install" from "never ran".
+# The POSITIVE counterpart, required alongside the absence above: an
+# absence-only assertion cannot tell "clean install" from "never ran".
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_FRESH_IDENTITY='identity: no prior data-root identity; using a fresh identity'
 
@@ -65,17 +55,11 @@ smoke_supports_ui_ready() {
 }
 
 # ── the matchers ─────────────────────────────────────────────────────────────
-# The ONLY place these patterns are applied. Both launch-and-assert.sh and
-# test-oracle.sh go through these functions, so the regression test exercises the
-# real call sites rather than a copy of them — which is the whole point, since
-# every oracle bug so far has been in the invocation, not the pattern:
-#   - a pattern starting with "-" parsed as grep OPTIONS (needs -e)
-#   - an alternation matched against the merged log, so an unrelated subsystem
-#     line satisfied it (needs the `Status update:` anchor)
-# All read the log on stdin.
-# The `(...)` around the pattern before appending `.*` is load-bearing: `A|B.*`
-# binds the `.*` to B alone, so a match on any earlier alternative was reported
-# truncated at the alternative's own end.
+# The ONLY place these patterns are applied, so the regression test drives the
+# real call sites — every oracle bug so far has been in the invocation, not the
+# pattern (a leading "-" read as grep options; an unanchored alternation matching
+# another subsystem's line). The `(...)` before `.*` is load-bearing: `A|B.*`
+# binds `.*` to B alone and truncates a match on any earlier alternative.
 smoke_match_backend_ready(){ grep -qE -e "$UNYT_RE_BACKEND_READY"; }
 smoke_first_backend_ready(){ grep -oE -e "($UNYT_RE_BACKEND_READY).*" | head -1; }
 smoke_match_ui_ready()     { grep -qF -e "$UNYT_RE_UI_READY"; }
@@ -86,9 +70,7 @@ smoke_first_failures()     { grep -oE -e "($UNYT_RE_FAILED).*" | head -3; }
 smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
 
 # ── dependency comparison ────────────────────────────────────────────────────
-# Compare a COMPUTED dependency list against what the package DECLARES, and emit
-# one finding per line: `MISSING <dep>`, `UNCONSTRAINED <dep>`, or
-# `TOOLOW <dep> declared <constraint>`.
+# Computed vs DECLARED: one finding per line, MISSING/UNCONSTRAINED/TOOLOW.
 smoke_split_constraint() {
   local c="${1:-}" op ver
   c="${c#"${c%%[![:space:]]*}"}"; c="${c%"${c##*[![:space:]]}"}"
@@ -165,10 +147,8 @@ smoke_depends_gaps() {
 }
 
 # ── the check runner ─────────────────────────────────────────────────────────
-# The shape both container drivers present: a registry of checks, ONE definition
-# of the sequence, and a `--only <id>` mode that runs exactly one of them,
-# resuming from a state directory an earlier invocation left behind. release-
-# smoke.yaml drives that mode so each check is its own CI step.
+# One definition of the sequence, plus a `--only <id>` mode resuming from a state
+# directory — which is how each check becomes its own CI step.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 smoke_results=()
 
@@ -188,10 +168,8 @@ smoke_check_field() { # <id> <2=name|3=function>
 smoke_check_name() { smoke_check_field "$1" 2; }
 smoke_check_fn()   { smoke_check_field "$1" 3; }
 
-# `<id><TAB><display name>`, in run order. The single source of truth for what
-# the sequence contains: release-smoke.yaml's guard reads it to prove every
-# declared check reported, so a step nobody wired up is a red run rather than a
-# check that quietly stopped existing.
+# `<id><TAB><display name>`, in run order. release-smoke.yaml's guard reads this
+# to prove every declared check reported.
 smoke_print_checks() {
   local entry rest
   for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
@@ -201,9 +179,7 @@ smoke_print_checks() {
 }
 
 # ── state between checks ──────────────────────────────────────────────────────
-# A GitHub Actions step is a separate process, so what check 1 learned — the
-# package name, the installed binary, whether it got that far at all — has to
-# outlive it. Inside the container that is just a file in /tmp.
+# A CI step is a separate process, so check 1's findings must outlive it.
 smoke_state_dir()   { printf '%s\n' "${UNYT_SMOKE_STATE:-/tmp/unyt-smoke-state}"; }
 smoke_state_file()  { printf '%s/state.env\n' "$(smoke_state_dir)"; }
 smoke_state_reset() { mkdir -p "$(smoke_state_dir)" && : >"$(smoke_state_file)"; }
@@ -236,15 +212,9 @@ smoke_state_load() {
 smoke_state_var()   { printf 'RAN_%s\n' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"; }
 
 # ── the order guard ───────────────────────────────────────────────────────────
-# THE ORDER IS LOAD-BEARING (see container-checks.sh), and running one check per
-# invocation is exactly how it could stop being honoured — nothing about
-# `--only depends` says the pristine install has already happened. So the
-# sequence is enforced rather than assumed: a check refuses unless every check
-# before it has RUN, and unless the gate check PASSED.
-#
-# Ran, not passed, for the predecessors: two independent checks must both report
-# in CI, so one going red may not silence the next. The gate is the exception —
-# with no install there is nothing downstream to look at.
+# The order is load-bearing and `--only` is how it could stop being honoured, so
+# it is enforced: every earlier check must have RUN, and the gate must have
+# PASSED. Ran, not passed, for the rest — one red check may not silence the next.
 smoke_order_ok() { # <id>
   local id="$1" entry eid var missing=""
   for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
@@ -291,10 +261,8 @@ smoke_run_one() { # <id>
   return "$rc"
 }
 
-# Rows on stdout, narration on stderr, so whatever reads the log can tell a
-# check's verdict from its commentary. Also appended to UNYT_SMOKE_RESULTS when
-# set: run-smoke.sh reads the row back out of the container, and a row that only
-# ever existed on a pipe is lost the moment the container is.
+# Rows on stdout, narration on stderr. Also to UNYT_SMOKE_RESULTS: a row that
+# only ever existed on a pipe dies with the container.
 smoke_emit_rows() {
   local row
   [ "${#smoke_results[@]}" -gt 0 ] || return 0

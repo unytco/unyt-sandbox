@@ -7,55 +7,20 @@
 #   check-macos.sh --report <artifact.dmg>  the ungated report block, nothing else
 #   check-macos.sh --cleanup                detach and remove the state directory
 #
-# EXIT STATUS: 0 the check passed, 1 it FAILED, 2 the INVOCATION was wrong (an
-# unknown id, a missing argument). Two rather than one for the last, so a caller
-# cannot read a mistyped id as a failing artifact — the same distinction check 8
-# draws between a rejected build and a rejected invocation.
+# EXIT: 0 pass, 1 the check FAILED, 2 the INVOCATION was wrong — so a mistyped
+# id can never read as a failing artifact.
 #
-# ONE CHECK PER CI STEP is what --only exists for: the workflow runs each check
-# as its own GitHub Actions step, so the step list reads like the summary table
-# instead of hiding it inside a single green blob. A step is a SEPARATE PROCESS,
-# so what check 1 mounts and extracts cannot live in a shell variable — it goes
-# into UNYT_SMOKE_STATE, and a check that cannot find it there FAILS. "The check
-# did not run" and "the check passed" must never be the same colour; that is the
-# same rule every guard below applies to its own tools, one level out.
+# Static checks only, and deliberately: tauri-driver has no macOS support and
+# Apple's EULA caps VMs at two per Mac, so there is no pristine-VM equivalent of
+# the Linux containers. A WebDriver test was built for this and discarded; don't
+# retry it.
 #
-# STATIC CHECKS ONLY, and that is a decision rather than a gap. This suite asks
-# "will this build work on a user's machine", so scaffolding may change the app's
-# SURROUNDINGS but never the artifact or its dependency set — and on macOS every
-# dynamic option breaks that rule or does not exist: tauri-driver has no macOS
-# support at all, and Apple's EULA caps virtualization at two VMs per physical
-# Mac, so there is no pristine-VM equivalent of the Linux lane's containers.
-# A WebDriver UI test was built for this and deliberately discarded. Do not
-# retry either; what remains is what the artifact itself declares, and that is
-# where macOS's real shipping failures live:
+# A CI step is a separate process, so check 1's extracted bundle lives in
+# UNYT_SMOKE_STATE and a check that cannot find it FAILS — "did not run" and
+# "passed" must never be the same colour.
 #
-#   - Gatekeeper refuses an unsigned, unnotarized or unstapled build outright,
-#     and the user sees "damaged and can't be opened", not a signing error.
-#   - A link against a library that exists only on the BUILD machine
-#     (/opt/homebrew, /usr/local) resolves there and nowhere else.
-#   - A deployment target ABOVE what the bundle claims to support: the app
-#     launches on the OS its Info.plist advertises and dies in dyld.
-#
-# THIS IS A SEPARATE LANE from the Linux one on purpose: macOS has no equivalent
-# of dpkg's dependency metadata, so there is nothing to diff and it needs its own
-# answer rather than a matrix row.
-#
-# ARCH MUST MATCH THE RUNNER. An aarch64 build cannot be assessed on an Intel
-# runner (Gatekeeper and dyld both refuse it), so the caller pairs each DMG with
-# its own runner and check 3 below proves the pairing rather than assuming it.
-#
-# The Linux lane's shape carries over: one `check|result` row per check, a
-# summary table, and a hard rule that every check must be ABLE to fail —
-# test-macos-checks.sh proves that by driving this script end to end against
-# stubbed tools, feeding each check a deliberately broken input and requiring it
-# to go red, on both the whole-run and the --only path. Nine defects in this
-# suite made a check silently pass, and all nine were found that way rather than
-# by reading the code.
-#
-# Every check below is invoked BY NAME through run_check (and cleanup through a
-# trap), which shellcheck cannot see, so it reports each one as dead code. The
-# directive has to precede the first command to apply to the whole file.
+# Checks are invoked by name through run_check, which shellcheck reads as dead
+# code; the directive must precede the first command to cover the file.
 # shellcheck disable=SC2329
 set -uo pipefail
 
@@ -98,33 +63,22 @@ if [ -n "$DMG" ]; then
 fi
 
 # ── the support floor ─────────────────────────────────────────────────────────
-# The analogue of common.sh's UNYT_OLDEST_GLIBC, and the same contract: a shipped
-# binary may not require MORE than the oldest OS we promise to run on. 10.13 is
-# what release-tauri-app.yaml sets as MACOSX_DEPLOYMENT_TARGET and what the app's
-# Info.plist claims as LSMinimumSystemVersion — one number, asserted here against
-# what the Mach-O load commands actually say.
+# A shipped binary may not require more than the oldest OS we promise to run on.
+# Must match MACOSX_DEPLOYMENT_TARGET and Info.plist's LSMinimumSystemVersion.
 UNYT_OLDEST_MACOS="10.13"
 
-# arm64 macOS did not exist before Big Sur, so EVERY arm64 binary reports at
-# least 11.0 and the 10.13 floor above is unreachable there. Measured, not
-# assumed: v0.100.0's aarch64 binary reports minos 11.0 while its Info.plist
-# claims 10.13, and treating that as a violation would paint the arm64 lane red
-# for a build with nothing wrong with it. The effective floor is therefore the
-# HIGHER of the two, per architecture — which keeps the check sharp on arm64
-# (a bundled dylib built at 11.3 still fails) instead of disabling it.
+# arm64 macOS postdates Big Sur, so every arm64 binary reports >= 11.0 and the
+# 10.13 floor is unreachable there. The effective floor is the HIGHER of the two,
+# per arch — keeps the check sharp on arm64 rather than disabling it.
 UNYT_ARM64_MIN_MACOS="11.0"
 
 # Prefixes that exist on a developer's Mac and on no user's. Homebrew's two
 # prefixes (Intel /usr/local, Apple-silicon /opt/homebrew) plus MacPorts.
 UNYT_BUILD_MACHINE_PREFIXES='/usr/local/ /opt/homebrew/ /opt/local/'
 
-# The Apple Developer team every Mach-O in the bundle must be signed by
-# (release-tauri-app.yaml's APPLE_TEAM_ID). Not a secret — a team identifier is
-# public in every signature we ship — but it is not recorded in this repo, so it
-# is left empty until someone fills it in. EMPTY DOES NOT DISABLE THE CHECK: the
-# signature must still name a Developer ID Application authority and carry SOME
-# team, and every Mach-O in the bundle must agree on which. Setting it turns
-# "signed by a real team" into "signed by OUR team".
+# Not a secret, just not recorded here. EMPTY DOES NOT DISABLE THE CHECK: every
+# Mach-O must still name a Developer ID authority and agree on one team. Setting
+# it turns "signed by a real team" into "signed by OUR team".
 UNYT_EXPECTED_TEAM_ID="${UNYT_EXPECTED_TEAM_ID:-}"
 
 # How long `hdiutil attach` may take before it is treated as stuck. Generous for
@@ -169,11 +123,8 @@ print_summary_and_exit() {
 # check-binary-compat.sh uses for glibc. 10.13 < 11.0 < 26.5 all sort correctly.
 version_max() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
 
-# ...but PROVE that this sort has -V before depending on it. macOS ships BSD
-# sort, not GNU, and a sort without version ordering falls back to a
-# lexicographic one that puts 9.0 above 10.13 — every floor comparison below
-# would then be wrong, and wrong in the permissive direction, which is the one
-# that reads as a pass.
+# PROVE this sort has -V first: BSD sort without it orders 9.0 above 10.13, and
+# every floor comparison below would be wrong in the permissive direction.
 if [ "$(printf '10.13\n9.0\n' | sort -V 2>/dev/null | tail -1)" != "10.13" ]; then
   echo "::error::this sort does not do version ordering (-V), so no deployment-target" >&2
   echo "  comparison here can be trusted. Refusing to report checks that cannot be right." >&2
@@ -182,10 +133,8 @@ fi
 # "$1 is within (<=) the floor $2"
 version_within() { [ "$(version_max "$1" "$2")" = "$2" ]; }
 
-# Mach-O by MAGIC BYTES, not by `file`'s wording: the phrasing differs between
-# macOS's file(1) and every other implementation, so a grep of it is a check that
-# quietly matches nothing on the wrong host — and this script is deliberately
-# runnable off a Mac for its own regression test.
+# Magic bytes, not `file`'s wording — which differs per implementation, so a
+# grep of it quietly matches nothing off a Mac (where the regression test runs).
 is_macho() {
   case "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" in
     cffaedfe|cefaedfe|feedface|feedfacf|cafebabe|cafebabf) return 0 ;;
@@ -193,12 +142,9 @@ is_macho() {
   esac
 }
 
-# EVERY Mach-O in the bundle, not just Contents/MacOS. A bundled dependency
-# carrying a different deployment target than the app claims, or linking against
-# the build machine's Homebrew, is a documented real-world failure and lives in
-# Contents/Frameworks or Contents/Resources — exactly where `codesign --deep` has
-# been observed to miss an unsigned binary. Written to a file rather than piped
-# so the callers cannot lose the loop's exit status (see check-appimage.sh's N1).
+# EVERY Mach-O, not just Contents/MacOS: `codesign --deep` has been observed to
+# miss an unsigned binary in Contents/Resources. Written to a file, not piped, so
+# callers cannot lose the loop's exit status.
 MACHOS=""
 find_machos() {
   MACHOS="$WORK/machos.list"
@@ -211,11 +157,7 @@ find_machos() {
   return 0
 }
 
-# The oldest macOS a given ARCHITECTURE can run at all. arm64 macOS did not exist
-# before Big Sur, so every arm64 binary reports at least 11.0 and the 10.13 floor
-# is unreachable there; measured, not assumed (v0.100.0's aarch64 binary reports
-# minos 11.0 under a 10.13 claim). The effective floor is the higher of the two,
-# which keeps the check sharp on arm64 rather than disabling it.
+# The oldest macOS an ARCH can run at all — see UNYT_MACOS_FLOOR above.
 arch_floor() {
   case "$1" in
     arm64*) version_max "$UNYT_OLDEST_MACOS" "$UNYT_ARM64_MIN_MACOS" ;;
@@ -223,18 +165,11 @@ arch_floor() {
   esac
 }
 
-# The macOS floor a single Mach-O SLICE demands. TWO load commands, because the
-# two architectures we ship do not use the same one: v0.100.0's aarch64 binary
-# carries LC_BUILD_VERSION (`minos 11.0`) and its x86_64 twin carries the older
-# LC_VERSION_MIN_MACOSX (`version 10.13`). Reading only LC_BUILD_VERSION — the
-# obvious modern choice — finds NOTHING on the x86_64 build, and "nothing found"
-# must never read as "no requirement", so the caller fails closed on an empty
-# result. Both shapes verified against the real v0.100.0 artifacts.
-#
-# PER SLICE, because a universal binary carries one per architecture with
-# DIFFERENT minimums, and they are judged against different floors: an arm64
-# slice at 11.0 is correct while an x86_64 slice at 11.0 has silently dropped
-# every Intel Mac on 10.13-10.15.
+# TWO load commands: our aarch64 carries LC_BUILD_VERSION, its x86_64 twin the
+# older LC_VERSION_MIN_MACOSX. Reading only the modern one finds nothing on
+# x86_64, and "nothing found" must not read as "no requirement" — fails closed.
+# Per SLICE: an arm64 slice at 11.0 is correct, an x86_64 slice at 11.0 has
+# dropped every Intel Mac on 10.13-10.15.
 macho_min_os() { # <file> [arch]
   local f="$1" a="${2:-}"
   if [ -n "$a" ]; then set -- -arch "$a" -l "$f"; else set -- -l "$f"; fi
@@ -255,10 +190,8 @@ macho_dep_paths() {
   printf '%s\n' "$out"
 }
 
-# The runtime search paths baked into it. An rpath pointing at /opt/homebrew is
-# the same bug as a direct link against it — check-binary-compat.sh flags the ELF
-# equivalent for the same reason. LEGITIMATELY EMPTY, unlike the dependencies
-# above: most binaries carry no LC_RPATH at all, so this one gets no floor.
+# An rpath into /opt/homebrew is the same bug as a direct link. Legitimately
+# empty, unlike the dependencies above — most binaries carry no LC_RPATH.
 macho_rpaths() {
   otool -l "$1" 2>/dev/null | awk '
     $1 == "cmd" && $2 == "LC_RPATH" { r = 1; next }
@@ -274,10 +207,8 @@ macho_load_paths() {
 }
 
 # ── the state directory ───────────────────────────────────────────────────────
-# What check 1 extracts, and what every later check reads. UNYT_SMOKE_STATE names
-# a directory that OUTLIVES the process, which is what makes one-check-per-step
-# possible; without it we take a temp directory of our own and the run behaves
-# exactly as it always has.
+# UNYT_SMOKE_STATE outlives the process, which is what makes one-check-per-step
+# possible. Without it, a temp directory of our own and the old behaviour.
 WORK=""
 STATE_FILE=""
 STATE_OWNED=""
@@ -321,11 +252,8 @@ cleanup() {
   if [ -n "$STATE_OWNED" ]; then remove_work; fi
 }
 
-# What the mount check hands to everything after it, and nothing more: state that
-# no check reads is state that can go stale unnoticed, and EXEC_NAME is already
-# the tail of MAIN_BIN. Written with %q and read back by sourcing — the bundle is
-# "Unyt Sandbox.app", so a path with a space is the normal case here — and the
-# file is one this script wrote, in a directory it owns.
+# %q and sourced back: the bundle is "Unyt Sandbox.app", so a path with a space
+# is the normal case. State no check reads is state that goes stale unnoticed.
 save_state() {
   {
     printf 'APP=%q\n' "$APP"
@@ -343,19 +271,14 @@ load_state() {
     find_machos
     return 0
   fi
-  # THE FILE EXISTING IS NOT THE STATE EXISTING. A state directory that lost its
-  # extracted copy would otherwise hand a check a path to nothing, and a sweep
-  # over nothing is the empty scan every guard in this suite refuses. Clear what
-  # sourcing just set, so no caller can act on half of it.
+  # The file existing is not the state existing — a lost extracted copy would
+  # hand a check a path to nothing. Clear it so nobody acts on half.
   APP=""; MAIN_BIN=""
   return 1
 }
 
-# ABSENT STATE IS A FAILURE, NEVER A SKIP. A check that cannot see the extracted
-# bundle did not run, and a green row would say it did — the same rule the guards
-# inside the checks apply to their tools ("read nothing" is not "found nothing"),
-# one level out. Named here rather than inside the nine checks so that each
-# --only invocation still runs exactly the function the whole-run path runs.
+# ABSENT STATE IS A FAILURE, NEVER A SKIP: a check that cannot see the bundle
+# did not run, and a green row would say it did.
 require_state() {
   load_state && return 0
   echo "::error::no extracted bundle in $WORK — '$(check_name mount)' has to run first," >&2
@@ -364,9 +287,7 @@ require_state() {
 }
 
 # ── 1. mount, extract, detach ─────────────────────────────────────────────────
-# Everything else runs against the COPY, so a silent failure here would leave
-# every check below assessing an empty directory. Each step is therefore checked
-# on its own, and the extracted bundle has to look like an app before we go on.
+# Everything else runs against the COPY, so each step here is checked on its own.
 check_mount() {
   local mnt mount_ok attach_log hd_pid hd_deadline hd_rc app_count app_src
   mnt="$WORK/mnt"
@@ -419,15 +340,11 @@ check_mount() {
       mount_ok=""
     else
       APP="$WORK/$(basename "$app_src")"
-      # A state directory can outlive the invocation, so a re-run must not ditto a
-      # second bundle INSIDE the first: that doubles the Mach-O enumeration while
-      # still looking like a valid bundle, which is a wrong answer that reads as a
-      # right one.
+      # A re-run must not ditto a second bundle INSIDE the first: that doubles
+      # the Mach-O enumeration while still looking valid.
       rm -rf "$APP"
-      # `ditto`, not `cp -R`: it is the documented way to copy a bundle and it
-      # preserves the extended attributes and symlinks a code signature is
-      # computed over. A copy that quietly drops them turns every signing check
-      # below into a test of the copy rather than of the artifact.
+      # `ditto`, not `cp -R`: preserves the xattrs and symlinks a signature is
+      # computed over, so the signing checks test the artifact and not the copy.
       if ! ditto "$app_src" "$APP" >&2; then
         echo "::error::ditto could not copy $app_src out of the image" >&2
         mount_ok=""
@@ -451,11 +368,8 @@ check_mount() {
 
   MAIN_BIN="$APP/Contents/MacOS/$EXEC_NAME"
   echo "  extracted $(basename "$APP") (main binary: $EXEC_NAME)" >&2
-  # The state file is this check's ONLY output to the checks after it, so a mount
-  # that could not write one handed on nothing — and a green row would say it
-  # mounted, extracted AND passed the bundle along. The checks after it would
-  # then go red naming this one as the thing that never ran, which is true and
-  # useless: it is this check that knows why.
+  # The state file is this check's only output to the rest, so failing to write
+  # one must red THIS check — it is the one that knows why.
   if ! save_state; then
     echo "::error::could not write $STATE_FILE — the bundle was extracted but nothing after this" >&2
     echo "  check can find it. Refusing to report a mount that handed on nothing." >&2
@@ -468,9 +382,8 @@ check_mount() {
 }
 
 # ── 2. the .app inside is the version the filename claims ─────────────────────
-# The DMG is assembled from a separately built .app, so a stale or mismatched
-# bundle can be packaged under a new release's name — the same class of mistake
-# the Linux lane catches by comparing the installed dpkg version to the artifact.
+# The DMG is assembled from a separately built .app, so a stale bundle can be
+# packaged under a new release's name.
 check_version_matches_artifact() {
   local want got
   # Release assets are named unyt_<version>_Unyt.Sandbox_<...>_<arch>_darwin.dmg.
@@ -496,10 +409,9 @@ check_version_matches_artifact() {
 }
 
 # ── 3. the bundle's architecture matches this runner ──────────────────────────
-# Guards the MEANING of every check below: Gatekeeper, dyld and codesign all
-# refuse a foreign-arch binary, so assessing the aarch64 DMG on an Intel runner
-# would report failures that say nothing about the artifact. Read off the binary
-# with lipo rather than trusted from the matrix.
+# Gatekeeper, dyld and codesign all refuse a foreign-arch binary, so a mispaired
+# runner reports failures that say nothing about the artifact. Read with lipo,
+# not trusted from the matrix.
 check_arch_matches_runner() {
   local archs runner
   archs="$(lipo -archs "$MAIN_BIN" 2>/dev/null)"
@@ -541,11 +453,9 @@ check_no_build_machine_paths() {
       done
     done < <(printf '%s\n' "$deps"; macho_rpaths "$f")
 
-    # THE GUARD BELONGS ON THE PATHS, NOT THE FILES — and on the count, not on
-    # otool's exit status. Counting files answers "was there anything to scan",
-    # never "did we manage to read any of it": with otool broken every file is
-    # iterated, no path is examined, no violation is found, and the row goes
-    # green having read nothing.
+    # Guard the PATHS, not the files: with otool broken every file is iterated,
+    # no path examined, no violation found, and the row goes green having read
+    # nothing.
     if [ "$file_paths" -eq 0 ]; then
       echo "::error::otool read no load paths from ${f#"$APP"/} (exit $dep_rc)." >&2
       echo "  Every Mach-O links at least libSystem, so this is a broken otool — a stale" >&2
@@ -571,10 +481,8 @@ check_no_build_machine_paths() {
 }
 
 # ── 5. every Mach-O is signed, and by whom ────────────────────────────────────
-# Per file, from a list this script built itself — NOT `codesign --deep --strict`,
-# which has been observed to miss an unsigned binary in Contents/Resources and
-# has been deprecated for signing since Ventura. Enumerating means nothing can be
-# skipped, and the failure names the exact file.
+# Per file, from our own list — NOT `codesign --deep --strict`, which has missed
+# an unsigned binary in Contents/Resources and is deprecated since Ventura.
 check_every_macho_signed() {
   local f out rc info team teams="" bad=0 total=0
   while IFS= read -r f; do
@@ -640,10 +548,8 @@ check_every_macho_signed() {
 }
 
 # ── 6. Gatekeeper accepts it, as NOTARIZED software ───────────────────────────
-# `accepted` alone is not enough: a locally signed or ad-hoc build can be
-# accepted on the machine that made it. The source line is the part that says
-# the assessment came from a notarized Developer ID, which is what a user's Mac
-# will demand. spctl writes its verbose assessment to stderr.
+# `accepted` alone is not enough — an ad-hoc build is accepted on the machine
+# that made it. The source line is what says notarized. spctl reports on stderr.
 check_gatekeeper() {
   local out rc
   out="$(spctl -a -vvv -t exec "$APP" 2>&1)"
@@ -668,9 +574,7 @@ check_gatekeeper() {
 }
 
 # ── 7. the notarization ticket travels with the artifact ──────────────────────
-# Notarized but unstapled works only while Apple's service is reachable: offline,
-# or during an outage, the first launch fails. Stapling is what makes the ticket
-# part of the download.
+# Notarized but unstapled works only while Apple's service is reachable.
 check_stapled() {
   local out rc
   out="$(xcrun stapler validate "$APP" 2>&1)"
@@ -685,18 +589,10 @@ check_stapled() {
 }
 
 # ── 8. Apple's own pre-distribution assessment ────────────────────────────────
-# `syspolicy_check` (macOS 14+) is Apple's replacement for reading codesign
-# output by hand — it runs the checks the system itself will run. `distribution`
-# rather than `notary-submission`: the artifact under test is already notarized
-# and stapled, so the question is whether it passes on a user's Mac, which is
-# what `distribution` answers; `notary-submission` asks the pre-submission
-# question, about a build that has not been through the service yet.
-#
-# UNVERIFIED BY US: this repo has no Mac, so the exit-status and usage semantics
-# below are from Apple's documented behaviour and have never been run. It fails
-# CLOSED — a missing tool or a rejected invocation goes red rather than quietly
-# passing — and a usage error is reported as such so nobody debugs the artifact
-# when the invocation is what is wrong.
+# `distribution`, not `notary-submission`: the artifact is already notarized, so
+# the question is whether it passes on a user's Mac.
+# UNVERIFIED — this repo has no Mac. Fails CLOSED, and reports a usage error as
+# such so nobody debugs the artifact when the invocation is wrong.
 check_syspolicy() {
   local out rc scan
   if ! command -v syspolicy_check >/dev/null 2>&1; then
@@ -711,51 +607,18 @@ check_syspolicy() {
     echo "::error::syspolicy_check rejected the INVOCATION, not the app — fix the call, not the build" >&2
     return 1
   fi
-  # EXIT STATUS ALONE IS NOT ENOUGH, because Apple documents none: the man page
-  # has no EXIT STATUS and no DIAGNOSTICS section, so "exit 0 means pass" is an
-  # assumption, and a check resting on it would report a pass for a tool that
-  # exits 0 while saying the build is unacceptable. This is the same rule check 6
-  # applies to spctl, which is accepted only when it BOTH exits 0 and names a
-  # notarized source.
+  # Apple documents no exit status, so the OUTPUT decides. The patterns are
+  # deliberately asymmetric: syspolicy_check reports per check, so a fatally
+  # unnotarized build still prints "Codesign check passed" — a broad pass token
+  # matched the wrong line and greened a build Apple calls undistributable.
+  # So FAIL is broad and wins; PASS is the one documented whole sentence. A
+  # wrong guess about wording is then a false RED, never a false green.
   #
-  # THE TWO PATTERNS ARE DELIBERATELY ASYMMETRIC, and in this direction only.
-  # syspolicy_check reports PER CHECK, so its output mixes verdicts: a build with
-  # a fatal notarization problem still prints "Codesign check passed." A pass
-  # token matching `pass` anywhere therefore matched the wrong line, and the real
-  # failure — `Notary Ticket Missing`, `Severity: Fatal`, `Type: Distribution
-  # Error` — carried none of the words the fail pattern looked for. That is a
-  # green row on a build Apple's own tool calls undistributable.
-  #
-  # So: FAIL is broad and wins, PASS is the one documented whole sentence. Any
-  # report that says "missing", "error", "fatal" or carries a severity is a
-  # failure regardless of how many individual checks passed, and only "ready for
-  # distribution" is success. A wrong guess about the wording is then a false RED
-  # that says so, never a false green.
-  # A line that says ZERO of something is not a failure. A report's
-  # `0 errors, 0 warnings` would otherwise trip the `error` token and red a build
-  # that passed — and a row that cries wolf on wording is the row people learn to
-  # ignore. Dropped before the scan, so the vocabulary itself stays broad.
-  #
-  # ONLY A LINE THAT IS NOTHING BUT ZERO-COUNTS. Dropping any line that merely
-  # CONTAINS one would discard `Notary Ticket Missing, 0 errors in codesign`
-  # entirely — the filter eating the finding it was meant to sit beside. This
-  # form can only ever ignore a line that says nothing else, so it cannot hide a
-  # failure. The narrower cost is that `Summary: 0 errors` still trips the scan;
-  # that is the safe direction, and the surface is small because this script
-  # never passes --verbose.
-  #
-  # ANCHORING THE FAIL WORDS TO LINE STARTS WAS CONSIDERED AND IS WRONG. Of the
-  # three documented failure lines, only `Severity: Fatal` begins with its
-  # significant word; `Notary Ticket Missing` and `Type: Distribution Error`
-  # both carry it at the END, so anchoring stops matching two of the three.
-  #
-  # Precisely, because the difference matters: on its own that DEGRADES a real
-  # failure from the fail branch to cannot-tell, which is still red. Turning it
-  # green additionally needs the pass sentence present in the same report. Red
-  # either way is not the reassurance it sounds like — a check that can only say
-  # "I could not read this" about a build Apple rejected has stopped doing its
-  # job, and the green case is one plausible line away. Cheap to type, and a
-  # regression.
+  # Zero-count lines are dropped first, and ONLY when the line is nothing else:
+  # dropping any line CONTAINING one would discard
+  # `Notary Ticket Missing, 0 errors in codesign` — the filter eating the finding.
+  # Do not anchor the fail words: two of the three documented failures carry the
+  # significant word at the END.
   scan="$(printf '%s' "$out" |
     grep -viE '^[[:space:]]*0 (errors?|warnings?|issues?|problems?)([[:space:],;]*(and )?0 (errors?|warnings?|issues?|problems?))*[[:space:].]*$')"
   if [ "$rc" -ne 0 ] ||
@@ -764,11 +627,8 @@ check_syspolicy() {
     return 1
   fi
   if ! printf '%s' "$out" | grep -qiF 'ready for distribution'; then
-    # Cannot tell. Not a pass: the wording is undocumented, so an unrecognised
-    # answer means this check could not do its job, and a green row would claim
-    # it did. Fails LOUDLY towards the operator rather than quietly towards the
-    # release — if the real wording differs from these patterns, this is the
-    # message that says so, and it names itself as the thing to fix.
+    # Cannot tell is NOT a pass: unrecognised wording means the check could not
+    # do its job. Fails towards the operator, naming itself as the thing to fix.
     echo "::error::syspolicy_check exited 0 but its output matched no known pass or fail wording," >&2
     echo "  so this check cannot say whether the build is distributable. Apple documents no exit" >&2
     echo "  status for this tool, so the output is the only signal — teach this check the real" >&2
@@ -780,12 +640,9 @@ check_syspolicy() {
 }
 
 # ── 9. deployment target within the support floor ─────────────────────────────
-# The macOS analogue of the .deb's declared-vs-computed dependency gate:
-# LSMinimumSystemVersion is what the bundle DECLARES it runs on, and the Mach-O
-# load commands are what it actually REQUIRES. Two ways to be wrong, both real:
-# a binary demanding more than the bundle claims launches on the OS it advertises
-# and dies in dyld, and a bundle claiming more than our support floor has
-# silently dropped users we promised to serve.
+# Declared (LSMinimumSystemVersion) vs required (load commands). Both directions
+# are real: demanding more than claimed dies in dyld on the OS it advertises;
+# claiming more than our floor drops users we promised to serve.
 check_deployment_target() {
   local f a v slices claimed bundle_max="" worst="" floor status=0 total=0 slices_seen=0
 
@@ -796,10 +653,8 @@ check_deployment_target() {
       echo "::error::  lipo read no architecture from ${f#"$APP"/} — cannot judge its deployment target" >&2
       return 1
     fi
-    # PER SLICE, NOT PER FILE. A universal binary carries one Mach-O per
-    # architecture, each with its own minimum AND its own floor: taking the
-    # first slice judged an arm64 build (11.0, correct) against x86_64's 10.13
-    # floor and reported a FALSE RED on a build with nothing wrong with it.
+    # Per SLICE, not per file: taking the first slice judged an arm64 build
+    # against x86_64's floor and reported a false red.
     for a in $slices; do
       slices_seen=$((slices_seen + 1))
       v="$(macho_min_os "$f" "$a")"
@@ -848,11 +703,8 @@ check_deployment_target() {
 }
 
 # ── report-only ───────────────────────────────────────────────────────────────
-# Not gated, and each for its own reason. The DMG's own assessment: Tauri
-# notarizes and staples the .app, and whether it also staples the enclosing image
-# is its business, not a property of our build — but it is the first thing
-# Gatekeeper looks at on a download, so it is worth seeing. The linkage list: it
-# is the bundle's implicit contract with the OS, and nothing else records it.
+# Not gated: the DMG's own stapling is Tauri's business, and the linkage list is
+# the bundle's implicit contract with the OS that nothing else records.
 report_only() {
   echo "" >&2
   echo "===== report only =====" >&2
@@ -869,11 +721,8 @@ report_only() {
 }
 
 # ── the sequence ──────────────────────────────────────────────────────────────
-# id | display name | function. THE one definition of what this suite runs and in
-# what order: the whole-run path loops over it, --only selects one entry from it,
-# and --print-checks prints it so the workflow can prove that every check
-# reported rather than that no step went red. The reasoning for each check is the
-# numbered section comment above it.
+# id | display name | function. THE one definition of what runs and in what
+# order — the whole-run path, --only and --print-checks all read it.
 CHECKS=(
   "mount|mounts and yields a .app bundle|check_mount"
   "version|the bundled app is the version the artifact claims|check_version_matches_artifact"
@@ -969,11 +818,8 @@ case "$MODE" in
     ;;
   cleanup)
     init_state
-    # A --only run killed between attach and detach leaves the image mounted, and
-    # the mountpoint is derived from the state directory rather than remembered,
-    # so a later process can still find it. Without UNYT_SMOKE_STATE there is by
-    # definition nothing to clean — every run's temp directory died with it — so
-    # this is a no-op that still exits 0 rather than a special case.
+    # A --only run killed mid-way leaves the image mounted; the mountpoint is
+    # derived from the state dir, so a later process can still find it.
     [ -d "$WORK/mnt" ] && MOUNT="$WORK/mnt"
     detach_mount
     remove_work

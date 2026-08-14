@@ -3,24 +3,14 @@
 #
 #   summarise-checks.sh --label <label> --results <file> -- <print-checks command...>
 #
-# WHY THIS EXISTS AS ITS OWN THING. Each check is now its own CI step, and that
-# buys visibility at the cost of a new way to be wrong: a check can stop
-# happening. A step nobody wired up, a step someone deleted, a `--only` id that
-# no longer resolves, a container that died half way — each of those produces a
-# SHORTER table rather than a red one, and a shorter table is exactly as green as
-# a clean one. Same family as every other defect in this suite: "nothing was
-# checked" reading as "nothing wrong", reappearing one level further out.
+# One step per check buys visibility at the cost of a check being able to stop
+# HAPPENING — and every way that occurs produces a SHORTER table, which is
+# exactly as green as a clean one. So the expected list is asked for (the
+# `--print-checks` command after `--`), never repeated here; two rows for one
+# check is the same failure wearing the other hat.
 #
-# So the expected list is asked for, never repeated here: the command passed
-# after `--` is the check script's own `--print-checks`, and anything it declares
-# that has no row is a failure that names itself. Two rows for one check is the
-# same failure wearing the other hat — a check wired up twice means some other
-# check is not wired up at all.
-#
-# Rows are `<display name>|<verdict>`, which is what the check scripts append to
-# UNYT_SMOKE_RESULTS. `warn` is a pass for the exit status and still prints as
-# warn: it is the declared-state tripwire the Windows signing check uses, and a
-# warn that failed the job would be a red people learn to scroll past.
+# `warn` passes the exit status and still prints as warn: it is the Windows
+# signing tripwire, and a warn that failed the job is a red people scroll past.
 set -uo pipefail
 
 LABEL=""
@@ -44,14 +34,9 @@ declared="$("$@")" || {
   echo "  compared against nothing." >&2
   exit 2
 }
-# CARRIAGE RETURNS ARE STRIPPED FROM BOTH SIDES, and this is not cosmetic. On
-# Windows the check list comes from `pwsh -PrintChecks` and the rows from
-# PowerShell's Add-Content, and BOTH emit CRLF — while this comparison runs in
-# git-bash. With the `\r` left on, every declared name ends in one and every
-# verdict begins after one, so nothing ever matches and a flawless Windows run
-# reports every single check as DID NOT RUN. Measured both ways: LF in, clean
-# table; CRLF in, twelve false absences. Harmless on the platforms that never
-# produce one.
+# CRs stripped from BOTH sides: on Windows the list and the rows both come from
+# PowerShell as CRLF while this runs in git-bash, and unstripped a flawless run
+# reports every check as DID NOT RUN.
 declared="${declared//$'\r'/}"
 if [ -z "$declared" ]; then
   echo "::error::the check list ($*) is empty, so nothing could be found missing" >&2

@@ -6,16 +6,10 @@
 #   container-checks-appimage.sh --only <id> <artifact.AppImage>  one check
 #   container-checks-appimage.sh --print-checks                   <id><TAB><name>
 #
-# Differs from the .deb sequence in what "pristine" can prove. A .deb declares
-# dependencies and apt resolves them, so a bare image tests that contract. An
-# AppImage declares nothing and bundles most of what it needs, so a bare image
-# only tells you it is not 100% self-contained — which no AppImage is. The
-# structural checks therefore run first on the untouched bundle, and the launch
-# gets a GTK baseline: a machine that could not run ANY GTK app is not the
-# machine this is about.
-#
-# The order still matters for the same reason it does next door, and `--only`
-# (one check per CI step) is enforced against it by smoke_order_ok in common.sh.
+# A bare image proves less here than for a .deb: an AppImage declares nothing, so
+# a bare image only says it is not 100% self-contained, which none are. So the
+# structural checks run first on the untouched bundle and the launch gets a GTK
+# baseline. Order is enforced by smoke_order_ok, as next door.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,18 +82,10 @@ check_bundle() {
 
 check_launch() {
   local desktop_exec inner_bin
-  # The desktop baseline, plus a display. `libwebkit2gtk-4.1-0` is named on purpose
-  # rather than the individual sonames check-appimage.sh reports: apt resolves ITS
-  # transitive closure per distro, and that closure is exactly the host stack a
-  # WebKit app needs. A hand-listed set is distro-specific and silently wrong
-  # elsewhere — the first version of this listed Ubuntu's requirements and then
-  # failed on debian:13, which additionally needs libgpg-error and libcom_err.
-  #
-  # This does NOT weaken the check. The AppImage prefers its own bundled libraries
-  # via LD_LIBRARY_PATH, so it still runs its own WebKit; what the baseline
-  # guarantees is a machine that could run a GTK/WebKit app at all. Precisely what
-  # the bundle expects from the host is the separate report in check_bundle, which
-  # is where that fact belongs.
+  # Name the package, not the sonames: apt resolves its closure per distro, and
+  # a hand-listed set is silently wrong elsewhere (debian:13 also needs
+  # libgpg-error and libcom_err). Does not weaken the check — the AppImage still
+  # prefers its own bundled libs via LD_LIBRARY_PATH.
   apt-get update -qq >/dev/null 2>&1
   apt-get install -y -qq libwebkit2gtk-4.1-0 libgbm1 libgl1 libegl1 xvfb >/dev/null 2>&1
 

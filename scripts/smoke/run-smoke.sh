@@ -14,59 +14,28 @@
 #   run-smoke.sh --summary                    the table, and the did-it-run guard
 #   run-smoke.sh --stop                       tear the container down
 #
-# Runs the check sequence in a PRISTINE container per image and prints one table
-# per artifact. The image list is UNYT_SMOKE_IMAGES below — one place, with the
-# reasoning for what it spans.
+# PRISTINE containers, not a CI runner: a runner already carries hundreds of
+# libraries, so an under-declared dependency is satisfied there and the run goes
+# green while a user's machine fails.
 #
-# Containers rather than a CI runner, deliberately. A GitHub runner is a build
-# image carrying hundreds of preinstalled libraries, so an under-declared
-# dependency is already satisfied there and the run goes green while a real
-# user's machine fails. A stock distro image is both more faithful and runnable
-# on a laptop, which is what makes this iterable.
+# Detached container + `docker exec`, NOT GitHub's job-level `container:` — that
+# injects its own Node.js and tooling and the image stops being pristine.
 #
-# A DETACHED CONTAINER PLUS `docker exec`, AND NOT GitHub's job-level
-# `container:` key. That key would make one-step-per-check trivial and would
-# quietly destroy the only thing this lane is for: GitHub injects its own
-# Node.js and tooling into a job container so it can run actions inside it, so
-# the image stops being pristine — and pristineness is exactly what catches a
-# package that under-declares its dependencies. Here the runner's tooling stays
-# outside and the container gets `sleep infinity` and nothing else.
-#
-# The whole-run path drives the same --start/--exec/--summary/--stop machinery,
-# so local iteration and CI exercise one mechanism rather than two.
-#
-# Needs only Docker on the host — no drivers, no display, nothing installed.
+# Needs only Docker. The whole-run path drives the same --start/--exec machinery.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── THE MATRIX ────────────────────────────────────────────────────────────────
-# One list, deliberately spanning BOTH ends of the supported range, because the
-# two ends fail differently and each hides the other's bug:
-#
-#   OLD end  — the glibc floor. A binary built on a newer host imports symbols the
-#              old runtime lacks; it installs cleanly and dies at exec. This is
-#              also where the .deb's missing `libc6 (>= 2.34)` actually bites.
-#   NEW end  — library conflicts. Bundled copies of libwayland/glib/gstreamer
-#              collide with the host's newer ones (tauri-apps/tauri#15665), which
-#              only shows up on a distro newer than the build machine.
-#
-# Testing only the LTSs in the middle would miss both. Keep both ends when adding.
-#
-#   ubuntu:22.04  glibc 2.35  our support floor
-#   ubuntu:24.04  glibc 2.39  previous LTS, large install base
-#   debian:13     glibc 2.41  current Debian stable
-#   ubuntu:26.04  glibc 2.43  current Ubuntu LTS, and what `ubuntu:latest` resolves to
-#
-# debian:12 (2.36) was dropped: it sits between the two Ubuntu LTSs and exercises
-# nothing they don't.
+# BOTH ENDS of the supported range, because they fail differently and each hides
+# the other's bug: the OLD end catches a missing glibc floor (installs, dies at
+# exec), the NEW end catches bundled libs colliding with the host's newer ones
+# (tauri-apps/tauri#15665). Testing only the middle LTSs misses both — keep both
+# ends when adding.
 UNYT_SMOKE_IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:13 ubuntu:26.04)
 
-# THE MATRIX, READABLE FROM OUTSIDE. release-smoke.yaml runs one job per image
-# and builds that matrix by asking this script, rather than repeating the list in
-# YAML — two copies of it would drift the moment someone adds a distro here and
-# not there, and the drift would be invisible: the workflow would simply stop
-# testing the image nobody remembered to add. Declared once, below; read here.
+# release-smoke.yaml builds its matrix by ASKING for this list: a second copy in
+# YAML would drift, and the workflow would silently stop testing an image.
 if [ "${1:-}" = "--print-images" ]; then
   printf '%s\n' "${UNYT_SMOKE_IMAGES[@]}"
   exit 0
@@ -93,10 +62,8 @@ abs_artifact() {
 print_checks() { bash "$here/$(driver_for "$1")" --print-checks; }
 
 # ── the state directory ───────────────────────────────────────────────────────
-# One per run, shared by --start/--exec/--summary/--stop. It holds the container
-# id, what is being smoked, and the rows earned so far. The rows live on the HOST
-# rather than only in the container, so a container that dies still leaves behind
-# everything it had already reported.
+# Shared by --start/--exec/--summary/--stop. Rows live on the HOST, so a
+# container that dies still leaves what it had already reported.
 STATE_ROOT="${UNYT_SMOKE_STATE:-}"
 STATE_OWNED=""
 
@@ -135,11 +102,8 @@ cmd_start() { # <artifact> <image>
   printf '%s\n' "$image"    >"$lane/image"
   printf '%s\n' "$driver"   >"$lane/driver"
   printf '%s\n' "$lane"     >"$STATE_ROOT/current"
-  # STARTING A LANE CLEARS IT. Rows and the lane entry are both keyed on
-  # (artifact, image), so starting the same one twice — a re-run after a failure
-  # — would otherwise leave every check reported twice, and the guard reads a
-  # doubled row as "one check is wired up twice", which is a red run for a
-  # perfectly good re-run.
+  # Starting a lane clears it: a re-run would otherwise double every row, and
+  # the guard reads a doubled row as a check wired up twice.
   if [ -s "$STATE_ROOT/results" ]; then
     awk -F'|' -v a="$(basename "$artifact")" -v i="$image" \
       '!($1 == a && $2 == i)' "$STATE_ROOT/results" >"$STATE_ROOT/results.keep"
@@ -174,11 +138,8 @@ cmd_start() { # <artifact> <image>
   printf '%s\n' "$out" >"$lane/cid"
   echo "  container ${out:0:12} up ($image)" >&2
 
-  # PROVEN, NOT ASSUMED, per container. An orphan left unreaped keeps answering
-  # `kill -0`, and the only symptom is the launch check calling a clean shutdown
-  # "hung" — a diagnosis that reads as a defect in the app and takes an afternoon
-  # to trace back to this line. A second here is cheaper than that, and it is
-  # what stops PID 1 being "simplified" back to `sleep infinity`.
+  # Proven per container: an unreaped orphan keeps answering `kill -0`, and the
+  # only symptom is the launch check calling a clean shutdown "hung".
   if ! docker exec "$out" bash -c '
       bash -c "sleep 0.2 & echo \$! >/tmp/orphan; exit 0"
       sleep 1
@@ -271,13 +232,9 @@ cmd_stop() {
 }
 
 # ── summary, and the did-it-run guard ─────────────────────────────────────────
-# EVERY CHECK THE DRIVER DECLARES MUST HAVE REPORTED, for every lane that was
-# started. Splitting the run into one step per check makes a check that silently
-# stopped existing a real possibility — a step nobody wired up, a step someone
-# deleted, a container that died half way — and each of those produces a shorter
-# table rather than a red one. The old shape of this guard ("no result rows at
-# all") only caught the case where nothing ran; this catches the case where
-# almost everything did.
+# EVERY DECLARED CHECK MUST HAVE REPORTED, per started lane. One step per check
+# makes a silently-missing check real, and each such case produces a SHORTER
+# table rather than a red one.
 cmd_summary() {
   local artifact image driver rows overall=0
   need_state || return $?

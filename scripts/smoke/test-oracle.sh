@@ -4,21 +4,9 @@
 #
 #   scripts/smoke/test-oracle.sh
 #
-# WHY THIS EXISTS. Three separate defects in this oracle each made an assertion
-# incapable of failing, and every one was in the INVOCATION rather than the
-# pattern, so reading the patterns would not have caught any of them:
-#
-#   1. `-> (A|B|C)\(` required a `(` after every variant, but Rust prints unit
-#      variants bare — 4 of 7 failure states never matched.
-#   2. `grep -cE "$RE"` with a pattern starting with `-` parsed the pattern as
-#      OPTIONS. The disconnect count was always 0, so "it stays up" asserted
-#      nothing at all.
-#   3. Unanchored alternations matched unrelated subsystem lines in the merged
-#      log, so anything containing `-> Ready` declared the app healthy.
-#
-# That is why the test drives `smoke_match_*` / `smoke_count_*` — the same
-# functions launch-and-assert.sh calls — instead of re-deriving the greps here.
-# A copy would have passed while the real call site stayed broken.
+# Drives the REAL `smoke_match_*` / `smoke_count_*`, never a copy: all three
+# defects this exists for were in the INVOCATION, not the pattern, so a copy
+# would have passed while the call site stayed broken.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -148,10 +136,8 @@ check "a boot that never ran the identity check is not fresh" no \
   "$P Starting -> LairAwaitingPassword { is_initial_setup: true }" smoke_match_fresh
 
 # ── N3/N4: the declared-vs-computed comparison ───────────────────────────────
-# Both bugs were invisible to reading and are pinned here against the REAL
-# function: a declared floor BELOW the computed one used to pass silently, and a
-# correctly-declared libstdc++6 used to be reported missing because `c++` is an
-# ERE quantifier.
+# A declared floor BELOW the computed one used to pass silently, and libstdc++6
+# was reported missing because `c++` is an ERE quantifier.
 dep_d="$(mktemp)"; dep_c="$(mktemp)"
 printf 'libc6 (>= 2.17)\nlibstdc++6\nlibgtk-3-0\nlibsoup-3.0-0 (>= 3.0.3)\nlibpango-1.0-0 (>= 1.14.0)\n' >"$dep_d"
 printf 'libc6 (>= 2.34)\nlibstdc++6 (>= 4.1.1)\nlibglib2.0-0 (>= 2.65.1)\nlibsoup-3.0-0 (>= 3.0.3)\nlibpango-1.0-0 (>= 1.10.0)\n' >"$dep_c"
@@ -173,21 +159,15 @@ reject_gap "MISSING libstdc++6"                        "libstdc++6 (the c++ ERE-
 reject_gap "libsoup-3.0-0"                             "an exactly-matching dependency"
 reject_gap "libpango-1.0-0"                            "a declared floor ABOVE the computed one"
 # F1/F2/F3: a declaration can also provide no USABLE floor while looking like one.
-# Each of these passed silently before; they are the same class as the too-low
-# floor above, which is the one property this gate exists to enforce.
 one_case() { # <declared> <expected-finding-prefix> <description>
   local df cf out
   df="$(mktemp)"; cf="$(mktemp)"
   printf '%s\n' "$1" >"$df"; printf 'libc6 (>= 2.34)\n' >"$cf"
   out="$(smoke_depends_gaps "$df" "$cf")"
   if [ -z "$2" ]; then
-    # AN EMPTY EXPECTATION MEANS NO FINDING AT ALL, and it needs its own branch:
-    # `case "$out" in "$2"*)` expands to `*)`, which matches ANY output. Every
-    # "must not fire" case below therefore passed unconditionally — including if
-    # the comparison started reporting TOOLOW or BADVERSION against a perfectly
-    # valid declaration, which is the exact regression those cases exist to
-    # catch. They are the fixtures added to stop an over-eager fix reporting
-    # everything, and they could not have caught one.
+    # An empty expectation needs its own branch: `case "$out" in "$2"*)` becomes
+    # `*)`, which matches ANY output, so every "must not fire" case passed
+    # unconditionally.
     if [ -z "$out" ]; then pass=$((pass + 1)); else
       fail=$((fail + 1)); printf 'FAIL  %-58s expected NO finding, got: %s\n' "$3" "$out" >&2; fi
   else
@@ -242,12 +222,9 @@ rm -f "$prov_d" "$prov_c" "$prov_p"
 rm -f "$dep_d" "$dep_c"
 
 # ── N1: the bundle scan must survive a file with no GLIBC_ symbols LAST ──────
-# `[ -n "$v" ] && printf` as the last statement of a loop body makes the whole
-# `while` exit non-zero when the final iteration's test fails; pipefail carries
-# that through the `| sort`, and set -e then kills the script — skipping every
-# check below it, including the ceiling comparison. Which file lands last is
-# `find` order, so the gate was a coin flip per build. Drives the REAL script
-# against a synthetic AppDir whose last .so is data-only.
+# `[ -n "$v" ] && printf` as a loop body's last statement makes the `while` exit
+# non-zero, pipefail carries it, and set -e skips every check below. Which file
+# lands last is `find` order, so the gate was a coin flip per build.
 if command -v objdump >/dev/null 2>&1 && [ -x "$(command -v ls || true)" ]; then
   appdir="$(mktemp -d)"
   mkdir -p "$appdir/usr/bin" "$appdir/usr/lib"
@@ -272,15 +249,9 @@ if command -v objdump >/dev/null 2>&1 && [ -x "$(command -v ls || true)" ]; then
   rm -rf "$appdir"
 
   # ── the ceiling must cover EVERY bundled ELF, not just the app's own ────────
-  # A helper in usr/bin that is NOT the .desktop Exec target is exactly where a
-  # too-new-glibc dependency arrives, and it was invisible: the scan fed itself
-  # one binary plus *.so* files, so a helper requiring GLIBC_9.99 left the gate
-  # green. The bundle's ceiling is a property of the WHOLE bundle — the Exec
-  # binary names the app, it does not bound the bundle.
-  #
-  # The fixture patches a real ELF's version string in place (same length, so
-  # every offset survives) rather than trying to build one that genuinely needs
-  # a nonexistent glibc.
+  # A helper in usr/bin that is not the Exec target is where a too-new glibc
+  # arrives, and the scan used to miss it: the ceiling is a property of the WHOLE
+  # bundle. The fixture patches a real ELF's version string in place.
   appdir2="$(mktemp -d)"
   mkdir -p "$appdir2/usr/bin"
   printf '[Desktop Entry]\nExec=app\n' >"$appdir2/app.desktop"
@@ -310,22 +281,11 @@ else
 fi
 
 # ── the check runner: one check per invocation ───────────────────────────────
-# The Linux drivers are now run one check at a time (release-smoke.yaml gives
-# each its own CI step), and the machinery for that lives in common.sh so this
-# file can drive it — same reason the matchers do. What it has to get right is
-# entirely about what happens BETWEEN invocations, and every way of getting it
-# wrong looks like a pass:
-#   - a check that runs out of order, after tooling has been installed, cannot
-#     find the under-declared dependency it exists to find;
-#   - a check whose predecessor never ran must not report on an install that is
-#     not there;
-#   - a stale state file must not let a later check believe in an install the
-#     current run never made.
-#
-# DRIVEN AS A CHILD PROCESS, through a fake driver built here, because
-# smoke_dispatch ends in `exit` and because the real thing is a fresh process per
-# check. Calling the functions in-process would test a shape production never
-# uses — the trap the Windows harness fell into (see its header).
+# What one-check-per-invocation has to get right is entirely BETWEEN invocations,
+# and every way of getting it wrong looks like a pass: a check running out of
+# order after tooling is installed, a check reporting on an install that never
+# happened, a stale state file. Driven as a CHILD PROCESS through a fake driver,
+# because in-process would test a shape production never uses.
 runner_dir="$(mktemp -d)"
 cat >"$runner_dir/driver.sh" <<'DRIVER'
 #!/usr/bin/env bash
@@ -436,13 +396,9 @@ drive "$runner_dir/s7" --only two
 expect_rows "check two|FAIL" "a previous run's GATE_OK does not survive into this one"
 expect_runner_err "'check one' check did not pass" "and the gate is what refuses it"
 
-# A STALE STATE FILE MUST NOT OUTLIVE ITS RUN, and this is the case that says so:
-# the WHOLE-RUN path, where every check shares one shell. Loading state is
-# sourcing, and sourcing cannot REMOVE a variable that is no longer in the file —
-# so a GATE_OK left in the directory by an earlier run stays in scope for the
-# whole run that follows, and every check after a FAILED install reports on the
-# install before it. The unset-on-load is what stops that, and only a single
-# process can show it: with a step per check there is no scope to leak into.
+# Sourcing cannot REMOVE a variable no longer in the file, so a stale GATE_OK
+# stays in scope for the whole run and every check reports on the install before
+# it. Only the single-process path can show this.
 mkdir -p "$runner_dir/s11"
 printf 'GATE_OK=1\nMARK=hello\n' >"$runner_dir/s11/state.env"
 FAKE_BREAK=one drive "$runner_dir/s11"
@@ -542,11 +498,9 @@ if [ $? -eq 2 ]; then pass=$((pass + 1)); else
 bash "$here/summarise-checks.sh" --label L --results "$sum_dir/results" -- true >/dev/null 2>&1
 if [ $? -eq 2 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  an empty check list must be an invocation error" >&2; fi
-# BOTH SIDES OF THE BOUNDARY BETWEEN pwsh AND bash EMIT CRLF, and the Windows
-# summary compares one against the other from git-bash. Left unstripped, every
-# declared name carries a trailing `\r`, nothing matches, and a flawless run
-# reports twelve checks as DID NOT RUN. Invisible to every other test here
-# because Linux pwsh — which is the only pwsh this repo can run — emits LF.
+# pwsh and bash both emit CRLF on Windows and the summary compares them from
+# git-bash: unstripped, a flawless run reports twelve checks as DID NOT RUN.
+# Invisible elsewhere because Linux pwsh emits LF.
 sum_case 'one|pass
 two|warn
 three|pass
@@ -586,32 +540,13 @@ if [ -f "$wf" ]; then
   # the typo. Asserting it here would need the Windows registry too, and that
   # needs pwsh.
 
-  # EVERY JOB IS NON-BLOCKING, OR THE RELEASE GOES RED AGAIN. `non-blocking`
-  # keeps a failed check out of the calling release run's conclusion, but it does
-  # that one job at a time: a lane added later without the key silently restores
-  # the behaviour the input exists to remove, and nothing would say so until the
-  # next release run came back red for a report. A prose "every job below carries
-  # it" cannot catch that; counting can.
-  #
-  # PAIRED PER JOB, NOT COUNTED. Two totals can agree while being wrong about
-  # every job in the file — miss one job key and forget the flag on another, and
-  # 4 == 4 reports clean. Walking the blocks costs the same and can also NAME the
-  # job, which a count cannot.
-  #
-  # Read only below `jobs:`, and over the full set of characters a job id may
-  # use. Two-space keys exist above it too — `workflow_dispatch:` and
-  # `workflow_call:` — so a whole-file scan is scanning the wrong thing: under
-  # the pattern below it reads both as jobs, finds no flag under either, and
-  # fails today. The only thing that would rescue a whole-file scan is narrowing
-  # the name to `[a-z-]` so those two are skipped for containing an underscore,
-  # and that cuts the other, worse way: a job called `linux_images` would go
-  # unexamined, and an unexamined job is exactly the unflagged job this exists
-  # to find. So: slice first, match broadly. A TRAILING COMMENT on the
-  # key is admitted for the same reason — `windows:  # the windows lane` is legal
-  # YAML, and a key regex that rejects it does not report that job as unflagged,
-  # it stops seeing the job at all and attributes the next flag it meets to the
-  # job before. The flag is anchored at four spaces, so the comment that quotes
-  # it is never mistaken for the key.
+  # A lane added without the flag silently restores the behaviour the input
+  # exists to remove. Paired per job, not counted — two totals can agree while
+  # being wrong about every job — and it NAMES the offender.
+  # Sliced from `jobs:` first (workflow_dispatch/workflow_call are 2-space keys
+  # too), matched broadly (a `linux_images` job must not go unexamined), and a
+  # trailing comment on the key is admitted — rejecting it would stop seeing the
+  # job and attribute the next flag to the one before.
   unflagged="$(printf '%s\n' "$(sed -n '/^jobs:/,$p' "$wf")" | awk '
     /^  [A-Za-z_][A-Za-z0-9_-]*:[ \t]*(#.*)?$/ {
       if (job != "" && !seen) print job
@@ -625,11 +560,8 @@ if [ -f "$wf" ]; then
       "$(printf '%s' "$unflagged" | tr '\n' ' ')" >&2
   fi
 
-  # AND THE INPUT STAYS OFF `workflow_dispatch`. The flag above is only safe
-  # because the person who runs this smoke by hand cannot be handed a green run
-  # for a red smoke — that is the whole reason `non-blocking` is declared under
-  # `workflow_call` alone. Nothing else asserts it, and adding it to the dispatch
-  # inputs would look like a convenience.
+  # The flag is only safe because a hand-run smoke cannot be handed a green run
+  # for a red one. Nothing else asserts this.
   if sed -n '/^  workflow_dispatch:/,/^  workflow_call:/p' "$wf" |
       grep -q 'non-blocking'; then
     fail=$((fail + 1))
@@ -707,11 +639,9 @@ done
 
 echo "oracle regression: $pass passed, $fail failed"
 
-# ANNOTATE, don't only exit non-zero. Every FAIL above goes to stderr, which is
-# a line inside a collapsed step log — readable when a red run sent you looking,
-# invisible when it did not. The job that runs this file is `continue-on-error`
-# on a release, so the run stays green and nothing sends you looking; the
-# annotation is then the only thing that surfaces on its own.
+# The FAIL lines go to stderr inside a collapsed step log, and the job is
+# continue-on-error on a release — so nothing sends you looking. The annotation
+# is the only thing that surfaces on its own.
 if [ "$fail" -ne 0 ]; then
   echo "::error title=Smoke oracle regressed::$fail assertion(s) failed — the checks' own guarantees are not holding; see this step's log for which"
 fi

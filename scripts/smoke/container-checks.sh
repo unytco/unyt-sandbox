@@ -6,20 +6,10 @@
 #   container-checks.sh --only <id> <artifact.deb>  one check, one row
 #   container-checks.sh --print-checks              <id><TAB><name>, in run order
 #
-# THE ORDER IS LOAD-BEARING. The dependency-closure check has to happen before
-# anything else is installed: `apt-get install xvfb` (or binutils, or a test
-# harness) drags in libraries of its own, and any one of them could satisfy a
-# dependency the package failed to declare — turning the exact bug this exists to
-# find into a pass. So: install the package alone, prove closure, and only then
-# add tooling. This is also why the test runs in a container at all rather than
-# on a CI runner, which is a build image with hundreds of libraries preinstalled.
-#
-# `--only` is how release-smoke.yaml gives each check its own CI step, and it is
-# also the obvious way for that order to stop being honoured — nothing about
-# `--only depends` says the pristine install already happened. So the sequence is
-# ENFORCED rather than assumed: smoke_order_ok (common.sh) refuses a check whose
-# predecessors have not run. State between invocations lives in a file under
-# UNYT_SMOKE_STATE, because a GitHub Actions step is a separate process.
+# THE ORDER IS LOAD-BEARING: closure must be proven before any tooling is
+# installed, or `apt-get install xvfb` satisfies the very dependency the package
+# failed to declare. `--only` is the obvious way for that to stop being
+# honoured, so smoke_order_ok enforces it rather than assuming it.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

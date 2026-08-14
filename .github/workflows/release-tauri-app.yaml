@@ -80,15 +80,13 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          # Declared-but-unbuilt artifacts must fail, not slip through.
           artifactErrorsFailBuild: true
           artifacts: |
             unyt/workdir/unyt.happ
             unyt/workdir/unyt.webhapp
             unyt/dnas/alliance/workdir/alliance.dna
           body: ${{ steps.changelog.outputs.notes }}
-          # The EXACT pushed tag, so an -rc.* push cannot become a stable vM.m.p
-          # release the router would accept. APP_VERSION still names the assets.
+          # The pushed tag, not APP_VERSION: an -rc.* must not ship as stable.
           name: Unyt Sandbox ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: true
@@ -117,26 +115,13 @@ jobs:
             args: ""
             arc_factor: default
             label: windows
-          # - platform: macos-latest
-          #   args: "--target aarch64-apple-darwin"
-          #   arc_factor: "zero"
-          # - platform: macos-latest
-          #   args: "--target x86_64-apple-darwin"
-          #   arc_factor: "zero"
-          # - platform: ubuntu-22.04
-          #   args: "--bundles deb,appimage"
-          #   arc_factor: "zero"
-          # - platform: windows-latest
-          #   args: ""
-          #   arc_factor: "zero"
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
       HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
         matrix.config.arc_factor || '' }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       CARGO_PROFILE_RELEASE_LTO: "false"
-      # Vite embeds this at build time; empty means the shipped app can never
-      # check for updates on either channel. Public endpoint, not a credential.
+      # Empty means the shipped app can never check for updates. Not a secret.
       VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
     permissions: write-all
 
@@ -158,7 +143,7 @@ jobs:
           node-version: 22
 
       - name: install Rust 1.95.0
-        # A floor, not a preference: holochain 0.7.0 needs `cfg_select!` (1.95).
+        # A floor: holochain 0.7.0 needs `cfg_select!`, stabilised in 1.95.
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
@@ -190,12 +175,8 @@ jobs:
 
       - name: Install and prepare
         working-directory: unyt
-        # `--ignore-engines` as in the White-label UI workflow: hc-spin's native
-        # helper wants node >= 24, node here is 22, and yarn aborts the WHOLE
-        # install — which is how v0.101.0-rc.0 produced no installers at all.
-        # Node 22 is deliberate: the app's own floor and what the nix shell ships.
-        # `--frozen-lockfile` pins this install only — `make ci-build-ui` re-runs
-        # yarn unpinned inside the build.
+        # --ignore-engines: hc-spin wants node >=24; yarn aborts the whole
+        # install otherwise. Node 22 is the app's floor, not an oversight.
         run: |
           yarn install --frozen-lockfile --ignore-engines
 
@@ -246,174 +227,19 @@ jobs:
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
 
-  # Called directly, not via `workflow_run`, which only fires for workflow files
-  # on the DEFAULT branch and so would never run on a release branch.
-  #
-  # Nothing `needs` this job — do not add it to another job's `needs`. That keeps
-  # it from blocking a release; `non-blocking` below is what keeps a red check
-  # out of the run's CONCLUSION. Neither extends to the build jobs: a build that
-  # fails must still fail the run.
-  #
-  # Each lane skips when its own artifact is absent, so a failed Windows build
-  # costs the Windows lane and nothing else.
+  # Nothing needs this; non-blocking keeps a red check out of the run's
+  # conclusion. Not `workflow_run` — that only fires on the default branch.
   smoke-test:
     name: Stage 3 - smoke the artifacts
     needs: [publish-happ, release-tauri-app]
-    # NOT gated on the build job: `needs` alone skips this whenever ANY matrix
-    # row failed, which would suppress a good Linux check for a Windows failure.
-    # `!cancelled()` rather than `always()`: a cancelled run should take the
-    # smoke with it, not start a 30-minute container sweep nobody is waiting for.
+    # Not gated on the build job — one failed row would suppress every lane.
+    # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
     if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' }}
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}
-      # Set ONLY here: a hand-dispatched release-smoke must answer red.
+      # Only here: a hand-dispatched release-smoke must answer red.
       non-blocking: true
-    # Explicit, not `inherit`: the build above holds the Apple signing
-    # credentials and the Tauri signing key, which this job must not see.
+    # Explicit, not inherit: the caller holds Apple signing credentials.
     secrets:
       GIT_PAT: ${{ secrets.GIT_PAT }}
-
-  # release-tauri-android-app:
-  #   needs: publish-happ
-  #   permissions: write-all
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       app_variant: ${{ fromJson(needs.publish-happ.outputs.app_variants) }}
-  #   env:
-  #     PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
-  #     TAURI_PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
-  #     TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
-  #     TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
-  #     TAURI_DEEP_LINK_SCHEME: ${{ matrix.app_variant.id }}
-  #     TAURI_SPLASHSCREEN_TITLE: ${{ matrix.app_variant.product_name }} Loading
-  #     TAURI_APP_VARIANT: ${{ matrix.app_variant.id }}
-  #   runs-on: ubuntu-22.04
-  #   steps:
-  #     - name: Maximize build space
-  #       uses: AdityaGarg8/remove-unwanted-software@v5
-  #       with:
-  #         remove-android: "true"
-  #         remove-dotnet: "true"
-  #         remove-haskell: "true"
-  #         remove-codeql: "true"
-  #         remove-docker-images: "true"
-  #         remove-large-packages: "true"
-  #         remove-cached-tools: "true"
-
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         token: ${{ secrets.GIT_PAT }}
-  #         submodules: recursive
-  #         fetch-depth: 0
-
-  #     - name: setup node
-  #       uses: actions/setup-node@v1
-  #       with:
-  #         node-version: 20
-
-  #     - name: Install and prepare
-  #       run: yarn install
-
-  #     - name: Prepare app variant (config + icons)
-  #       run: |
-  #         chmod +x scripts/generate-tauri-config.sh scripts/copy-app-icons.sh
-  #         bash scripts/generate-tauri-config.sh
-  #         bash scripts/copy-app-icons.sh
-
-  #     - name: Retrieve version
-  #       run: |
-  #         echo "APP_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
-  #       id: version
-
-  #     - name: Download release of the .happ
-  #       uses: robinraju/release-downloader@v1.10
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
-  #       with:
-  #         token: ${{ secrets.GIT_PAT }}
-  #         releaseId: ${{ needs.publish-happ.outputs.releaseId }}
-  #         fileName: "unyt.happ"
-  #         out-file-path: "workdir/"
-
-  #     - name: install Rust stable
-  #       uses: actions-rs/toolchain@v1
-  #       with:
-  #         override: true
-  #         toolchain: 1.95.0
-
-  #     - name: install Go stable
-  #       uses: actions/setup-go@v4
-  #       with:
-  #         go-version: "stable"
-
-  #     - name: Install nix
-  #       uses: cachix/install-nix-action@v27
-  #       with:
-  #         github_access_token: ${{ secrets.GIT_PAT }}
-  #         nix_path: nixpkgs=channel:nixos-24.05
-
-  #     - uses: cachix/cachix-action@v15
-  #       with:
-  #         name: holochain-ci
-
-  #     - uses: cachix/cachix-action@v15
-  #       with:
-  #         name: darksoil-studio
-
-  #     - name: Regenerate Android project for variant
-  #       run: |
-  #         rm -rf src-tauri/gen/android
-  #         nix develop --accept-flake-config .#androidDev --command bash -c "yarn tauri android init"
-
-  #     - name: Set usesCleartextTraffic to true
-  #       run: |
-  #         chmod +x scripts/android-uses-cleartext-traffic.sh
-  #         bash scripts/android-uses-cleartext-traffic.sh
-
-  #     - name: setup Android signing
-  #       run: |
-  #         cd src-tauri/gen/android
-  #         echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" > key.properties
-  #         echo "password=${{ secrets.ANDROID_KEY_PASSWORD }}" >> key.properties
-  #         base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > $RUNNER_TEMP/keystore.jks
-  #         echo "storeFile=$RUNNER_TEMP/keystore.jks" >> key.properties
-
-  #     - name: Install and Build (zero arc)
-  #       env:
-  #         VITE_COMMIT_SHA: ${{ env.PRODUCT_NAME }}-${{ steps.version.outputs.APP_VERSION }}-android
-  #         APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
-  #         HOLOCHAIN_ARC_FACTOR: "0"
-  #         TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
-  #         TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
-  #       run: |
-  #         nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
-
-  #     - name: Copy AAB for upload (variant-specific name)
-  #       run: |
-  #         mkdir -p upload
-  #         AAB="$(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' 2>/dev/null | head -1)"
-  #         [ -n "$AAB" ] && cp "$AAB" "upload/${{ matrix.app_variant.id }}-${{ steps.version.outputs.APP_VERSION }}.aab"
-
-  #     - name: Upload release aab
-  #       uses: AButler/upload-release-assets@v3.0
-  #       with:
-  #         files: upload/*.aab
-  #         repo-token: ${{ secrets.GIT_PAT }}
-  #         release-id: ${{ needs.publish-happ.outputs.releaseId }}
-
-  #     - name: Copy APK for upload (variant-specific names)
-  #       run: |
-  #         mkdir -p upload-apk
-  #         i=0
-  #         while IFS= read -r f; do
-  #           [ -f "$f" ] && cp "$f" "upload-apk/${{ matrix.app_variant.id }}-${{ steps.version.outputs.APP_VERSION }}-$i.apk" && i=$((i+1))
-  #         done < <(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" 2>/dev/null)
-
-  #     - name: Upload release apk
-  #       uses: AButler/upload-release-assets@v3.0
-  #       with:
-  #         files: upload-apk/*.apk
-  #         repo-token: ${{ secrets.GIT_PAT }}
-  #         release-id: ${{ needs.publish-happ.outputs.releaseId }}

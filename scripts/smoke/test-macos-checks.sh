@@ -3,70 +3,26 @@
 #
 #   scripts/smoke/test-macos-checks.sh
 #
-# WHY THIS EXISTS. This suite's hard rule is that a check must be able to fail:
-# nine defects in it made a check silently pass, and every one was found by
-# feeding a deliberately broken input, never by reading the code. The macOS lane
-# is the hardest place to honour that rule, because the repo has no Mac — so the
-# checks would otherwise ship having never been observed to go either way.
+# Drives the REAL check-macos.sh against a stub toolchain on PATH; each scenario
+# breaks one thing and requires that check — and only it — to go red. The repo
+# has no Mac, so this is the only place these checks are observed to fail at all.
 #
-# The answer is to run the REAL check-macos.sh end to end against a stub
-# toolchain: hdiutil, otool, codesign, spctl, stapler, plutil, lipo and friends
-# are shell scripts on PATH that print canned output, and a fake .app is built
-# from real Mach-O magic bytes. Every scenario below breaks exactly one thing and
-# requires that check — and only that check — to go red. Same reasoning as
-# test-oracle.sh: it drives the real call sites, because a copy of the logic
-# would pass while the real script stayed broken.
+# ASSERT WHICH DIAGNOSIS FIRED, never just that the row went red. Four guards
+# were deleted during mutation testing with every colour-only assertion still
+# passing, because each left the row red for a different reason. `expect_err` is
+# the fix — do not simplify an assertion back to the row alone.
 #
-# TWO PATHS, ONE SET OF CHECKS. The CI job runs each check as its own GitHub
-# Actions step, so the script is driven BOTH ways here: `check-macos.sh <dmg>`
-# runs the lot in one process, and `--only <id> <dmg>` runs exactly one, nine
-# times over, sharing a state directory. The split invents a failure mode the
-# single-process path cannot have — a check that cannot find what check 1
-# extracted, because the two are no longer the same process — so the block at the
-# bottom drives every check through --only as well, including with no mount
-# having run at all. A check that goes quiet when it is alone in the process has
-# stopped being able to fail just as surely as one whose guard was deleted.
+# ASSERT THROUGH THE CALL SITE'S SHAPE. The Windows harness drove the real
+# functions and still shipped a defect, because it called them bare where
+# production wrapped them in `@(...)`.
 #
-# THE ONE THING TO TAKE FROM THIS FILE: assert WHICH DIAGNOSIS fired, never just
-# that the row went red. Four separate guards here were deleted during mutation
-# testing without a single assertion noticing — the ad-hoc signature guard, the
-# TeamIdentifier guard, the syspolicy failure-wording read, and the zero-count
-# exclusion. Every one left the row red for a DIFFERENT reason, so every
-# colour-only assertion still passed. That is ONE failure mode, not four bugs,
-# and it gets worse the better the checks get: the more layered the guards, the
-# less a row's colour proves. `expect_err` is the fix; do not "simplify" an
-# assertion back to checking the row alone.
+# A mutant proves nothing until you have watched it fail for the intended reason.
 #
-# AND ONE LEVEL FURTHER OUT: ASSERT THROUGH THE CALL SITE'S ACTUAL SHAPE, not
-# the function in isolation. The Windows harness next door drove the real
-# functions — never a copy — and still shipped a defect that made a check report
-# a finding REGARDLESS of what the binary imported, because the assertions called
-# those functions BARE while production wrapped them in `@(...)`, and the two
-# shapes differ only in the case that was broken. "Drive the real function" was
-# satisfied; what was tested was a copy of the CALL. If production wraps,
-# coerces, splits or re-types a result, the assertion has to do it too.
+# Both paths are driven: one process, and `--only` nine times over a shared state
+# directory — the split invents a failure the single-process path cannot have.
 #
-# A MUTANT PROVES NOTHING UNTIL YOU HAVE WATCHED IT FAIL FOR THE REASON YOU
-# INTENDED. The first mutation written for the universal-slice fix removed the
-# wrong thing and passed clean; recorded as-is it would have certified a guard
-# that was never exercised. Read the mutant's failure message, not its exit
-# status.
-#
-# Both come from the same method, which also caught two instructions that looked
-# right and failed the moment a fixture met them:
-#   - reading only LC_BUILD_VERSION found NOTHING against a real x86_64 binary,
-#     which is half the artifacts
-#   - taking the max deployment target across slices passed a fixture written
-#     expecting rejection, because a too-new x86_64 slice hides behind an arm64
-#     slice legitimately at the same version
-#
-# WHAT THIS DOES NOT PROVE. The stubs encode what the real tools print, which for
-# otool is verbatim output captured from the shipped v0.100.0 artifacts (both
-# architectures), and for the signing tools is Apple's documented output, NOT
-# something this repo has observed. So this proves the script's logic — every
-# branch, in both directions — and cannot prove that the real spctl/stapler/
-# syspolicy_check wording matches. That half is verified the first time the lane
-# runs on a macOS runner.
+# DOES NOT PROVE the real spctl/stapler/syspolicy wording; the signing stubs are
+# Apple's documented output, not something observed here.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -98,12 +54,9 @@ finish() {
 trap finish EXIT INT TERM
 
 # ── the real thing, captured ──────────────────────────────────────────────────
-# Verbatim `otool` output from the v0.100.0 release artifacts, which is what
-# makes the fixtures worth anything. The two architectures do NOT use the same
-# load command — aarch64 carries LC_BUILD_VERSION (`minos`), x86_64 the older
-# LC_VERSION_MIN_MACOSX (`version`) — and a reader that knows only the modern one
-# finds nothing on the x86_64 build. That is the single most important thing
-# these fixtures pin.
+# Verbatim from the v0.100.0 artifacts. The two arches do NOT share a load
+# command — aarch64 LC_BUILD_VERSION, x86_64 the older LC_VERSION_MIN_MACOSX —
+# and a reader knowing only the modern one finds nothing on x86_64.
 OTOOL_L_CLEAN='	/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (compatibility version 45.0.0, current version 2685.60.104)
 	/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)
 	/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit (compatibility version 1.0.0, current version 624.2.5)
@@ -135,11 +88,8 @@ make_stubs() {
 
   cat >"$bin/hdiutil" <<'EOF'
 #!/usr/bin/env bash
-# Recorded WITH whether the target was still there, because for --cleanup the
-# ORDER of its two jobs is the whole point: detaching a mountpoint after the
-# directory holding it has been removed is not detaching it, and on a real Mac
-# that is an rm -rf walking into a still-attached image. A stubbed mount is an
-# ordinary directory, so this marker is the only trace that ordering leaves.
+# Records whether the target still existed: --cleanup must detach BEFORE
+# removing, or it is an rm -rf walking into a still-attached image.
 if [ -e "${@: -1}" ]; then printf '%s\n' "$*"; else printf '%s [target-gone]\n' "$*"; fi \
   >>"$STUB_FIXTURE/calls/hdiutil"
 case "${1:-}" in
@@ -390,12 +340,8 @@ case "${STUB_BREAK:-}" in
   # And this is the other half: exit 0 with wording nobody taught the check.
   # Unknown must not read as pass.
   syspolicy_unknown) echo "Assessment complete. 3 items evaluated."; exit 0 ;;
-  # THE REAL SHAPE OF A FAILING REPORT. syspolicy_check reports PER CHECK, so a
-  # build with a fatal notarization problem still prints that its codesign check
-  # passed — and the failure carries none of the words a naive fail pattern looks
-  # for. A pass token matching `pass` anywhere matches the WRONG LINE here, which
-  # is a green row on a build Apple's own tool calls undistributable. Vocabulary
-  # from Apple's documented output (developer forums 706442).
+  # syspolicy_check reports PER CHECK, so a fatally unnotarized build still
+  # prints that codesign passed — a `pass` token matches the WRONG line.
   syspolicy_mixed)
     echo "Codesign check passed."
     echo "Notary Ticket Missing"
@@ -433,12 +379,8 @@ case "${STUB_BREAK:-}" in
   syspolicy_fatal_same_line)
     echo "Notary Ticket Missing, 0 errors in codesign"
     exit 0 ;;
-  # THE GREEN THAT ACTUALLY SHIPPED, on a906f15. The whole-line filter ate the
-  # failure because it carried a zero-count, and the pass sentence then satisfied
-  # the pass check — so check 8 reported a build with a missing notary ticket as
-  # distributable. Both halves are needed: the filter swallowing the finding, AND
-  # the report saying it is ready. Kept as its own scenario because it is the
-  # defect, not a variant of one.
+  # The green that shipped on a906f15: the filter ate a failure carrying a
+  # zero-count, then the pass sentence satisfied the pass check.
   syspolicy_green_trap)
     echo "App passed all pre-distribution checks and is ready for distribution."
     echo "Notary Ticket Missing, 0 errors in codesign"
@@ -527,11 +469,8 @@ EOF
 # header that happens to contain the same words.
 OUT=""; RC=0; ERR=""
 SCEN_DIR=""; SCEN_DMG=""; SCEN_STATE=""; ONLY_SEQ=0
-# The FIX_* knobs are set by the caller as prefix assignments. They are cleared
-# again in build_scenario, the only thing that reads them: bash's scoping for a
-# prefix assignment to a function is subtle enough that a leaked FIX_VERSION
-# would silently mis-build every scenario after it, and a fixture that is not
-# what the assertion assumes is the one failure mode a test cannot report.
+# FIX_* are prefix assignments, cleared in build_scenario: a leaked one would
+# mis-build every later scenario, which is the one failure a test cannot report.
 scenario_reset() {
   FIX_VERSION=""; FIX_CLAIM=""; FIX_FLAVOUR=""; FIX_MUTATE=""; FIX_DMG_NAME=""
   FIX_NO_MACHO=""; FIX_NO_SORT_V=""; FIX_UNIVERSAL=""; FIX_UNIVERSAL_X86=""
@@ -614,11 +553,8 @@ expect_err() { # <substring> <description>
   fail=$((fail + 1))
   printf 'FAIL  %-58s no "%s" in the diagnosis\n' "$2" "$1" >&2
 }
-# An EXACT code as well as zero/nonzero, because the script draws a distinction
-# inside "nonzero" that a workflow relies on: 1 is a check that FAILED, 2 is an
-# invocation that was wrong. Collapsing them lets a mistyped check id read as a
-# failing artifact — someone debugs the build instead of the call — and
-# zero/nonzero alone cannot see that happen.
+# The EXACT code: 1 is a failed check, 2 a wrong invocation. Collapsing them
+# lets a mistyped id read as a failing artifact.
 expect_rc() { # <zero|nonzero|N> <description>
   local ok=no
   case "$1" in
@@ -774,11 +710,8 @@ run_scenario break-unsigned STUB_BREAK=unsigned
 expect_only_failure "every Mach-O in the bundle is signed" \
   "an unsigned helper in Contents/Resources"
 
-# THE ARM64 HOLE. Apple Silicon binaries are ad-hoc codesigned by DEFAULT, and an
-# ad-hoc signature passes `--verify --strict` — without -R, code is checked only
-# against its own designated requirement, which ad-hoc trivially satisfies. So a
-# dylib the signing step missed is caught on x86_64 and invisible on arm64,
-# which is half the artifacts. The stub verifies it happily; only `-dv` tells.
+# The arm64 hole: Apple Silicon binaries are ad-hoc signed by default and pass
+# `--verify --strict`, so a missed dylib is invisible there. Only `-dv` tells.
 run_scenario break-adhoc STUB_BREAK=adhoc
 expect_only_failure "every Mach-O in the bundle is signed" \
   "an ad-hoc signed dylib that VERIFIES but no Developer ID signed"
@@ -891,11 +824,8 @@ run_scenario break-syspolicy-counted STUB_BREAK=syspolicy_mixed_count
 expect_only_failure "passes Apple's own distribution assessment" \
   "'2 of 3 checks passed' plus a missing ticket is not a pass"
 
-# ISOLATES THE PASS TOKEN. The two scenarios above are caught by the widened
-# FAIL pattern, so they say nothing about how narrow the pass pattern is — a
-# report with a per-check "passed" and no failure vocabulary at all is the only
-# input that can tell the two apart. Only the documented whole sentence is a
-# pass; a partial report is "cannot tell", which is not green.
+# Isolates the PASS token: the scenarios above trip the fail pattern, so only a
+# report with no failure vocabulary says how narrow the pass pattern is.
 run_scenario break-syspolicy-partial STUB_BREAK=syspolicy_partial
 expect_only_failure "passes Apple's own distribution assessment" \
   "a lone per-check 'passed' is not a distribution verdict"
@@ -919,21 +849,14 @@ expect_only_failure "passes Apple's own distribution assessment" \
 # unnoticed. Mutation testing showed exactly that.
 expect_err "not ready for distribution" "the finding survives the filter, not just the row"
 
-# The zero-count ON THE SAME LINE as the failure. A filter that drops any line
-# containing one discards this whole, and the row then lands on cannot-tell —
-# red, but for the wrong reason and only by luck of the pass check reading the
-# unfiltered output. Pinned to the failure branch so the filter cannot quietly
-# widen into eating findings.
+# Zero-count on the SAME line as the failure: a filter dropping any line that
+# contains one would discard the finding with it.
 run_scenario break-syspolicy-fatal-same-line STUB_BREAK=syspolicy_fatal_same_line
 expect_only_failure "passes Apple's own distribution assessment" \
   "a failure carrying its own zero-count on one line"
 expect_err "not ready for distribution" "the failure is read, not filtered away with the count"
 
-# THE FALSE GREEN THAT SHIPPED on a906f15, kept as its own scenario because it is
-# the defect rather than a variant of one. The whole-line filter ate the failure
-# (it carried a zero-count) and the pass sentence then satisfied the pass check,
-# so a build with a missing notary ticket was reported distributable. Both this
-# suite and its author called that state "fails safe" until it was run.
+# The false green that shipped on a906f15 — kept as the defect, not a variant.
 run_scenario break-syspolicy-green-trap STUB_BREAK=syspolicy_green_trap
 expect_only_failure "passes Apple's own distribution assessment" \
   "a missing notary ticket beside 'ready for distribution' is NOT a pass"
@@ -972,10 +895,8 @@ expect_row "deployment target within the supported floor" FAIL \
   "a Mach-O declaring no deployment target at all"
 
 # ── universal binaries: one floor per slice ───────────────────────────────────
-# Reading only the FIRST lipo slice judged an arm64 build against x86_64's 10.13
-# floor — a false red on a build with nothing wrong with it, which costs someone
-# an afternoon. We ship per-arch DMGs today, so this is future-proofing, and the
-# check gets MORE valuable if universal-apple-darwin is ever shipped.
+# Reading only the first lipo slice judged an arm64 build against x86_64's
+# floor. Future-proofing: we ship per-arch DMGs today.
 FIX_UNIVERSAL=1 run_scenario universal-ok STUB_BIN_ARCH=arm64 STUB_RUNNER_ARCH=arm64
 expect_row "deployment target within the supported floor" pass \
   "a universal binary: x86_64 at 10.13 and arm64 at 11.0 are both correct"
@@ -1016,11 +937,8 @@ if grep -q 'does not do version ordering' "$ERR"; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  a sort without -V was not diagnosed" >&2; fi
 
 # ── the TOOL failing, not the artifact ────────────────────────────────────────
-# The scenarios above all break the ARTIFACT. This one breaks otool itself, and
-# it is a distinct hole: the artifact is perfect and genuinely links
-# /opt/homebrew, but with otool silent and non-zero the sweep reads zero paths,
-# finds no violations, and reports green. The guard has to sit on the population
-# actually inspected — the load paths — not on the files iterated over.
+# Breaks otool, not the artifact: with the tool silent the sweep reads zero
+# paths and reports green. Guard the population inspected, not the files.
 mutate_homebrew_real() {
   printf '%s\n\t/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n' \
     "$OTOOL_L_CLEAN" >"$1/otool/libunyt.dylib.deps"
@@ -1040,12 +958,8 @@ expect_row "no build-machine library paths in any Mach-O" FAIL \
 expect_err "read no load paths" "a header-only otool is caught by the path count, not its status"
 
 # ── an empty scan is not a clean scan ─────────────────────────────────────────
-# A bundle with no Mach-O in it at all — a husk, or an extraction that produced
-# one. Three checks sweep "every Mach-O", and a sweep over nothing finds no
-# violations, so without an explicit guard each of them reports the same green
-# row as a genuinely clean bundle. This scenario is what proves the guards are
-# there: mutation-testing check-macos.sh showed all three surviving removal of
-# the guard until it existed.
+# A husk with no Mach-O: three checks sweep "every Mach-O", and a sweep over
+# nothing reports the same green row as a clean bundle.
 FIX_NO_MACHO=1 run_scenario break-no-macho
 expect_row "no build-machine library paths in any Mach-O" FAIL \
   "no Mach-O to scan: the path sweep must not report clean"
@@ -1070,16 +984,10 @@ else
 fi
 
 # ── the split path: one check per invocation ──────────────────────────────────
-# Everything above drives `check-macos.sh <dmg>`: nine checks, one process, the
-# extracted bundle held in shell variables. The CI job does not run it that way —
-# it runs each check as its own GitHub Actions step, so the step list reads like
-# the summary table instead of hiding it inside one green blob. That makes each
-# check a SEPARATE PROCESS and moves check 1's output into a state directory on
-# disk, which is a NEW way for a check to stop being able to fail: one that
-# cannot find its prerequisite could pass on empty input, or not run at all, and
-# from outside the two look identical. So every check is driven through --only
-# here as well, and the assertions are the same shape as above — which row, and
-# which diagnosis, never merely that something went red.
+# CI runs each check as its own step, so each is a separate PROCESS reading
+# check 1's output off disk — a new way to stop being able to fail. Same
+# assertions as above: which row, and which diagnosis, never merely that
+# something went red.
 
 # The baseline, check by check, in one shared state directory. Nine processes
 # where the whole-run path has one, and every row must still be green.
@@ -1089,12 +997,8 @@ for id in "${CHECK_IDS[@]}"; do
   only_check "$id"
   expect_only_row "${CHECKS[$i]}" pass "--only $id: the baseline passes on its own"
   expect_rc zero "--only $id exits 0 on a pass"
-  # WHAT EACH CHECK ACTUALLY READ, not merely that its row was green. A green row
-  # on this path says nothing on its own: every one of these checks would also go
-  # green pointed at the wrong thing, or at nothing, if its own guards were the
-  # only thing standing there. The two that sweep are pinned to the population
-  # they swept; the three that sweep nothing are pinned to the path they were
-  # handed, which is the only trace they leave.
+  # What each check actually READ: a green row here says nothing on its own,
+  # since each would also go green pointed at nothing.
   case "$id" in
     signed) expect_err "all 3 Mach-O file(s) signed" \
       "--only signed re-derives the enumeration from the state directory" ;;
@@ -1310,11 +1214,7 @@ expect_only_row "mounts and yields a .app bundle" FAIL \
 expect_rc nonzero "a mount that handed on nothing goes red"
 expect_err "could not write" "the mount check itself says why nothing was handed on"
 
-# A STATE DIRECTORY WHOSE PATH CARRIES A SPACE. The bundle already does — it is
-# "Unyt Sandbox.app" — and the state directory is one more path the workflow
-# hands in, so the same quoting has to hold for it or check 1's output never
-# reaches check 9. The same class of bug, one level out from the one this suite
-# already guards.
+# A state directory path with a space in it — the bundle already has one.
 build_scenario only-spaced-state
 SCEN_STATE="$SCEN_DIR/state dir"
 only_check mount
@@ -1423,11 +1323,8 @@ fi
 mode_check cleanup-again --cleanup
 expect_rc zero "--cleanup exits 0 with nothing to clean"
 
-# THE DETACH, which is the mode's entire reason for existing: a --only run killed
-# between attach and detach leaves the image mounted, and on a runner that
-# persists between jobs nothing else ever unmounts it. Removing the mountpoint
-# directory would look identical from outside, so only the stub's record of
-# having been ASKED to detach can see this.
+# The detach is the mode's whole reason to exist, and removing the mountpoint
+# looks identical from outside — only the stub's record can see it.
 build_scenario only-cleanup-detach
 mkdir -p "$SCEN_STATE/mnt"
 mode_check cleanup-detach --cleanup
@@ -1440,11 +1337,8 @@ expect_target hdiutil "$SCEN_STATE/mnt" "--cleanup detaches THAT mountpoint, der
 expect_no_target hdiutil "[target-gone]" \
   "--cleanup detaches while the mountpoint is still there, then removes it"
 
-# THE EXIT TRAP ITSELF, via the half of its job that leaves a trace. Its detach
-# fires only on a signal arriving mid-extraction; its work-directory removal
-# happens on every run that owns one, so pointing TMPDIR at an empty directory of
-# the scenario's makes "the trap ran" observable — anything left there is a run
-# that did not clean up after itself.
+# The exit trap, via the half that leaves a trace: TMPDIR pointed at an empty
+# dir makes "the trap ran" observable.
 build_scenario only-trap-cleanup
 mkdir -p "$SCEN_DIR/tmp"
 SCEN_STATE=""
@@ -1459,12 +1353,8 @@ else
   ls -A "$SCEN_DIR/tmp" | sed 's/^/      /' >&2
 fi
 
-# THE SORT GUARD IS PER PROCESS, so it has to run in every mode. Each --only step
-# is its own process, and one that skipped the guard would report a floor
-# comparison it cannot make — quietly permissive, which reads as a pass. Refusing
-# to print even the check LIST is the right severity here: with no version
-# ordering nothing this script says about a floor can be trusted, and a workflow
-# that got a list would go on to run nine steps that cannot be right.
+# The sort guard is per process, so it must run in every mode — one that skipped
+# it would report a floor comparison it cannot make, quietly permissive.
 FIX_NO_SORT_V=1 build_scenario only-break-sort
 only_check deployment
 expect_rc nonzero "--only stops on a sort without -V instead of reporting"

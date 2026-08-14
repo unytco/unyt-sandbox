@@ -3,19 +3,12 @@
 #
 #   launch-and-assert.sh <installed-binary>
 #
-# Runs inside the container, after the .deb is installed. No WebDriver, no
-# in-app hooks beyond the app's own log — the only tool added to the machine is
-# Xvfb, which stands in for the user's monitor and adds nothing to the app's own
-# dependency closure.
+# Runs in the container after install. Only Xvfb is added, which adds nothing to
+# the app's dependency closure.
 #
-# Three assertions, in order:
-#   1. REACHES a healthy terminal state (the set in common.sh — any one passes).
-#      Fails immediately on a terminal failure state or a panic.
-#   2. STAYS there. A conductor that boots and then wedges passes (1) and fails
-#      here: after the terminal state, keep tailing for longer than one heartbeat
-#      interval and refuse a conductor that keeps dropping.
-#   3. SHUTS DOWN. SIGTERM, then require exit within a bound — a hung process
-#      does not.
+# Three assertions: REACHES a healthy terminal state, STAYS there (longer than
+# one heartbeat interval, so a conductor that boots then wedges fails), and
+# SHUTS DOWN on SIGTERM within a bound.
 #
 # Env: UNYT_SMOKE_SANDBOX (default /tmp/ut-smoke) · UNYT_SMOKE_TIMEOUT (default
 #      240) · UNYT_SMOKE_SETTLE (default 45, must exceed the 5s first backoff) ·
@@ -99,11 +92,9 @@ xvfb-run -a "$BIN" >"$stdout_log" 2>&1 &
 app_pid=$!
 set +m
 
-# Track the APP, not the launcher. `$!` is xvfb-run's pid, and xvfb-run does not
-# exec — so an app that ignores SIGTERM keeps running while xvfb-run exits, and
-# watching the launcher would report a clean shutdown for a hung app. Matched on
-# exact process name inside the group, which excludes xvfb-run and Xvfb (whose
-# own command lines both CONTAIN the binary path, so -f would match them too).
+# Track the APP, not the launcher: xvfb-run does not exec, so watching it would
+# report a clean shutdown for a hung app. Exact process name, because -f would
+# also match xvfb-run and Xvfb (their command lines contain the binary path).
 app_proc=""
 # An AppImage runs as its INNER binary, not as the .AppImage filename, so the
 # caller can name the process to watch (container-checks-appimage.sh does).
@@ -156,11 +147,9 @@ fi
 echo "OK: reached a healthy backend state -> ${reached}" >&2
 
 # ── 1b. the WEBVIEW painted ───────────────────────────────────────────────────
-# Required, not an alternative: every state above comes from Rust during boot and
-# would appear just the same if the UI bundle never loaded, so without this a
-# black-window release passes. Skipped only for an artifact that cannot emit the
-# breadcrumb at all (v0.100.0 and earlier), which keeps old artifacts smokeable
-# without letting a new one quietly lose its only webview proof.
+# Required, not an alternative: every state above comes from Rust and would
+# appear even if the UI never loaded, so without this a black-window release
+# passes. Skipped only for artifacts that cannot emit the breadcrumb at all.
 ui_probe_rc=0
 smoke_supports_ui_ready "$UI_READY_PROBE" || ui_probe_rc=$?
 if [ "$ui_probe_rc" = 2 ]; then
@@ -191,10 +180,8 @@ else
 fi
 
 # ── 1c. this was a COLD install ───────────────────────────────────────────────
-# The sandbox is wiped above and the container is --rm, but that is the setup's
-# claim, not a measurement. If a prior version's identity had been carried into
-# this boot, the run would be a warm start and would not be testing the path a
-# user actually hits on first install.
+# The wiped sandbox is the setup's claim, not a measurement — a carried identity
+# means this is a warm start, not the path a user hits on first install.
 if smoke_all_logs "$SANDBOX" | smoke_match_carried; then
   echo "::error::a prior identity was carried into this boot — the sandbox was not clean," >&2
   echo "  so this run tested a warm start, not the first install it claims to." >&2
