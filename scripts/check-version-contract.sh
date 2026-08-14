@@ -8,7 +8,8 @@
 # trustworthy.
 #
 # Usage:  check-version-contract.sh <git-tag>      e.g.  v0.93.0   or   v0.93.1-rc.2
-# Exit 0 + echo the canonical version (e.g. "0.93.0") on agreement; non-zero + a reason on mismatch.
+# Exit 0 + echo the canonical version (e.g. "0.93.0", "0.101.0-rc.0") on agreement; non-zero + a
+# reason on mismatch.
 set -euo pipefail
 
 TAG="${1:?usage: check-version-contract.sh <git-tag>}"
@@ -18,9 +19,8 @@ CONF="$ROOT/unyt/src-tauri/tauri.conf.json"
 
 fail() { echo "version-contract: $*" >&2; exit 1; }
 
-# The tag's release version: strip a leading v and any -rc.* / prerelease suffix (v0.93.1-rc.2 → 0.93.1).
+# The tag's release version: strip a leading v. -rc.* versions are possible too and supported by the release workflow.
 tag_version="${TAG#v}"
-tag_version="${tag_version%%-*}"
 
 [ -f "$CARGO" ] || fail "missing $CARGO (is the unyt submodule checked out?)"
 [ -f "$CONF" ] || fail "missing $CONF"
