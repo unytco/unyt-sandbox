@@ -5,35 +5,19 @@
 .DESCRIPTION
   pwsh -File scripts/smoke/test-windows-checks.ps1
 
-  WHY THIS EXISTS. This suite's hard rule is that a check must be able to fail:
-  nine defects in it made a check silently pass, and every one was found by
-  feeding a deliberately broken input, never by reading the code.
+  Drives the REAL functions out of check-windows.ps1 (dot-sourced -LibraryOnly),
+  never a copy: every defect so far has been in the call site.
 
-  It drives the REAL functions out of check-windows.ps1 — dot-sourced with
-  -LibraryOnly — rather than a copy of them, for the same reason test-oracle.sh
-  drives common.sh's matchers: every oracle bug so far has been in the call
-  site, and a copy would pass while the real script stayed broken.
+  ASSERT THROUGH THE CALL SITE'S ACTUAL SHAPE. This file drove the real functions
+  and still let a defect reach a runner: assertions called them BARE while
+  check 5 wraps in `@(...)`, and with `return , @(...)` the wrapped shape nests
+  the array — coerced to [string[]] it became one space-joined "DLL name", and
+  the check reported a finding whatever the binary imported. Assertions marked
+  "wrapped:" go through `@(...)` as production does. Add one whenever production
+  wraps, coerces, splits or re-types a result.
 
-  AND THAT IS NOT ENOUGH ON ITS OWN — ASSERT THROUGH THE CALL SITE'S ACTUAL
-  SHAPE. This file drove the real functions and still let a defect reach a real
-  runner: the assertions called them BARE while check 5 wraps them in `@(...)`,
-  and with `return , @(...)` those two shapes differ — the wrapped one nests the
-  array a level, which then coerces into [string[]] as a single space-joined
-  "DLL name". The allowlist matched nothing, every import list became one
-  unrecognised entry, and the check reported a finding regardless of what the
-  binary imported. It took the first real Windows run to see it, and it nearly
-  had a defect filed against the app that does not exist. Assertions marked
-  "wrapped:" below go through `@(...)` exactly as production does; keep them,
-  and add one whenever production wraps, coerces, splits or re-types a result.
-
-  ONE CHECK PER CI STEP IS A SECOND CALL SITE, AND IT IS A PROCESS. The workflow
-  runs `check-windows.ps1 -PrintChecks` to build a step per check and
-  `-Only <id>` for each one, so what it consumes is that script's stdout and
-  exit status — not the functions inside it. Those assertions start a real child
-  pwsh rather than calling a function, for the same reason the wrapped ones
-  exist: the shape a caller sees is the shape that has to be pinned. What the
-  steps hand each other, they hand over disk, so the JSON round trip is driven
-  through the functions that actually consume the state as well.
+  The workflow is a SECOND call site and it is a PROCESS — it consumes stdout and
+  exit status, not the functions — so those assertions start a real child pwsh.
 
   It runs on ANY platform, which is what makes it worth having: this repo has no
   Windows machine, so without it the checks would ship having never been
@@ -63,11 +47,8 @@ function Assert-That {
   param([Parameter(Mandatory)][string]$What, [Parameter(Mandatory)][AllowNull()][object]$Got, [AllowNull()][object]$Want)
   $g = if ($null -eq $Got) { '<null>' } else { ($Got -join ',') }
   $w = if ($null -eq $Want) { '<null>' } else { ($Want -join ',') }
-  # `-ceq`, NOT `-eq`. PowerShell's default string comparison is CASE-BLIND, so
-  # this assertion could not tell NSIS's `/S` from `/s` — and `/s` is not a
-  # switch NSIS knows, so the uninstaller would run interactively and hang the
-  # job. An assertion that cannot fail is the bug this whole file exists to
-  # prevent, and it was found here by mutation, not by reading.
+  # `-ceq`, NOT `-eq`: PowerShell's default string compare is CASE-BLIND, so this
+  # could not tell NSIS's `/S` from `/s` — and `/s` hangs the job on a dialog.
   if ($g -ceq $w) { $script:Pass++ ; return }
   $script:Fail++
   [Console]::Error.WriteLine(("FAIL  {0,-62} expected [{1}], got [{2}]" -f $What, $w, $g))
@@ -80,11 +61,9 @@ New-Item -ItemType Directory -Path $root -Force | Out-Null
 try {
 
   # ── a PE image, assembled byte by byte ──────────────────────────────────────
-  # The import table is the only place the check's central question is answered,
-  # so the fixture has to be a real PE rather than a mocked return value. Both
-  # optional-header magics are built because they place the data directories at
-  # different offsets — read PE32+ with PE32's layout and the import RVA is
-  # garbage, which is a silent "no imports found", which is a silent pass.
+  # A real PE, not a mocked return. Both optional-header magics, because they
+  # place the data directories at different offsets — reading PE32+ with PE32's
+  # layout yields a garbage RVA, i.e. a silent "no imports", i.e. a silent pass.
   function Build-TestPe {
     param(
       [Parameter(Mandatory)][string]$Path,
@@ -204,14 +183,8 @@ try {
   Assert-True 'a truncated PE throws' $threw
 
   # ── THE SHAPE THE PRODUCTION CALL SITE ACTUALLY USES ────────────────────────
-  # Every assertion above calls these functions BARE, and production wraps them
-  # in @(). Those are not the same thing: with `return , @(...)` the raw call
-  # returned a clean 3-element array while `@(call)` nested it one level, and a
-  # nested list coerced into [string[]] collapsed to ONE space-joined string. The
-  # allowlist then matched nothing, every import list became a single
-  # unrecognised "DLL", and the check reported a finding regardless of what the
-  # binary imported — which is exactly what the first real Windows run produced.
-  # Testing the bare shape could not see it. These test the wrapped shape.
+  # Everything above calls these BARE; production wraps in @(). Not the same
+  # thing — see the header. These test the wrapped shape.
   $wrapped = @(Get-ImportedDll -Path $pe64)
   Assert-That 'wrapped: the caller gets one element PER DLL' $wrapped.Count 2
   Assert-That 'wrapped: elements are strings, not a nested array' $wrapped[0].GetType().Name 'String'
@@ -310,14 +283,8 @@ try {
   Assert-False 'WebView2Loader is not either' (Test-IsVcRuntime -Dll 'WebView2Loader.dll')
 
   # ── Test-SignatureVerdict ───────────────────────────────────────────────────
-  # NotSigned is our builds' CURRENT state, and it must be a failure: the whole
-  # point of gating it is that the day a certificate is wired in, this turns
-  # green with no edit.
-  # FOUR OUTCOMES, all pinned. The signing state is a DECLARED expectation now,
-  # not a permanent red — amber while reality matches what we declared, red the
-  # moment they diverge in either direction. The row that matters most is
-  # signed-but-invalid: a plain skip would have silently lost it, and it is a
-  # real defect no declaration excuses.
+  # All four outcomes pinned. The one that matters most is signed-but-invalid:
+  # a plain skip would have lost it, and no declaration excuses it.
   Assert-That 'signed and trusted -> pass' `
   (Test-SignatureVerdict -Status 'Valid' -SignerSubject 'CN=Unyt').Result 'pass'
   Assert-That 'unsigned + we expect unsigned -> warn (today)' `
@@ -457,11 +424,9 @@ try {
   (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir $good).Ok
   Assert-That 'and both problems are reported at once' `
   (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($c) -InstallDir $good).Problems.Count 2
-  # A HALF THAT COULD NOT RUN HAS NOT PASSED. Every case above hands it both
-  # inputs; the check now gets InstallDir out of a FILE an earlier step wrote, so
-  # it is simply absent whenever that step went red — and the leftover-program
-  # half used to fall straight through, leaving Problems empty and Ok true. That
-  # is "uninstalls cleanly: pass" with the whole program still on disk.
+  # A half that could not RUN has not passed: InstallDir comes from a file an
+  # earlier step wrote, and the leftover-program half used to fall through as
+  # "uninstalls cleanly: pass" with the program still on disk.
   Assert-False 'no recorded install directory fails rather than skipping that half' `
   (Test-RemovalComplete -EntryKeyPath 'HKCU:\...\Unyt' -CurrentEntries @($a, $b) -InstallDir $null).Ok
   # The diagnosis, not just the colour: this and "left the program behind" are
@@ -520,15 +485,9 @@ try {
   Assert-True 'a process that never finishes is reported as a timeout' $r.TimedOut
   Assert-True 'and is given up on promptly rather than hanging the job' (((Get-Date) - $started).TotalSeconds -lt 30)
 
-  # An argument containing a space must reach the process as ONE argument —
-  # `msiexec /i "C:\dir with space\x.msi"`. Unquoted it is re-split and msiexec
-  # installs nothing.
-  #
-  # COUNTS THE ARGUMENTS THE CHILD ACTUALLY RECEIVED, because the obvious pin is
-  # hollow: `cmd /c exit 7` and `cmd /c "exit 7"` both yield 7 on Windows, the
-  # only platform this really matters on, so the assertion held whether or not
-  # the quoting worked. One argument means quoting survived; two means it was
-  # split. Runs identically on both platforms because the child is pwsh itself.
+  # Counts the arguments the CHILD received, because the obvious pin is hollow:
+  # `cmd /c exit 7` and `cmd /c "exit 7"` both yield 7 on Windows, so the
+  # assertion held whether or not the quoting worked.
   $argCounter = Join-Path $root 'argcount.ps1'
   Set-Content -LiteralPath $argCounter -Value 'exit $args.Count'
   $pwshExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
@@ -537,11 +496,8 @@ try {
   Assert-That 'a path containing a space arrives as ONE argument' $r.ExitCode 1
 
   # ── the check registry ──────────────────────────────────────────────────────
-  # The list is the contract between this script and the workflow: a step per
-  # check is generated from it, and a guard step matches the reported rows back
-  # against it. Pinned against LITERALS, never against the registry itself — an
-  # assertion that reads the ids out of the thing it is checking agrees with
-  # whatever it finds, which is an assertion that cannot fail.
+  # Pinned against LITERALS, never the registry itself: an assertion that reads
+  # the ids out of the thing it checks agrees with whatever it finds.
   $expectedIds = @('install', 'registers', 'executable', 'signed', 'imports', 'uninstall')
   $expectedChecks = @(
     "install`tinstalls silently"
@@ -602,15 +558,8 @@ try {
   $notInstaller = Join-Path $root 'artifact.zip'
   Set-Content -LiteralPath $notInstaller -Value 'not an installer'
 
-  # EXIT 2, NOT MERELY NON-ZERO. 2 is what check-macos.sh and common.sh reserve
-  # for a bad invocation, and the distinction is the point: a mistyped id exiting
-  # 1 reads as an artifact that failed a check, and the next person debugs the
-  # build instead of the command line. An assertion for "non-zero" would hold for
-  # 1, 2, 255 or a crash — which is exactly how a wrong code goes unnoticed.
-  #
-  # The diagnosis is read off the ::error:: line rather than the exception text:
-  # PowerShell's error view truncates to the console width, so the id list is
-  # exactly the part a wider or narrower runner would cut.
+  # EXIT 2, not merely non-zero: "non-zero" would hold for 1, 2, 255 or a crash.
+  # Read off the ::error:: line, since PowerShell's error view truncates.
   $unknown = Invoke-CheckScript -ScriptArgs @('-Only', 'not-a-check', '-Artifact', $notInstaller)
   $unknownSaid = @($unknown.Output | Where-Object { $_ -like '::error::*' }) -join "`n"
   Assert-That '-Only with an unknown id exits 2, the bad-invocation code' $unknown.ExitCode 2
@@ -646,11 +595,8 @@ try {
   (($whole.Output -join "`n") -match 'installs silently\s+FAIL')
 
   # ── state that outlives the process ─────────────────────────────────────────
-  # One check per step means the entry check 2 found reaches checks 3 and 6
-  # through JSON on disk rather than through a variable. Under StrictMode a
-  # dropped field does not read back as $null, it THROWS on access — and
-  # Invoke-Check records a throw as a FAIL, so a serialisation that quietly loses
-  # a property reports a perfectly good install as broken.
+  # Under StrictMode a dropped field does not read back as $null, it THROWS —
+  # so a lossy serialisation reports a perfectly good install as broken.
   $stateRound = Join-Path $root 'state-roundtrip'
   # The shape a real registry read produces: every field present, some of them
   # $null, and a path with a space in it (%LOCALAPPDATA%\Unyt Sandbox).
@@ -666,12 +612,9 @@ try {
   $env:UNYT_SMOKE_STATE = $stateRound
   try {
     Save-SmokeState -Name 'Entry' -Value $spaced
-    # THE DISK IS THE ONLY SOURCE while a state directory is set, and that is
-    # what everything below depends on: if a live in-memory copy were
-    # authoritative, every round-trip assertion here would read the original
-    # object and never touch serialisation at all — the defect they exist to
-    # catch could not be exhibited. Proven by rewriting the file underneath and
-    # reading again; a copy still in scope would make the tamper invisible.
+    # The disk must be the ONLY source, or every round-trip assertion below
+    # reads the original object and never touches serialisation. Proven by
+    # rewriting the file underneath: a live copy would hide the tamper.
     Assert-True 'a state directory makes the value a file on disk' `
     (Test-Path -LiteralPath (Join-Path $stateRound 'Entry.json'))
     # The stored SHAPE, asserted before anything reads through it: the tamper
@@ -714,14 +657,9 @@ try {
     Assert-True 'and that verdict is still the passing one' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0').Ok
     Assert-False 'while a mismatch still fails after a round trip' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.99.0').Ok
 
-    # The before-install snapshot is an ARRAY, so it round-trips through the
-    # shape check 2 actually reads it in — `@(Get-SmokeState ...)`.
-    #
-    # WHAT THESE TWO DO NOT PROVE, stated so nobody reads them as cover for the
-    # storage wrapper: `return` unrolls a list at the function boundary whether
-    # or not Save-SmokeState wraps the payload, so both hold with the wrapper
-    # removed. What pins the wrapper is the stored-shape assertion above; these
-    # pin only that a snapshot survives in the shape check 2 reads it in.
+    # Round-trips through the shape check 2 reads it in. These do NOT pin the
+    # storage wrapper — `return` unrolls a list either way; the stored-shape
+    # assertion above is what pins it.
     Save-SmokeState -Name 'Before' -Value @()
     Assert-That 'wrapped: an EMPTY snapshot comes back empty, not missing' @(Get-SmokeState -Name 'Before').Count 0
     Save-SmokeState -Name 'Before' -Value @($spaced)
@@ -757,11 +695,8 @@ try {
     try { Save-SmokeState -Name 'SomethingNew' -Value 'x' } catch { $threw = $true }
     Assert-True 'a state value the reset does not know about is refused' $threw
 
-    # AT THE CALL SITE, not only as a function: the reset has to be the FIRST
-    # thing the install check does, so a cycle cannot read the previous one's
-    # state even when this one then fails. Here the body fails immediately after
-    # it — the registry read it needs lives below the LibraryOnly guard — which
-    # is precisely the window being pinned.
+    # At the CALL SITE: the reset must be the first thing the install check
+    # does, so a cycle cannot read the previous one's state when this one fails.
     Save-SmokeState -Name 'Installed' -Value $true
     Save-SmokeState -Name 'Entry' -Value $spaced
     Save-SmokeState -Name 'InstallDir' -Value 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
@@ -777,11 +712,8 @@ try {
   finally { $env:UNYT_SMOKE_STATE = $null }
 
   # ── the handoff between two REAL processes ──────────────────────────────────
-  # Everything above round-trips the state inside one process. The actual call
-  # site is two: what check 3 writes, check 5 reads in a process that never saw
-  # it. Driven with the state a passing check 2 would have left, against a
-  # directory that really holds a program — the whole handoff, minus the install
-  # itself, which is the one part no machine here can do.
+  # The real call site is TWO processes: what check 3 writes, check 5 reads
+  # having never seen it. The whole handoff minus the install itself.
   $installed = Join-Path $root 'handoff/Unyt Sandbox'
   New-Item -ItemType Directory -Path $installed -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $installed 'unyt-sandbox.exe') -Value 'x'
@@ -840,10 +772,8 @@ try {
   (Write-CheckRow -Name 'uninstalls cleanly' -Verdict 'FAIL') 'uninstalls cleanly|FAIL'
 
   # ── a step's exit status IS its verdict ─────────────────────────────────────
-  # THE DECLARED-STATE DESIGN, now at step level. Split one check per step the
-  # signing check is a step of its own, so its warn has to exit 0 or the amber
-  # row turns the job red after all — a declared warning silently becoming a
-  # failure, which is the same bug as a failure silently becoming a skip.
+  # The signing check is a step of its own, so its warn has to exit 0 or the
+  # amber row turns the job red after all.
   foreach ($case in @(
       @{ Body = { $true }; Verdict = 'pass'; Status = 0 },
       @{ Body = { 'warn' }; Verdict = 'warn'; Status = 0 },
@@ -857,13 +787,9 @@ try {
   }
   $script:Results.Clear()
 
-  # AND THE SAME THING AT THE ACTUAL EXIT, IN A REAL PROCESS. Everything above
-  # composes the rule in-process; the step's status is whatever Write-RowAndExit
-  # passes to `exit`, and rewriting that to `if pass 0 else 1` leaves every
-  # assertion above green while turning the signing step red on every Windows
-  # run. No artifact off Windows can produce a warn — Get-AuthenticodeSignature
-  # is not there to return NotSigned — so the row is seeded and the real function
-  # driven in a child that dot-sources the library.
+  # The same rule at the ACTUAL exit: rewriting Write-RowAndExit to
+  # `if pass 0 else 1` leaves every assertion above green while reddening the
+  # signing step on every Windows run. Seeded row, real function, child process.
   function Invoke-RowExit {
     param([Parameter(Mandatory)][string]$Verdict)
     $ErrorActionPreference = 'Continue'
@@ -885,23 +811,11 @@ try {
   Assert-That 'a FAIL step really exits 1' (Invoke-RowExit -Verdict 'FAIL').ExitCode 1
 
   # ── a missing prerequisite is a FAILURE, and it says which ──────────────────
-  # Split one check per step, the state a check needs can simply not be there:
-  # the earlier step failed, or never ran. That has to be red, and it has to name
-  # the check that should have produced it — "the earlier check did not run" and
-  # "this check passed" being the same colour is the bug class this whole suite
-  # exists for, and a red row that does not say what is missing reads as a
-  # failure of the wrong check.
-  #
-  # Driven through Invoke-Check against an EMPTY state directory — the real
-  # driver over the real bodies — and the message is read back out of
-  # UNYT_SMOKE_LOG, which is where a step's narration actually goes. Only the
-  # ::error:: lines are matched, so the banner Invoke-Check prints (which carries
-  # a check's own name) cannot satisfy the assertion by accident.
-  #
-  # WHICH DIAGNOSIS FIRED, not just that the row went red. `Needs` alone does not
-  # distinguish 'executable' from 'uninstall' — both name the same prerequisite —
-  # so each also pins its own sentence, and a body that started reporting some
-  # other check's problem would be caught rather than merely staying red.
+  # Missing state must be red AND must name the check that should have produced
+  # it. Only ::error:: lines are matched, so Invoke-Check's banner (which carries
+  # the check's own name) cannot satisfy the assertion by accident.
+  # WHICH DIAGNOSIS FIRED, not just that the row went red: `Needs` alone does not
+  # distinguish 'executable' from 'uninstall', so each pins its own sentence.
   $stateEmpty = Join-Path $root 'state-empty'
   New-Item -ItemType Directory -Path $stateEmpty -Force | Out-Null
   $noteLog = Join-Path $root 'notes.log'
@@ -942,19 +856,9 @@ try {
   $script:Results.Clear()
 
   # ── the whole-suite run reaches every check ─────────────────────────────────
-  # The six calls used to be six literal statements; driving them from the
-  # registry is what makes it possible to walk a shorter list, and a run that
-  # walked an empty one would print an empty table and "All checks passed".
-  #
-  # ASSERTED FROM THE NARRATION, not from the row count: Invoke-AllChecks adds a
-  # FAIL row for any check that did not report, so counting rows would be
-  # satisfied by the very guard being tested. Only the banner Invoke-Check prints
-  # proves a body was actually entered.
-  #
-  # Every body FAILS here and none of them reaches the machine: checks 1 and 4
-  # need what only the real run sets up — the registry read defined below the
-  # LibraryOnly guard, and a resolved artifact path — while 2, 3, 5 and 6 stop at
-  # their prerequisite guards against the empty state directory.
+  # Asserted from the NARRATION, not the row count: Invoke-AllChecks adds a FAIL
+  # row for any check that did not report, so counting rows would be satisfied by
+  # the very guard being tested. Every body fails here and none reaches a machine.
   Remove-Item -LiteralPath $noteLog -Force -ErrorAction SilentlyContinue
   $script:Results.Clear()
   $env:UNYT_SMOKE_STATE = $stateEmpty
