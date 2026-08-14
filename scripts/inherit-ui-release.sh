@@ -48,7 +48,11 @@ got_sha="$(sha256sum "$tmp/unyt.happ" | awk '{print $1}')"
 #    the manifests down to the zome wasm, which a UI release never compiles.
 cp "$tmp/unyt.happ" "$ROOT/unyt/workdir/unyt.happ"
 [ -f "$tmp/alliance.dna" ] && cp "$tmp/alliance.dna" "$ROOT/unyt/dnas/alliance/workdir/alliance.dna"
+#    `--ignore-engines` for the same reason as the White-label UI workflow: hc-spin's native helper
+#    declares `engines.node >= 24` and this nix shell ships node 22, and yarn aborts the WHOLE install
+#    on an engine mismatch. Without it a UI release dies here — in publish-happ, the first job — so
+#    there would be no release object at all, not merely no installers.
 ( cd "$ROOT/unyt" && nix develop --no-update-lock-file --accept-flake-config --command bash -c \
-  "yarn install --frozen-lockfile && yarn workspace white-label package && hc web-app pack workdir" )
+  "yarn install --frozen-lockfile --ignore-engines && yarn workspace white-label package && hc web-app pack workdir" )
 
 echo "inherit: UI release $TAG built on inherited $PARENT_TAG DNA (unyt.happ sha256 $got_sha) — DNA not rebuilt."

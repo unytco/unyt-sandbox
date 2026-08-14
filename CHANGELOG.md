@@ -22,5 +22,6 @@ Application-level changes belong in
 
 ### Changed
 
+- **Release pipeline: the release build installs dependencies the way the app's other CI does.** `yarn install --frozen-lockfile --ignore-engines`, on both the build path and the UI-release path — a bare `yarn install` aborted on `@holochain/hc-spin-rust-utils`'s `engines.node >= 24`, so `v0.101.0-rc.0` produced no installers at all. The smoke check a release calls is now non-blocking in the run's conclusion too, not just structurally: it still reports the failure, but no longer marks the release run itself failed.
 - **Release pipeline: publish only artifacts the repo builds.** Drop the never-built `agent_details.dna` from the release, and set `artifactErrorsFailBuild` so a declared-but-missing artifact fails the release. The matrix job takes the version from the `publish-happ` job output instead of re-reading `tauri.conf.json`.
 

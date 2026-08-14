@@ -580,6 +580,57 @@ if [ -f "$wf" ]; then
   # runtime: it exits 2 there as an invocation error, which is a red step naming
   # the typo. Asserting it here would need the Windows registry too, and that
   # needs pwsh.
+
+  # EVERY JOB IS NON-BLOCKING, OR THE RELEASE GOES RED AGAIN. `non-blocking`
+  # keeps a failed check out of the calling release run's conclusion, but it does
+  # that one job at a time: a lane added later without the key silently restores
+  # the behaviour the input exists to remove, and nothing would say so until the
+  # next release run came back red for a report. A prose "every job below carries
+  # it" cannot catch that; counting can.
+  #
+  # PAIRED PER JOB, NOT COUNTED. Two totals can agree while being wrong about
+  # every job in the file — miss one job key and forget the flag on another, and
+  # 4 == 4 reports clean. Walking the blocks costs the same and can also NAME the
+  # job, which a count cannot.
+  #
+  # Read only below `jobs:`, and over the full set of characters a job id may
+  # use. Two-space keys exist above it too — `workflow_dispatch:` and
+  # `workflow_call:` — so a whole-file scan is scanning the wrong thing: under
+  # the pattern below it reads both as jobs, finds no flag under either, and
+  # fails today. The only thing that would rescue a whole-file scan is narrowing
+  # the name to `[a-z-]` so those two are skipped for containing an underscore,
+  # and that cuts the other, worse way: a job called `linux_images` would go
+  # unexamined, and an unexamined job is exactly the unflagged job this exists
+  # to find. So: slice first, match broadly. A TRAILING COMMENT on the
+  # key is admitted for the same reason — `windows:  # the windows lane` is legal
+  # YAML, and a key regex that rejects it does not report that job as unflagged,
+  # it stops seeing the job at all and attributes the next flag it meets to the
+  # job before. The flag is anchored at four spaces, so the comment that quotes
+  # it is never mistaken for the key.
+  unflagged="$(printf '%s\n' "$(sed -n '/^jobs:/,$p' "$wf")" | awk '
+    /^  [A-Za-z_][A-Za-z0-9_-]*:[ \t]*(#.*)?$/ {
+      if (job != "" && !seen) print job
+      job = $0; sub(/^  /, "", job); sub(/:.*$/, "", job); seen = 0; n++; next
+    }
+    /^    continue-on-error: \$\{\{ inputs\.non-blocking == true \}\}[ \t]*$/ { seen = 1 }
+    END { if (job != "" && !seen) print job; if (n == 0) print "<no jobs found>" }')"
+  if [ -z "$unflagged" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "release-smoke.yaml job without non-blocking" \
+      "$(printf '%s' "$unflagged" | tr '\n' ' ')" >&2
+  fi
+
+  # AND THE INPUT STAYS OFF `workflow_dispatch`. The flag above is only safe
+  # because the person who runs this smoke by hand cannot be handed a green run
+  # for a red smoke — that is the whole reason `non-blocking` is declared under
+  # `workflow_call` alone. Nothing else asserts it, and adding it to the dispatch
+  # inputs would look like a convenience.
+  if sed -n '/^  workflow_dispatch:/,/^  workflow_call:/p' "$wf" |
+      grep -q 'non-blocking'; then
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "non-blocking offered on workflow_dispatch" \
+      "a hand-dispatched smoke must be able to conclude failure" >&2
+  else pass=$((pass + 1)); fi
 else
   echo "SKIP  workflow/registry correspondence (no release-smoke.yaml)" >&2
 fi
@@ -593,11 +644,32 @@ for drv in container-checks.sh container-checks-appimage.sh; do
 done
 
 echo "oracle regression: $pass passed, $fail failed"
+
+# ANNOTATE, don't only exit non-zero. Every FAIL above goes to stderr, which is
+# a line inside a collapsed step log — readable when a red run sent you looking,
+# invisible when it did not. The job that runs this file is `continue-on-error`
+# on a release, so the run stays green and nothing sends you looking; the
+# annotation is then the only thing that surfaces on its own.
+#
+# ON STDOUT, unlike the FAIL lines it summarises — as is the floor below, for the
+# same reason: a workflow command is only worth writing if the runner is certain
+# to parse it, and stdout is where every `::error::` in release-smoke.yaml is
+# written.
+#
+# BEFORE THE FLOOR, because every assertion increments exactly one of the two
+# counters. Three real failures put `pass` under the floor as surely as a
+# truncated file does, and the floor exits — so ordering it first would answer a
+# multi-assertion regression with "the test file is truncated", the one
+# explanation that is certainly wrong. Say what happened, then check the count.
+if [ "$fail" -ne 0 ]; then
+  echo "::error title=Smoke oracle regressed::$fail assertion(s) failed — the checks' own guarantees are not holding; see this step's log for which"
+fi
+
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 107 ]; then
-  echo "::error::only $pass assertions ran; expected at least 107 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 109 ]; then
+  echo "::error::only $pass assertions ran; expected at least 109 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

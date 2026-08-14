@@ -13,7 +13,8 @@ name: "release-smoke"
 # from the check script's `--print-checks`. Nothing in this file decides what the
 # checks are; the scripts do. The last step of each job compares what reported
 # against that same list, so a step nobody wired up — or a check that silently
-# stopped existing — is a red run rather than a shorter table.
+# stopped existing — is a red job rather than a shorter table. A red RUN too,
+# unless the caller passed `non-blocking` (only the release does; see the input).
 #
 # Everything on Linux runs in PRISTINE distro containers, not on the runner — the
 # matrix is one named list in scripts/smoke/run-smoke.sh, spanning both the
@@ -47,6 +48,39 @@ on:
       release:
         required: true
         type: string
+      non-blocking:
+        # DOES A FAILED CHECK FAIL THE CALLER'S RUN? Every job below carries
+        # `continue-on-error: ${{ inputs.non-blocking == true }}`, and that is
+        # the ONLY thing this changes. Nothing about a check's own outcome moves:
+        # a failed check still fails its step, still emits its `::error::`
+        # annotation, and the lane jobs still write their summary table and
+        # upload their log — job-level `continue-on-error` touches none of that.
+        # What it stops is that failure reaching the run's CONCLUSION.
+        #
+        # HOW GITHUB RENDERS a soft-failed job — red, or green with a note — is
+        # not documented and has not been observed here. That is why the finding
+        # is carried by the annotation, the table and the log rather than left to
+        # the job's colour: those three hold whichever way it renders.
+        #
+        # It has to live here rather than at the call site because
+        # `continue-on-error` is NOT a legal key on a job that calls a reusable
+        # workflow — actionlint rejects it with "when a reusable workflow is
+        # called with `uses`, `continue-on-error` is not available". A called
+        # workflow has no run of its own either: its jobs ARE jobs of the
+        # caller's run, which is why a job in here can decide the caller's
+        # conclusion at all.
+        #
+        # DEFAULT false, AND DELIBERATELY NOT OFFERED ON `workflow_dispatch`:
+        # someone running the smoke by hand is asking whether a release is
+        # sound, and that answer must be able to come back red. Only the release
+        # passes true, because by then the artifacts exist and the finding is
+        # about a draft nobody has published yet. (`== true` rather than a bare
+        # truthiness test because on a dispatch run the property is undeclared —
+        # an explicit comparison rather than a bet on how an absent value coerces
+        # in a boolean field.)
+        required: false
+        default: false
+        type: boolean
     # DECLARED, SO A CALLER CANNOT PASS EVERYTHING. `secrets: inherit` at the
     # call site would hand this workflow the whole caller's scope — and the
     # release workflow that calls it holds the Apple signing certificate, its
@@ -68,6 +102,17 @@ on:
         # what is actually wrong.
         required: true
 
+# WHAT A RED JOB HERE COSTS DEPENDS ON WHO STARTED THE RUN, so the sentence that
+# says so is computed once rather than written out per lane. Three summary steps
+# print it, and the wrong half of it is exactly the lie that matters: telling
+# someone hand-dispatching the smoke that a failure "never fails the run" would
+# misinform the one reader who is using this to judge a release.
+env:
+  BLOCKING_NOTE: >-
+    ${{ inputs.non-blocking == true
+    && 'Nothing `needs` this job and the caller runs it non-blocking, so a failure here neither blocks a release nor fails the calling run — read this table, not the run''s colour.'
+    || 'Nothing `needs` this job, so a failure here blocks no release — but it does fail THIS run, which is what a hand-dispatched smoke is for.' }}
+
 # macOS and Windows are separate lanes: neither has an equivalent of dpkg's
 # dependency metadata, so they need their own answer rather than a matrix row.
 jobs:
@@ -80,11 +125,21 @@ jobs:
   # still reports green. So the list is asked for, not repeated.
   #
   # This job also runs the oracle regression test ONCE rather than per distro:
-  # it guards the assertions every container check depends on, so a broken oracle
-  # should stop the matrix rather than run it four times.
+  # it guards the assertions every container check depends on, and running it
+  # four times would say nothing extra.
+  #
+  # IT NO LONGER STOPS THE MATRIX, and that reversal is deliberate. Stopping was
+  # right while a broken oracle failed the run — a red run is an instruction to
+  # go and look. Under `non-blocking` it is not: the run stays green, so the same
+  # `needs` that used to withhold four jobs pending a fix would instead delete
+  # the entire Linux lane from a green release run, which is the coverage gap
+  # this file's opening rule is about. So the matrix step below is `!cancelled()`
+  # — the lane runs and reports, the oracle failure stands beside it as a red
+  # step and an annotation, and nothing goes missing quietly.
   linux-images:
     name: "linux smoke setup (image list + oracle)"
     runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.non-blocking == true }}
     permissions:
       contents: read
     outputs:
@@ -102,8 +157,11 @@ jobs:
       - name: Oracle regression test
         run: bash scripts/smoke/test-oracle.sh
 
+      # `!cancelled()` so a red oracle costs the run its oracle, not its Linux
+      # coverage — see the note above the job. A cancelled run still skips it.
       - name: Read the distro matrix from run-smoke.sh
         id: list
+        if: ${{ !cancelled() }}
         run: |
           # Built by hand rather than with jq: no dependency to assume, and the
           # slug (":" is not legal in an artifact name) is derived here so the
@@ -130,10 +188,18 @@ jobs:
           # workflow's version of it: four jobs that never exist, and a green
           # run that tested no Linux at all.
           #
-          # (A FAILING setup job is different and safe: it fails this job, which
-          # fails the run — verified against this repo's own history, where a
-          # failed job with a skipped dependent concluded `failure`. The danger
-          # is only an empty list that succeeds.)
+          # (THE ONLY WAY THE LANE GOES MISSING is this guard firing, and it is
+          # loud: the `::error::` below is emitted on the same path that withholds
+          # the list, so the absent lane always has an annotation standing next to
+          # it saying why. This job writes no summary table and uploads no log, so
+          # that annotation is its whole signal — which is also why the step above
+          # is `!cancelled()`: an oracle regression must not take the lane with it
+          # down a path that emits nothing.
+          # On a `workflow_dispatch` run it also still fails the run
+          # outright — verified against this repo's own history, where a failed
+          # job with a skipped dependent concluded `failure`. The danger this
+          # guard exists for is only an empty list that SUCCEEDS, which is why
+          # it exits non-zero rather than emitting `[]` itself.)
           if [ "$count" -eq 0 ]; then
             echo "::error::read no distro images from run-smoke.sh — the matrix would be empty and every Linux job would silently not exist"
             exit 1
@@ -145,13 +211,37 @@ jobs:
     name: "linux install smoke (${{ matrix.image }})"
     needs: linux-images
     # `needs` here is the matrix PROVIDER, not a gate on the release: this job
-    # consumes the list, nothing consumes this job. The non-blocking property is
-    # unchanged — see the note on the summary step.
+    # consumes the list, nothing consumes this job. Non-blocking is the
+    # `continue-on-error` below — see the note on the summary step.
+    #
+    # GATED ON THE LIST, NOT ON `needs.linux-images.result`. Once that job is
+    # `continue-on-error`, what `result` reports for it after a non-zero exit is
+    # undocumented — it may well say `success`. So this asks for the thing
+    # actually required instead, which holds under either answer: no list, no
+    # Linux lane, and a red setup job standing where the reason is.
+    #
+    # `!cancelled()` IS LOAD-BEARING, not decoration. A job `if` without a status
+    # function is evaluated as `success() && <expr>`, so without it this job would
+    # still be skipped whenever the setup job concluded failure — which is exactly
+    # the case the `!cancelled()` on that job's matrix step exists to keep the lane
+    # alive through. The two only work as a pair. It stays fail-closed: a setup job
+    # that emitted no list still skips this one, on the second half of the `&&`.
+    if: ${{ !cancelled() && needs.linux-images.outputs.images != '' }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.linux-images.outputs.images) }}
+        # BELT AND BRACES FOR THE GATE ABOVE, not a second opinion on it. If
+        # GitHub evaluates this matrix even for a job its `if` has already
+        # excluded, `fromJSON('')` is not an empty matrix — it is an expression
+        # the run cannot evaluate, which fails at startup instead of skipping.
+        # `|| '[]'` makes that path zero jobs rather than a broken run.
+        #
+        # THIS IS NOT A LICENCE FOR AN EMPTY LIST TO PASS UNNOTICED — read the
+        # guard in `linux-images`, which is what stops that. `[]` is reachable
+        # here only when that job has already gone red for saying so.
+        include: ${{ fromJSON(needs.linux-images.outputs.images || '[]') }}
     runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.non-blocking == true }}
     permissions:
       contents: read
     env:
@@ -263,11 +353,18 @@ jobs:
         run: bash scripts/smoke/run-smoke.sh --stop
 
       # THE JOB CONCLUDES FAILURE whenever a check failed or failed to report.
-      # Non-blocking is a STRUCTURAL property here — nothing `needs` this job, so
-      # its failure cannot stop or unpublish a release — deliberately not a flag:
-      # a green check indistinguishable from a real pass is how a broken smoke
-      # goes unread, and a knob that reads as behaviour invites someone to flip
-      # it and believe something changed.
+      # That is the part nothing may soften: a green check indistinguishable
+      # from a real pass is how a broken smoke goes unread.
+      #
+      # Non-blocking is TWO separate properties, and only the second is a flag.
+      # Nothing `needs` this job, so its failure cannot stop a release —
+      # structural, and it stays that way. But `needs` says nothing about the
+      # RUN's conclusion, so a failure here still turned the whole release run
+      # red, and a report-only check that reads as a broken release is its own
+      # way of going unread. `inputs.non-blocking` (set by the release caller)
+      # puts `continue-on-error` on this job for that, and for nothing else: the
+      # step below still exits non-zero, still annotates the run, still writes
+      # this table, still uploads its log.
       - name: Summary — and did every check report?
         if: ${{ !cancelled() }}
         env:
@@ -298,7 +395,7 @@ jobs:
             head -100 "$table"
             echo '```'
             echo ""
-            echo "Each check above is its own step in this job. This job goes red when a check fails or never reported, but nothing \`needs\` it, so it never blocks or unpublishes a release."
+            echo "Each check above is its own step in this job. This job concludes failure when a check fails or never reported. $BLOCKING_NOTE"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
             echo "::error title=Release smoke failed on $IMAGE::see the step list for which check failed"
@@ -338,6 +435,7 @@ jobs:
             arch: x86_64
             asset: x64_darwin.dmg
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ inputs.non-blocking == true }}
     permissions:
       contents: read
     env:
@@ -448,8 +546,10 @@ jobs:
         shell: bash
         run: bash scripts/smoke/check-macos.sh --report "$DMG" 2>&1 | tee -a "$SMOKE_LOG"
 
-      # Same structural rule as the Linux job: red when a check fails or never
-      # reported, and nothing `needs` it. Do not add it to another job's `needs`.
+      # Same rule as the Linux job: concludes failure when a check fails or never
+      # reported, nothing `needs` it, and `inputs.non-blocking` keeps that
+      # failure out of the caller's conclusion. Do not add it to another job's
+      # `needs`.
       - name: Summary — and did every check report?
         if: ${{ !cancelled() }}
         env:
@@ -474,7 +574,7 @@ jobs:
             head -50 "$table"
             echo '```'
             echo ""
-            echo "Static checks only, and no launch step — see \`scripts/smoke/check-macos.sh\` for why. Nothing \`needs\` this job, so a failure never blocks or unpublishes a release."
+            echo "Static checks only, and no launch step — see \`scripts/smoke/check-macos.sh\` for why. $BLOCKING_NOTE"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
             echo "::error title=macOS release smoke failed::see the step list for which check failed"
@@ -515,6 +615,7 @@ jobs:
       matrix:
         runner: [windows-2022, windows-2025]
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ inputs.non-blocking == true }}
     permissions:
       contents: read
     env:
@@ -693,8 +794,9 @@ jobs:
           UNYT_SMOKE_RESULTS: ${{ runner.temp }}\results-msi
         run: pwsh -NoProfile -File scripts/smoke/check-windows.ps1 -Only uninstall -Artifact $env:MSI
 
-      # Same structural rule as the other two lanes: red when a check fails or
-      # never reported, and nothing `needs` it. A `warn` is not a failure — see
+      # Same rule as the other two lanes: concludes failure when a check fails or
+      # never reported, nothing `needs` it, and `inputs.non-blocking` keeps that
+      # failure out of the caller's conclusion. A `warn` is not a failure — see
       # the signing step above.
       - name: Summary — and did every check report?
         if: ${{ !cancelled() }}
@@ -730,7 +832,7 @@ jobs:
             head -50 "$table"
             echo '```'
             echo ""
-            echo "An install/uninstall cycle plus static checks — see \`scripts/smoke/check-windows.ps1\`. Nothing \`needs\` this job, so a failure never blocks or unpublishes a release."
+            echo "An install/uninstall cycle plus static checks — see \`scripts/smoke/check-windows.ps1\`. $BLOCKING_NOTE"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
             echo "::error title=Windows release smoke failed::see the step list for which check failed"

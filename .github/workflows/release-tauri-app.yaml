@@ -194,8 +194,26 @@ jobs:
 
       - name: Install and prepare
         working-directory: unyt
+        # This step installs the `tauri` CLI the build step below runs.
+        # `--ignore-engines` for the same reason as the White-label UI workflow
+        # (hc-spin's native helper declares `engines.node >= 24` while node here
+        # is 22), except that here yarn aborting the install meant no CLI, no
+        # bundle, and no installer at all — every build job of v0.101.0-rc.0
+        # died on this line. The UI-release path needed the same flag, in
+        # scripts/inherit-ui-release.sh.
+        #
+        # NODE 22 IS THE DELIBERATE HALF. It is the app's own `engines.node`
+        # floor and what the nix dev shell ships; raising the runner to 24 for
+        # one dev-only launcher would diverge from both to satisfy a package the
+        # tauri build never loads.
+        #
+        # `--frozen-lockfile` keeps THIS install from re-resolving. It is not an
+        # end-to-end guarantee about the shipped bundle: tauri-action's
+        # `beforeBuildCommand` is `make ci-build-ui`, whose `force-install`
+        # target runs its own `yarn install --ignore-engines` without a lockfile
+        # pin. Pinning that one belongs in the app repo's Makefile, not here.
         run: |
-          yarn install
+          yarn install --frozen-lockfile --ignore-engines
 
       - name: Download release of the .happ
         uses: robinraju/release-downloader@v1.10
@@ -246,10 +264,34 @@ jobs:
 
   # Install what was just built and prove the app starts — see release-smoke.yaml.
   # Called directly (not via `workflow_run`, which only fires for workflow files
-  # on the DEFAULT branch and so would silently never run on a release branch),
-  # NON-BLOCKING BY STRUCTURE, not by a flag: this job goes red when a check
-  # fails, and nothing `needs` it, so its failure cannot stop or unpublish the
-  # release that produced the artifacts. Do not add it to another job's `needs`.
+  # on the DEFAULT branch and so would silently never run on a release branch).
+  #
+  # NON-BLOCKING TAKES TWO THINGS, and structure is only the first of them.
+  # Nothing `needs` this job, so its failure cannot stop the release that
+  # produced the artifacts — do not add it to another job's `needs`. But a job's
+  # failure also feeds the RUN's conclusion no matter who depends on it, so a red
+  # smoke used to make the whole release run read as a failed release. It is not
+  # one: this job only downloads a release back and runs scripts against it — no
+  # step in it builds, packs, publishes or edits anything, so its red says
+  # something about the artifacts rather than about whether the run did its job.
+  # Spending the run's colour on it means a fine build reads as a broken one.
+  #
+  # THE SMOKE IS STILL A PRE-PUBLISH SIGNAL, and this must not bury it. The
+  # release is created `draft: true` and a human undrafts it, so a red check is
+  # read while that decision is still open. That is why the answer here is a run
+  # that stays green while the smoke jobs THEMSELVES stay red — never a smoke
+  # that reports success.
+  #
+  # The lever for that is NOT here. `continue-on-error` is illegal on a job that
+  # calls a reusable workflow — actionlint: "when a reusable workflow is called
+  # with `uses`, `continue-on-error` is not available" — so it lives on the
+  # called workflow's own jobs, which are jobs of THIS run, behind the
+  # `non-blocking` input passed below. A failing check still fails its step,
+  # annotates the run with what broke, writes its summary table and uploads its
+  # log; it just no longer colours the run.
+  #
+  # THIS DOES NOT EXTEND TO THE BUILD JOBS. A build that fails must still fail
+  # the run — there is nothing to report on if no installer exists.
   smoke-test:
     needs: [publish-happ, release-tauri-app]
     # `needs` alone SKIPS this job if any matrix row failed, so a Windows build
@@ -263,6 +305,9 @@ jobs:
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}
+      # Report, not gate — see the note above. Set ONLY here: a hand-dispatched
+      # release-smoke has to be able to answer red.
+      non-blocking: true
     # EXPLICIT, NOT `inherit`. This job sits above a build holding the Apple
     # signing certificate, its password and the Tauri signing private key, and
     # `secrets: inherit` would pass all of them to a workflow whose entire job is
