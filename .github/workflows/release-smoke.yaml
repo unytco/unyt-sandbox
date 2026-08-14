@@ -1,41 +1,13 @@
 name: "release-smoke"
 
 # Does the artifact a release shipped actually work on a user's machine?
+# Runs locally too: scripts/smoke/run-smoke.sh <artifact.deb>
 #
-# ONE CHECK PER STEP, on every platform. The job's step list is the report: it
-# names each check and shows which one failed, instead of one "run the checks"
-# blob whose result table is buried in a log. That also makes a coverage gap
-# visible as an absence — the macOS lane has no launch step where Linux has one,
-# and that is a fact about the platform (see scripts/smoke/check-macos.sh), not
-# an oversight.
+# Not job-level `container:`: GitHub injects tooling into a job container and the
+# image is no longer pristine. run-smoke.sh `docker exec`s into a detached one.
 #
-# Every step name here is a check's own display name, and every `--only` id comes
-# from the check script's `--print-checks`. Nothing in this file decides what the
-# checks are; the scripts do. The last step of each job compares what reported
-# against that same list, so a step nobody wired up — or a check that silently
-# stopped existing — is a red job rather than a shorter table. A red RUN too,
-# unless the caller passed `non-blocking` (only the release does; see the input).
-#
-# Everything on Linux runs in PRISTINE distro containers, not on the runner — the
-# matrix is one named list in scripts/smoke/run-smoke.sh, spanning both the
-# oldest supported glibc and the current stables. A GitHub runner is a build
-# image carrying hundreds of preinstalled libraries, so a package that
-# under-declares its dependencies installs and runs there while a real user's
-# machine fails — the exact bug class this exists to catch would be invisible.
-# Containers are both more faithful and runnable on a laptop, so the whole thing
-# iterates locally:
-#
-#   scripts/smoke/run-smoke.sh <artifact.deb>
-#
-# DO NOT REACH FOR THE JOB-LEVEL `container:` KEY to get one step per check on
-# Linux. It would make this trivial and would destroy the only thing the Linux
-# lane is for: GitHub injects its own Node.js and tooling into a job container so
-# it can run actions inside it, so the image stops being pristine. run-smoke.sh
-# starts a DETACHED container and `docker exec`s one check into it instead — the
-# runner's tooling stays outside, and the container holds itself open with a loop
-# built from its own bash and nothing the package under test did not pull in.
-#
-# The checks themselves live in scripts/smoke/ and are documented there.
+# Step names and `--only` ids come from each check script's `--print-checks`; the
+# summary step compares what reported against that list.
 on:
   workflow_dispatch:
     inputs:
@@ -49,123 +21,78 @@ on:
         required: true
         type: string
       non-blocking:
-        # DOES A FAILED CHECK FAIL THE CALLER'S RUN? Every job below carries
-        # `continue-on-error: ${{ inputs.non-blocking == true }}`, and that is
-        # the ONLY thing this changes. Nothing about a check's own outcome moves:
-        # a failed check still fails its step, still emits its `::error::`
-        # annotation, and the lane jobs still write their summary table and
-        # upload their log — job-level `continue-on-error` touches none of that.
-        # What it stops is that failure reaching the run's CONCLUSION.
-        #
-        # HOW GITHUB RENDERS a soft-failed job — red, or green with a note — is
-        # not documented and has not been observed here. That is why the finding
-        # is carried by the annotation, the table and the log rather than left to
-        # the job's colour: those three hold whichever way it renders.
-        #
-        # It has to live here rather than at the call site because
-        # `continue-on-error` is NOT a legal key on a job that calls a reusable
-        # workflow — actionlint rejects it with "when a reusable workflow is
-        # called with `uses`, `continue-on-error` is not available". A called
-        # workflow has no run of its own either: its jobs ARE jobs of the
-        # caller's run, which is why a job in here can decide the caller's
-        # conclusion at all.
-        #
-        # DEFAULT false, AND DELIBERATELY NOT OFFERED ON `workflow_dispatch`:
-        # someone running the smoke by hand is asking whether a release is
-        # sound, and that answer must be able to come back red. Only the release
-        # passes true, because by then the artifacts exist and the finding is
-        # about a draft nobody has published yet. (`== true` rather than a bare
-        # truthiness test because on a dispatch run the property is undeclared —
-        # an explicit comparison rather than a bet on how an absent value coerces
-        # in a boolean field.)
+        # Keeps a failed check out of the CALLER's run conclusion, and nothing
+        # else — the check still fails its step, annotates, and uploads its log.
+        # Not offered on workflow_dispatch: a smoke run by hand to judge a
+        # release has to be able to come back red.
+        # Set here, not at the call site: `continue-on-error` is rejected on a
+        # job that calls a reusable workflow.
         required: false
         default: false
         type: boolean
-    # DECLARED, SO A CALLER CANNOT PASS EVERYTHING. `secrets: inherit` at the
-    # call site would hand this workflow the whole caller's scope — and the
-    # release workflow that calls it holds the Apple signing certificate, its
-    # password, and the Tauri signing private key. None of that is needed to
-    # download a build and run shell scripts against it in a container, and
-    # handing it over would make a report-only post-release check into a
-    # signing-secret exposure path: every smoke script, every container, and
-    # every action they pull would be inside the blast radius.
-    #
-    # ANY FUTURE CALLER MUST LIST SECRETS EXPLICITLY, never `inherit`. Declaring
-    # them here is what makes that enforceable rather than a convention: an
-    # inheriting caller would still only be able to satisfy what is declared.
+    # Explicit, never `inherit`: the caller holds Apple signing credentials and
+    # the Tauri signing key, which nothing in here needs.
     secrets:
       GIT_PAT:
-        # Required, not optional, because there is no degraded mode: the release
-        # assets sit on a DRAFT prerelease, invisible without authentication, so
-        # an absent token does not produce a smaller check — it produces a 404
-        # that reads like a missing artifact. Failing at the call boundary says
-        # what is actually wrong.
+        # No degraded mode — the assets sit on a draft, so no token reads as a
+        # missing artifact rather than as an auth failure.
         required: true
 
-# WHAT A RED JOB HERE COSTS DEPENDS ON WHO STARTED THE RUN, so the sentence that
-# says so is computed once rather than written out per lane. Three summary steps
-# print it, and the wrong half of it is exactly the lie that matters: telling
-# someone hand-dispatching the smoke that a failure "never fails the run" would
-# misinform the one reader who is using this to judge a release.
+# One sentence, computed once, because what a failure costs depends on who
+# called: telling a hand-dispatched run it is non-blocking would be a lie.
 env:
   BLOCKING_NOTE: >-
     ${{ inputs.non-blocking == true
     && 'Nothing `needs` this job and the caller runs it non-blocking, so a failure here neither blocks a release nor fails the calling run — read this table, not the run''s colour.'
     || 'Nothing `needs` this job, so a failure here blocks no release — but it does fail THIS run, which is what a hand-dispatched smoke is for.' }}
 
-# macOS and Windows are separate lanes: neither has an equivalent of dpkg's
-# dependency metadata, so they need their own answer rather than a matrix row.
 jobs:
-  # ── the distro list, read from the script that owns it ──────────────────────
-  # One job per distro means a matrix, and a matrix normally hard-codes its
-  # values in YAML — which would be a SECOND copy of a list that already exists
-  # in run-smoke.sh. Two copies drift the moment someone adds a distro to one and
-  # not the other, and the drift is invisible in the worst way: the workflow
-  # quietly stops testing the image nobody remembered to add here, and every job
-  # still reports green. So the list is asked for, not repeated.
+  # WHAT IS ON THE RELEASE, AND WHAT WE CAN SMOKE. Every lane gates on these, so
+  # a platform whose build failed skips its lane instead of running checks that
+  # all report "the file isn't there" — noise that reads like findings.
   #
-  # This job also runs the oracle regression test ONCE rather than per distro:
-  # it guards the assertions every container check depends on, and running it
-  # four times would say nothing extra.
-  #
-  # IT NO LONGER STOPS THE MATRIX, and that reversal is deliberate. Stopping was
-  # right while a broken oracle failed the run — a red run is an instruction to
-  # go and look. Under `non-blocking` it is not: the run stays green, so the same
-  # `needs` that used to withhold four jobs pending a fix would instead delete
-  # the entire Linux lane from a green release run, which is the coverage gap
-  # this file's opening rule is about. So the matrix step below is `!cancelled()`
-  # — the lane runs and reports, the oracle failure stands beside it as a red
-  # step and an annotation, and nothing goes missing quietly.
-  linux-images:
-    name: "linux smoke setup (image list + oracle)"
+  # Also where the distro list and the oracle live: both are asked for once
+  # rather than repeated per lane.
+  inventory:
+    name: "smoke setup (release inventory + distro list + oracle)"
     runs-on: ubuntu-latest
     continue-on-error: ${{ inputs.non-blocking == true }}
     permissions:
       contents: read
     outputs:
       images: ${{ steps.list.outputs.images }}
+      deb: ${{ steps.assets.outputs.deb }}
+      appimage: ${{ steps.assets.outputs.appimage }}
+      exe: ${{ steps.assets.outputs.exe }}
+      msi: ${{ steps.assets.outputs.msi }}
+      dmgs: ${{ steps.assets.outputs.dmgs }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
-      # <1s, no Docker, and it guards the oracle every other check depends on.
-      # Three invocation bugs have shipped in that oracle, each of which made an
-      # assertion incapable of failing — a regression test nothing runs is a
-      # regression test you do not have.
+      # Three invocation bugs have shipped in this oracle, each making an
+      # assertion incapable of failing.
       - name: Oracle regression test
         run: bash scripts/smoke/test-oracle.sh
 
-      # `!cancelled()` so a red oracle costs the run its oracle, not its Linux
-      # coverage — see the note above the job. A cancelled run still skips it.
+      # `!cancelled()` on both steps below: a red oracle must cost the run its
+      # oracle, not its lanes — skipping them would delete coverage from a run
+      # that stays green.
+      - name: Which installers does this release actually carry?
+        id: assets
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          RELEASE: ${{ inputs.release }}
+        run: bash scripts/smoke/release-inventory.sh "$RELEASE" >> "$GITHUB_OUTPUT"
+
       - name: Read the distro matrix from run-smoke.sh
         id: list
         if: ${{ !cancelled() }}
         run: |
-          # Built by hand rather than with jq: no dependency to assume, and the
-          # slug (":" is not legal in an artifact name) is derived here so the
-          # matrix carries both forms.
+          # Slug because ":" is not legal in an artifact name.
           json="["
           count=0
           while IFS= read -r img; do
@@ -177,29 +104,9 @@ jobs:
           done < <(bash scripts/smoke/run-smoke.sh --print-images)
           json="$json]"
 
-          # AN EMPTY MATRIX RUNS ZERO JOBS AND THE WORKFLOW GOES GREEN.
-          #
-          # DO NOT REMOVE THIS AS DEFENSIVE CLUTTER. It is the same family as the
-          # guards inside the checks themselves — "the sweep found no violations
-          # because it examined nothing" — reappearing one level further out, in
-          # the workflow rather than in a script. That family has now produced a
-          # real defect at three separate levels of this suite, every time
-          # looking like a clean pass. A matrix that reads as empty is the
-          # workflow's version of it: four jobs that never exist, and a green
-          # run that tested no Linux at all.
-          #
-          # (THE ONLY WAY THE LANE GOES MISSING is this guard firing, and it is
-          # loud: the `::error::` below is emitted on the same path that withholds
-          # the list, so the absent lane always has an annotation standing next to
-          # it saying why. This job writes no summary table and uploads no log, so
-          # that annotation is its whole signal — which is also why the step above
-          # is `!cancelled()`: an oracle regression must not take the lane with it
-          # down a path that emits nothing.
-          # On a `workflow_dispatch` run it also still fails the run
-          # outright — verified against this repo's own history, where a failed
-          # job with a skipped dependent concluded `failure`. The danger this
-          # guard exists for is only an empty list that SUCCEEDS, which is why
-          # it exits non-zero rather than emitting `[]` itself.)
+          # Refuse to emit an empty list. Every lane gates on this output being
+          # non-empty, so emitting `[]` would skip the Linux lane silently; the
+          # annotation is this job's only signal, as it writes no summary table.
           if [ "$count" -eq 0 ]; then
             echo "::error::read no distro images from run-smoke.sh — the matrix would be empty and every Linux job would silently not exist"
             exit 1
@@ -209,70 +116,56 @@ jobs:
 
   linux:
     name: "linux install smoke (${{ matrix.image }})"
-    needs: linux-images
-    # `needs` here is the matrix PROVIDER, not a gate on the release: this job
-    # consumes the list, nothing consumes this job. Non-blocking is the
-    # `continue-on-error` below — see the note on the summary step.
-    #
-    # GATED ON THE LIST, NOT ON `needs.linux-images.result`. Once that job is
-    # `continue-on-error`, what `result` reports for it after a non-zero exit is
-    # undocumented — it may well say `success`. So this asks for the thing
-    # actually required instead, which holds under either answer: no list, no
-    # Linux lane, and a red setup job standing where the reason is.
-    #
-    # `!cancelled()` IS LOAD-BEARING, not decoration. A job `if` without a status
-    # function is evaluated as `success() && <expr>`, so without it this job would
-    # still be skipped whenever the setup job concluded failure — which is exactly
-    # the case the `!cancelled()` on that job's matrix step exists to keep the lane
-    # alive through. The two only work as a pair. It stays fail-closed: a setup job
-    # that emitted no list still skips this one, on the second half of the `&&`.
-    if: ${{ !cancelled() && needs.linux-images.outputs.images != '' }}
+    needs: inventory
+    # `!cancelled()` is load-bearing: a job `if` without a status function is
+    # evaluated as `success() && <expr>`, which would skip this lane whenever the
+    # setup job concluded failure — the case the setup's own `!cancelled()` steps
+    # exist to keep it alive through. Still fail-closed: no list, no lane.
+    # Gated on the outputs rather than on `needs.inventory.result`, whose value
+    # for a `continue-on-error` job that failed is undocumented.
+    if: >-
+      ${{ !cancelled()
+      && needs.inventory.outputs.images != ''
+      && (needs.inventory.outputs.deb == 'true' || needs.inventory.outputs.appimage == 'true') }}
     strategy:
       fail-fast: false
       matrix:
-        # BELT AND BRACES FOR THE GATE ABOVE, not a second opinion on it. If
-        # GitHub evaluates this matrix even for a job its `if` has already
-        # excluded, `fromJSON('')` is not an empty matrix — it is an expression
-        # the run cannot evaluate, which fails at startup instead of skipping.
-        # `|| '[]'` makes that path zero jobs rather than a broken run.
-        #
-        # THIS IS NOT A LICENCE FOR AN EMPTY LIST TO PASS UNNOTICED — read the
-        # guard in `linux-images`, which is what stops that. `[]` is reachable
-        # here only when that job has already gone red for saying so.
-        include: ${{ fromJSON(needs.linux-images.outputs.images || '[]') }}
+        # `|| '[]'` only for the case where GitHub evaluates the matrix of a job
+        # its `if` already excluded: `fromJSON('')` is a startup error, not an
+        # empty matrix. The setup job refuses to emit an empty list.
+        include: ${{ fromJSON(needs.inventory.outputs.images || '[]') }}
     runs-on: ubuntu-latest
     continue-on-error: ${{ inputs.non-blocking == true }}
     permissions:
       contents: read
     env:
       IMAGE: ${{ matrix.image }}
+      EXPECT_DEB: ${{ needs.inventory.outputs.deb }}
+      EXPECT_APPIMAGE: ${{ needs.inventory.outputs.appimage }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
-      # Written here rather than in the job's `env:`, where the `runner` context
-      # is not available — a workflow that references it there does not fail a
-      # job, it fails to start, and GitHub shows a run with no jobs at all.
+      # Not the job's `env:` — the `runner` context is unavailable there and the
+      # workflow fails to START, showing a run with no jobs at all.
       - name: Prepare the smoke state directory
         run: |
           mkdir -p "$RUNNER_TEMP/smoke-state"
           echo "UNYT_SMOKE_STATE=$RUNNER_TEMP/smoke-state" >> "$GITHUB_ENV"
           echo "UNYT_SMOKE_LOG=$RUNNER_TEMP/smoke.log" >> "$GITHUB_ENV"
 
-      # Both Linux bundles are smoked — they fail differently, and the AppImage
-      # is the one prone to over-bundling (see scripts/smoke/check-appimage.sh).
+      # Both bundles are smoked: they fail differently, and the AppImage is the
+      # one prone to over-bundling. One step each, so a failure to fetch one does
+      # not take the other's checks with it — and each is skipped, not failed,
+      # when the release simply has no such asset.
       #
-      # ONE STEP PER ARTIFACT, so each lane can be gated on ITS OWN download
-      # rather than on a shared one: a failure to fetch the AppImage must not
-      # take the .deb's five checks with it. The gate below is
-      # `steps.<id>.outcome == 'success'` — a string against a string literal.
-      # `env.DEB != ''` reads better and is not worth the risk: GitHub coerces
-      # mismatched types to numbers, a path casts to NaN, and NaN comparisons
-      # are the corner of that language nobody should be betting a whole lane on.
+      # The check steps gate on `steps.<id>.outcome`, not on `env.DEB != ''`:
+      # GitHub coerces mismatched types to numbers and a path casts to NaN.
       - name: Download the released .deb
         id: download-deb
+        if: ${{ env.EXPECT_DEB == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
           RELEASE: ${{ inputs.release }}
@@ -283,7 +176,7 @@ jobs:
 
       - name: Download the released AppImage
         id: download-appimage
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.EXPECT_APPIMAGE == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
           RELEASE: ${{ inputs.release }}
@@ -352,33 +245,27 @@ jobs:
         if: always()
         run: bash scripts/smoke/run-smoke.sh --stop
 
-      # THE JOB CONCLUDES FAILURE whenever a check failed or failed to report.
-      # That is the part nothing may soften: a green check indistinguishable
-      # from a real pass is how a broken smoke goes unread.
-      #
-      # Non-blocking is TWO separate properties, and only the second is a flag.
-      # Nothing `needs` this job, so its failure cannot stop a release —
-      # structural, and it stays that way. But `needs` says nothing about the
-      # RUN's conclusion, so a failure here still turned the whole release run
-      # red, and a report-only check that reads as a broken release is its own
-      # way of going unread. `inputs.non-blocking` (set by the release caller)
-      # puts `continue-on-error` on this job for that, and for nothing else: the
-      # step below still exits non-zero, still annotates the run, still writes
-      # this table, still uploads its log.
+      # Concludes failure whenever a check failed or failed to report — nothing
+      # may soften that. `non-blocking` keeps it out of the caller's conclusion
+      # only; the step still exits non-zero, annotates, and uploads its log.
       - name: Summary — and did every check report?
         if: ${{ !cancelled() }}
         env:
           RELEASE: ${{ inputs.release }}
         run: |
           rc=0
-          # THE ARTIFACT SET IS ASSERTED HERE, not by --summary. Its guard can
-          # only ask about lanes that were STARTED, so a bundle whose download
-          # failed — whose check steps were therefore skipped, reporting nothing
-          # at all — would leave a table that truthfully describes a complete run
-          # of the bundles that did arrive, and says "All checks passed".
+          # ABSENT FROM THE RELEASE AND FAILED TO DOWNLOAD ARE DIFFERENT THINGS,
+          # and only the second is a fault. `--summary` cannot tell them apart:
+          # it reports on the lanes that STARTED, so either way it would describe
+          # a complete run of the bundles that arrived and say "All checks
+          # passed". EXPECT_* comes from the inventory job, which asked the
+          # release itself.
           for want in DEB APPIMAGE; do
-            if [ -z "${!want:-}" ]; then
-              echo "::error::the $want artifact never downloaded, so its checks never ran — this run smoked less than it claims"
+            eval "expect=\${EXPECT_$want:-}"
+            if [ "$expect" != true ]; then
+              echo "no ${want} in this release — nothing to smoke, lane skipped"
+            elif [ -z "${!want:-}" ]; then
+              echo "::error::the $want artifact is on the release but never downloaded, so its checks never ran — this run smoked less than it claims"
               rc=1
             fi
           done
@@ -389,9 +276,7 @@ jobs:
             echo "### Release smoke — \`$RELEASE\` ($IMAGE)"
             echo ""
             echo '```'
-            # $GITHUB_STEP_SUMMARY caps at 1 MB and overflowing fails the step;
-            # the table is a handful of rows, but bound it anyway and keep the
-            # full output in the release-smoke-log artifact.
+            # $GITHUB_STEP_SUMMARY caps at 1 MB and overflowing fails the step.
             head -100 "$table"
             echo '```'
             echo ""
@@ -410,30 +295,25 @@ jobs:
           path: ${{ runner.temp }}/smoke.log
           if-no-files-found: warn
 
-  # ── macOS ───────────────────────────────────────────────────────────────────
-  # Static checks only: signing, notarization, linkage and deployment target,
-  # read off the artifact. THERE IS NO LAUNCH STEP HERE, and the step list is
-  # meant to show that: Apple's EULA caps virtualization at two VMs per physical
-  # Mac and tauri-driver has no macOS support at all, so there is no pristine-VM
-  # equivalent of the Linux lane's containers and nothing to launch the app in.
-  # The reasoning behind each check lives in scripts/smoke/check-macos.sh.
+  # Static checks only — no launch step: Apple's EULA caps virtualization at two
+  # VMs per physical Mac and tauri-driver has no macOS support, so there is no
+  # pristine-VM equivalent of the Linux containers.
   #
-  # ARCH MUST MATCH THE RUNNER: an aarch64 build cannot be assessed on an Intel
-  # one, so each DMG is paired with its own runner rather than both being run on
-  # whatever `macos-latest` currently means. macos-14 is unsupported from
-  # 2 Nov 2026 and macos-13 is already removed, so neither is used.
+  # Arch must match the runner — an aarch64 build cannot be assessed on an Intel
+  # one. macos-14 is unsupported from 2 Nov 2026 and macos-13 is already removed.
+  # The rows come from the inventory job, so an arch whose build failed is one
+  # absent row rather than nine failing checks.
   macos:
     name: "macos install smoke (${{ matrix.arch }})"
+    needs: inventory
+    if: >-
+      ${{ !cancelled()
+      && needs.inventory.outputs.dmgs != ''
+      && needs.inventory.outputs.dmgs != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            arch: aarch64
-            asset: aarch64_darwin.dmg
-          - runner: macos-15-intel
-            arch: x86_64
-            asset: x64_darwin.dmg
+        include: ${{ fromJSON(needs.inventory.outputs.dmgs || '[]') }}
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ inputs.non-blocking == true }}
     permissions:
@@ -446,12 +326,8 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
-      # Written here rather than in the job's `env:`, where the `runner` context
-      # is not available — a workflow that references it there does not fail a
-      # job, it fails to start, and GitHub shows a run with no jobs at all.
-      # UNYT_SMOKE_STATE is where check 1 leaves the extracted bundle for the
-      # eight steps after it; UNYT_SMOKE_RESULTS is the row each step appends,
-      # which the summary step reads back.
+      # Not the job's `env:` — the `runner` context is unavailable there and the
+      # workflow fails to START, showing a run with no jobs at all.
       - name: Prepare the smoke state directory
         run: |
           mkdir -p "$RUNNER_TEMP/smoke-state"
@@ -459,18 +335,11 @@ jobs:
           echo "UNYT_SMOKE_RESULTS=$RUNNER_TEMP/smoke-results" >> "$GITHUB_ENV"
           echo "SMOKE_LOG=$RUNNER_TEMP/smoke-macos.log" >> "$GITHUB_ENV"
 
-      # First, and before anything is downloaded: it needs no artifact, takes
-      # seconds, and it is what says the checks below can still fail. It drives
-      # check-macos.sh itself against stubbed tools, on BOTH the whole-run and
-      # the one-check-per-step path, so a check that stopped being able to go red
-      # is caught here rather than by nobody.
+      # Before any download: proves the checks below can still fail.
       - name: Can each check still fail?
         run: |
-          # The tally line is the PROOF the harness ran to the end. Asserted here
-          # as well as inside the script, because the failure being guarded
-          # against is the script not running its own guard: a truncated or
-          # replaced file exits 0 with no output, and a step that only checks
-          # the exit status would call that "every check is proven able to fail".
+          # Assert the tally line, not just the exit status: a truncated file
+          # exits 0 with no output.
           set -o pipefail
           bash scripts/smoke/test-macos-checks.sh 2>&1 | tee "$RUNNER_TEMP/macos-oracle.log"
           grep -q 'macos check regression:' "$RUNNER_TEMP/macos-oracle.log" || {
@@ -489,10 +358,8 @@ jobs:
             "$RELEASE" "$ASSET" "$RUNNER_TEMP/artifacts")"
           echo "DMG=$dmg" >> "$GITHUB_ENV"
 
-      # Check 1 mounts the image and copies the bundle into UNYT_SMOKE_STATE;
-      # every step after it reads the extracted app from there, because a step is
-      # a separate process. A check that cannot find it FAILS naming this one —
-      # it never quietly passes on an empty directory.
+      # Leaves the bundle in UNYT_SMOKE_STATE for the eight steps after it; each
+      # is a separate process. A step that cannot find it fails naming this one.
       - name: "mounts and yields a .app bundle"
         if: ${{ !cancelled() && steps.download.outcome == 'success' }}
         shell: bash
@@ -538,18 +405,13 @@ jobs:
         shell: bash
         run: bash scripts/smoke/check-macos.sh --only deployment "$DMG" 2>&1 | tee -a "$SMOKE_LOG"
 
-      # Ungated by design — the disk image's own Gatekeeper assessment is Tauri's
-      # business rather than a property of our build, and the linkage list is the
-      # bundle's implicit contract with the OS that nothing else records.
+      # Report, not check: the DMG's own Gatekeeper verdict is Tauri's business.
       - name: "report only (not a check)"
         if: ${{ !cancelled() && steps.download.outcome == 'success' }}
         shell: bash
         run: bash scripts/smoke/check-macos.sh --report "$DMG" 2>&1 | tee -a "$SMOKE_LOG"
 
-      # Same rule as the Linux job: concludes failure when a check fails or never
-      # reported, nothing `needs` it, and `inputs.non-blocking` keeps that
-      # failure out of the caller's conclusion. Do not add it to another job's
-      # `needs`.
+      # As the Linux job. Do not add this job to another job's `needs`.
       - name: Summary — and did every check report?
         if: ${{ !cancelled() }}
         env:
@@ -557,8 +419,8 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           rc=0
-          # As on Linux: a DMG that never downloaded means nine skipped steps,
-          # and a skipped step reports nothing rather than something red.
+          # The matrix only carries DMGs the release has, so an absent one here
+          # means the download broke — a fault, unlike a skipped lane.
           if [ -z "${DMG:-}" ]; then
             echo "::error::the macOS artifact never downloaded, so no check ran"
             rc=1
@@ -581,8 +443,7 @@ jobs:
           fi
           exit "$rc"
 
-      # A --only run killed between attach and detach would leave the image
-      # mounted on the runner.
+      # A --only run killed mid-way leaves the image mounted.
       - name: Detach and clean up
         if: always()
         run: bash scripts/smoke/check-macos.sh --cleanup
@@ -595,21 +456,19 @@ jobs:
           path: ${{ runner.temp }}/smoke-macos.log
           if-no-files-found: warn
 
-  # ── Windows ─────────────────────────────────────────────────────────────────
-  # An install/uninstall cycle plus what the artifacts declare. No UI automation
-  # and no pristine machine: Windows Sandbox is not available on GitHub-hosted
-  # runners, so the runner's own state is all there is — which is exactly why the
-  # import check compares against a list of what WINDOWS guarantees rather than
-  # against what happens to be installed here. Reasoning per check lives in
-  # scripts/smoke/check-windows.ps1.
+  # No pristine machine: Windows Sandbox is unavailable on GitHub-hosted runners,
+  # which is why the import check compares against what WINDOWS guarantees rather
+  # than against what happens to be installed here.
   #
-  # Both installers are smoked, on both supported runner images: an NSIS .exe and
-  # an MSI fail differently and land in different places (per-user vs
-  # per-machine). Each gets its own state and results directory, so the second
-  # installer's checks can neither read the first one's install nor have their
-  # rows counted against it.
+  # Both installers, on both runner images: an NSIS .exe and an MSI fail
+  # differently and land in different places (per-user vs per-machine). Separate
+  # state and results dirs, so neither reads the other's install or rows.
   windows:
     name: "windows install smoke (${{ matrix.runner }})"
+    needs: inventory
+    if: >-
+      ${{ !cancelled()
+      && (needs.inventory.outputs.exe == 'true' || needs.inventory.outputs.msi == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -620,28 +479,28 @@ jobs:
       contents: read
     env:
       LABEL: ${{ matrix.runner }}
+      EXPECT_EXE: ${{ needs.inventory.outputs.exe }}
+      EXPECT_MSI: ${{ needs.inventory.outputs.msi }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
-      # Written here rather than in the job's `env:`, where the `runner` context
-      # is not available — a workflow that references it there does not fail a
-      # job, it fails to start, and GitHub shows a run with no jobs at all.
+      # Not the job's `env:` — the `runner` context is unavailable there and the
+      # workflow fails to START, showing a run with no jobs at all.
       - name: Prepare the smoke log
         shell: pwsh
         run: |
           "UNYT_SMOKE_LOG=$env:RUNNER_TEMP\smoke-windows.log" |
             Add-Content -LiteralPath $env:GITHUB_ENV
 
-      # As on macOS: prove the checks can still fail before running any of them.
+      # Before any download: proves the checks below can still fail.
       - name: Can each check still fail?
         shell: pwsh
         run: |
-          # Same reasoning as the macOS lane: the tally line is the proof the
-          # harness reached its end, and a step checking only the exit status
-          # would read a truncated or replaced file as a clean pass.
+          # Assert the tally line, not just the exit status: a truncated file
+          # exits 0 with no output.
           $ErrorActionPreference = 'Continue'
           $log = Join-Path $env:RUNNER_TEMP 'windows-oracle.log'
           & pwsh -NoProfile -File scripts/smoke/test-windows-checks.ps1 2>&1 | Tee-Object -FilePath $log
@@ -651,19 +510,17 @@ jobs:
             exit 1
           }
 
-      # One step per installer, so each six-step lane is gated on its own
-      # download — see the Linux job for why the gate is a step outcome rather
-      # than a test on the environment variable.
+      # One step per installer, each gated on its own download — as on Linux.
       - name: Download the released NSIS installer
         id: download-exe
+        if: ${{ env.EXPECT_EXE == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
           RELEASE: ${{ inputs.release }}
         run: |
-          # RUNNER_TEMP is a backslash path on Windows and this step runs in Git
-          # Bash, where `mkdir -p 'D:\a\_temp/artifacts'` creates one directory
-          # with backslashes in its name. Forward slashes work in both shells.
+          # RUNNER_TEMP is a backslash path and this runs in Git Bash, where
+          # `mkdir -p 'D:\a\_temp/x'` makes one dir with backslashes in its name.
           out="${RUNNER_TEMP//\\//}/artifacts"
           exe="$(bash scripts/smoke/download-release-asset.sh \
             "$RELEASE" x64_windows.exe "$out")"
@@ -671,7 +528,7 @@ jobs:
 
       - name: Download the released MSI
         id: download-msi
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.EXPECT_MSI == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
@@ -682,16 +539,8 @@ jobs:
             "$RELEASE" x64_windows.msi "$out")"
           echo "MSI=$msi" >> "$GITHUB_ENV"
 
-      # ── the NSIS installer ──────────────────────────────────────────────────
-      # STILL A CHILD `pwsh -File` inside a `shell: pwsh` step, and the reason
-      # has changed rather than gone away. It used to be structural: one step ran
-      # the script twice in a loop, and the script ends in `exit`, which would
-      # have taken the step with it half way through. Each step now invokes it
-      # exactly once, so that reason is spent — but `-File` is also the only form
-      # whose exit status is unambiguously the script's, which is the whole
-      # signal a per-check step exists to carry. Calling it inline would make a
-      # check's verdict depend on how PowerShell propagates `exit` out of a
-      # dot-called script, and that is not a thing to be subtle about here.
+      # `pwsh -File` even inside `shell: pwsh`: it is the only form whose exit
+      # status is unambiguously the script's, and that status is the check.
       - name: "installs silently (.exe)"
         if: ${{ !cancelled() && steps.download-exe.outcome == 'success' }}
         shell: pwsh
@@ -716,11 +565,8 @@ jobs:
           UNYT_SMOKE_RESULTS: ${{ runner.temp }}\results-exe
         run: pwsh -NoProfile -File scripts/smoke/check-windows.ps1 -Only executable -Artifact $env:EXE
 
-      # AMBER, NOT RED, and only because we declared it. Our Windows builds carry
-      # no code-signing certificate, so this returns `warn`: the row and the
-      # annotation say what is being tolerated and what it costs the user, and
-      # the step stays green. It goes red the day reality and the declaration
-      # diverge in either direction — see $script:ExpectWindowsSigned.
+      # Deliberately amber: we ship unsigned, so this is `warn`, not a failure.
+      # It goes red the day reality and $script:ExpectWindowsSigned disagree.
       - name: "the installer is Authenticode-signed and trusted (.exe)"
         if: ${{ !cancelled() && steps.download-exe.outcome == 'success' }}
         shell: pwsh
@@ -794,10 +640,7 @@ jobs:
           UNYT_SMOKE_RESULTS: ${{ runner.temp }}\results-msi
         run: pwsh -NoProfile -File scripts/smoke/check-windows.ps1 -Only uninstall -Artifact $env:MSI
 
-      # Same rule as the other two lanes: concludes failure when a check fails or
-      # never reported, nothing `needs` it, and `inputs.non-blocking` keeps that
-      # failure out of the caller's conclusion. A `warn` is not a failure — see
-      # the signing step above.
+      # As the other two lanes. A `warn` is not a failure — see the signing step.
       - name: Summary — and did every check report?
         if: ${{ !cancelled() }}
         shell: bash
@@ -805,12 +648,14 @@ jobs:
           RELEASE: ${{ inputs.release }}
         run: |
           rc=0
-          # As on the other two lanes: an installer that never downloaded means
-          # six skipped steps, and a skipped step reports nothing rather than
-          # something red.
+          # As on Linux: absent from the release is a skip, present-but-missing
+          # is a fault, and a skipped step reports nothing either way.
           for want in EXE MSI; do
-            if [ -z "${!want:-}" ]; then
-              echo "::error::the $want artifact never downloaded, so its six checks never ran"
+            eval "expect=\${EXPECT_$want:-}"
+            if [ "$expect" != true ]; then
+              echo "no ${want} in this release — nothing to smoke, lane skipped"
+            elif [ -z "${!want:-}" ]; then
+              echo "::error::the $want artifact is on the release but never downloaded, so its six checks never ran"
               rc=1
             fi
           done

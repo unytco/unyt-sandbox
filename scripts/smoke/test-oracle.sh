@@ -555,12 +555,6 @@ rm -rf "$sum_dir"
 
 # ── the workflow wires up exactly the checks the scripts declare ─────────────
 # The did-it-run guard catches a missing step at the next release, as a red run.
-# This catches it now, which is cheaper: a check added to a registry with no CI
-# step is otherwise invisible until someone smokes a release.
-#
-# The Windows lane is deliberately absent — enumerating it needs pwsh, which is
-# not on every machine that runs this file. It is covered at runtime by the same
-# guard as the rest.
 wf="$here/../../.github/workflows/release-smoke.yaml"
 if [ -f "$wf" ]; then
   # Every id the workflow asks for, by either name: the Linux lane goes through
@@ -576,6 +570,17 @@ if [ -f "$wf" ]; then
       printf 'FAIL  %-58s no CI step runs: %s\n' "$spec declares a check nobody wired up" "$missing" >&2
     fi
   done
+  # THE SUFFIXES MUST MATCH THE DOWNLOADERS. Each lane skips when the inventory
+  # says its artifact is absent, so a suffix that drifts from what the lane
+  # downloads does not fail — it skips that lane forever, silently.
+  for suffix in $(grep -oE '^[A-Z]+_SUFFIX="[^"]+"' scripts/smoke/release-inventory.sh | cut -d'"' -f2) \
+                $(grep -oE '"[a-z0-9_]+_darwin\.dmg"' scripts/smoke/release-inventory.sh | tr -d '"' | sort -u); do
+    if grep -qF -- "$suffix" "$wf"; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "inventory suffix no lane downloads" "$suffix" >&2
+    fi
+  done
+
   # The other direction — an id in the workflow that no script owns — is left to
   # runtime: it exits 2 there as an invocation error, which is a red step naming
   # the typo. Asserting it here would need the Windows registry too, and that
@@ -635,6 +640,63 @@ else
   echo "SKIP  workflow/registry correspondence (no release-smoke.yaml)" >&2
 fi
 
+# ── the inventory decides which lanes run, so it must not be able to lie ─────
+# A lane skips when its artifact is absent — right for a build that failed, wrong
+# for an inventory that reports nothing by accident, which would leave a run that
+# passed having examined nothing.
+inv() { UNYT_SMOKE_ASSETS="$1" bash "$here/release-inventory.sh" 000 2>/dev/null; }
+inv_rc() { UNYT_SMOKE_ASSETS="$1" bash "$here/release-inventory.sh" 000 >/dev/null 2>&1; }
+
+full='x_linux.deb
+x_linux.AppImage
+x_aarch64_darwin.dmg
+x_x64_darwin.dmg
+x_x64_windows.exe
+x_x64_windows.msi'
+
+got="$(inv "$full")"
+for want in 'deb=true' 'appimage=true' 'exe=true' 'msi=true'; do
+  if printf '%s\n' "$got" | grep -qx -- "$want"; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); printf 'FAIL  %-58s %s\n' "full release should report $want" "$got" >&2; fi
+done
+if [ "$(printf '%s\n' "$got" | grep -o '"arch"' | grep -c .)" = 2 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL  %s\n' "full release should yield both macOS matrix rows" >&2; fi
+
+# Each artifact absent is reported absent, and its neighbours stay present.
+while IFS='|' read -r drop key; do
+  [ -n "$drop" ] || continue
+  got="$(inv "$(printf '%s\n' "$full" | grep -v -- "$drop")")"
+  if printf '%s\n' "$got" | grep -qx -- "$key=false" &&
+     [ "$(printf '%s\n' "$got" | grep -c '=true')" = 3 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s dropped %s\n' "only $key should read absent" "$drop" >&2
+  fi
+done <<'DROPS'
+linux.deb|deb
+linux.AppImage|appimage
+x64_windows.exe|exe
+x64_windows.msi|msi
+DROPS
+
+# One macOS build failing costs one matrix row, not the lane.
+got="$(inv "$(printf '%s\n' "$full" | grep -v aarch64_darwin)")"
+if printf '%s\n' "$got" | grep -q 'dmgs=\[{"runner":"macos-15-intel"' &&
+   ! printf '%s\n' "$got" | grep -q 'aarch64'; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL  %s\n' "a missing arm64 DMG should drop only its row" >&2; fi
+
+# THE CASE THIS BLOCK EXISTS FOR: the shape of run 31800038674, where every build
+# failed. Skipping all four lanes would be a green run that smoked nothing.
+if inv_rc 'unyt.happ
+unyt.webhapp
+alliance.dna'; then
+  fail=$((fail + 1))
+  printf 'FAIL  %s\n' "a release with no installers must not report a clean inventory" >&2
+else pass=$((pass + 1)); fi
+if inv_rc ''; then
+  fail=$((fail + 1))
+  printf 'FAIL  %s\n' "an empty asset list must not report a clean inventory" >&2
+else pass=$((pass + 1)); fi
+
 # The real drivers declare real checks. Cheap, and it is what the workflow's
 # `--only <id>` arguments are written against.
 for drv in container-checks.sh container-checks-appimage.sh; do
@@ -650,17 +712,6 @@ echo "oracle regression: $pass passed, $fail failed"
 # invisible when it did not. The job that runs this file is `continue-on-error`
 # on a release, so the run stays green and nothing sends you looking; the
 # annotation is then the only thing that surfaces on its own.
-#
-# ON STDOUT, unlike the FAIL lines it summarises — as is the floor below, for the
-# same reason: a workflow command is only worth writing if the runner is certain
-# to parse it, and stdout is where every `::error::` in release-smoke.yaml is
-# written.
-#
-# BEFORE THE FLOOR, because every assertion increments exactly one of the two
-# counters. Three real failures put `pass` under the floor as surely as a
-# truncated file does, and the floor exits — so ordering it first would answer a
-# multi-assertion regression with "the test file is truncated", the one
-# explanation that is certainly wrong. Say what happened, then check the count.
 if [ "$fail" -ne 0 ]; then
   echo "::error title=Smoke oracle regressed::$fail assertion(s) failed — the checks' own guarantees are not holding; see this step's log for which"
 fi
@@ -668,8 +719,8 @@ fi
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 109 ]; then
-  echo "::error::only $pass assertions ran; expected at least 109 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 125 ]; then
+  echo "::error::only $pass assertions ran; expected at least 125 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

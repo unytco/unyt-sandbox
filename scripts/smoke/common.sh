@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 # Shared constants for the release install-smoke. Sourced, never run.
-#
-# One home for the facts that must match the app: change the bundle identifier or
-# a runtime-status variant in `unyt/` and this file changes with it.
 
 # The Tauri bundle identifier (unyt/src-tauri/tauri.conf.json). Tauri keys
 # app_log_dir()/app_data_dir() on it, so the app's logs land under
@@ -13,45 +10,15 @@ UNYT_BUNDLE_ID="co.unyt.unyt.sandbox"
 # The glibc of the OLDEST distro we support (Ubuntu 22.04 ships 2.35) — i.e. the
 # highest version a shipped binary is allowed to require. Named for what it is:
 # the floor of the support range, which is the ceiling on what we may import.
-# A binary needing more installs fine and then dies at exec on a supported target.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_OLDEST_GLIBC="2.35"
 
 # ── The health oracle ─────────────────────────────────────────────────────────
 # Statuses as the app's own log writes them (unyt/src-tauri/src/runtime/status.rs
 # — `Status update: {from} -> {to}`), plus the webview breadcrumb.
-#
-# HEALTHY is a SET, and every member is a genuine, correct first-run outcome for a
-# shipped build on a clean machine. Do not "simplify" it to one:
-#   HcAuthRequired       production path: conductor up, agent key minted, the
-#                        auth server reachable and answering for an unregistered
-#                        key. A release build compiles a joining URL into
-#                        `consts`, and `joining_service_url()` treats an empty
-#                        env value as UNSET, so this is what a clean machine with
-#                        network access actually reaches.
-#   NetworkSetupRequired auth server unreachable -> the app fails OPEN
-#                        (HcAuthStatus::Failed -> warn -> LairReady), or the
-#                        build genuinely has no joining service.
-#   JoiningRequired      membrane-proof path.
-#   Ready                already-provisioned install.
-# Accepting all four is what lets this run with or without network access to
-# joining.unyt.dev, without tampering with the machine to force one branch.
-#
-# UiReady is deliberately NOT one of them. It is the only signal that proves the
-# WEBVIEW painted — every state above is emitted from Rust during boot and would
-# still appear if the UI bundle never loaded — so as an alternative it gated
-# nothing and a black-window release passed. It is asserted separately, and
-# REQUIRED, whenever the artifact under test carries the breadcrumb.
-#
-# NOTE ON SHAPE: these match Rust's Debug output, which differs per variant kind
-# — a struct variant prints `Name { field: … }`, a tuple variant `Name(…)`, and a
-# unit variant just `Name`. Matching them uniformly is how a state silently stops
-# being detected, so each group below is anchored to its own shape.
-#
-# ANCHORED to `Status update:`. The oracle greps the MERGED log — the app's own
-# lines plus holochain, kitsune2 and lair at RUST_LOG=info — where "-> Ready" and
-# the like occur in unrelated subsystem output. Unanchored, any of those declared
-# the app healthy.
+# HEALTHY IS A SET ON PURPOSE — all four are genuine first-run outcomes for a
+# shipped build, which is what lets this run with or without network access to
+# joining.unyt.dev. Do not simplify it to one.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_BACKEND_READY='Status update: .* -> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|Status update: .* -> Ready\b'
 
@@ -71,13 +38,6 @@ UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
 # (unyt/src-tauri/src/runtime/boot/identity.rs). On a cold install there is no
 # prior lair to carry, so this line MUST NOT appear — its presence means the run
 # is a warm start over leaked state and is not testing what users hit.
-#
-# NOTE: `has_existing_key: true` is NOT evidence of leakage and must not be
-# asserted false. On an authenticated build (any release), hc-auth mints an agent
-# key during boot and `resolve_agent_key` then REUSES it, so `reused` — and hence
-# `has_existing_key` — is legitimately true on a first install
-# (unyt/src-tauri/src/joining/mod.rs first_run_has_existing_key = reused ||
-# carried_forward). The carried-forward half is the one that indicates leakage.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_CARRIED_IDENTITY='identity: agent identity carried forward'
 
@@ -98,12 +58,6 @@ UNYT_RE_UI_READY='UI ready: webview mounted the root element'
 # Does THIS artifact know how to emit the breadcrumb? The log message is a string
 # literal compiled into the binary, so its presence is the artifact's own answer —
 # no version parsing, and nothing to keep in sync with a release schedule.
-# Artifacts predating the breadcrumb (v0.100.0 and earlier) stay smokeable; newer
-# ones cannot quietly lose their only webview proof.
-# Fails CLOSED on a bad path: an unreadable or missing probe is a broken check,
-# not evidence that the artifact predates the breadcrumb, and the two must not be
-# indistinguishable. Returns 2 for "cannot tell", which the caller treats as an
-# error rather than a skip.
 smoke_supports_ui_ready() {
   local probe="${1:?binary path required}"
   [ -f "$probe" ] && [ -r "$probe" ] || return 2
@@ -135,36 +89,6 @@ smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
 # Compare a COMPUTED dependency list against what the package DECLARES, and emit
 # one finding per line: `MISSING <dep>`, `UNCONSTRAINED <dep>`, or
 # `TOOLOW <dep> declared <constraint>`.
-#
-# Args: <declared-file> <computed-file> [provides-file]
-#   declared/computed: one `name (op ver)` per line.
-#   provides: optional, one `<package> <provides-name>...` per line — the names a
-#   computed package declares `Provides:`. Ubuntu's time_t transition renamed
-#   libgtk-3-0 -> libgtk-3-0t64 and libglib2.0-0 -> libglib2.0-0t64 on 24.04+ and
-#   debian:13, and dpkg-shlibdeps resolves to whatever the CURRENT image calls
-#   them — so a single hand-written declared list can never name both. The t64
-#   packages declare `Provides:` the old names (verified on 24.04, debian:13 and
-#   26.04, versioned), and a versioned dependency against a versioned Provides
-#   resolves, so declaring the non-t64 name installs correctly on all four
-#   images. This file's job is to agree with that reality: without the map the
-#   gate reports a correctly-installing package as MISSING, and a gate that goes
-#   red on a correct package is the one nobody reads.
-#
-# Lives here, and takes files rather than doing its own extraction, so
-# test-oracle.sh drives the REAL comparison against fixtures — the same reason
-# the matchers live here. Both bugs this replaced were invisible to reading:
-#   - package names were interpolated into an ERE, where `c++` is a quantifier,
-#     so a correctly-declared `libstdc++6` was reported MISSING. Parsing is now
-#     pure string splitting, with no pattern anywhere.
-#   - only a BARE declaration counted as under-declared, so declaring
-#     `libc6 (>= 2.17)` against a computed `(>= 2.34)` passed — leaving exactly
-#     the too-old-glibc install this gate exists to prevent. The declared floor
-#     must now COVER the computed one.
-# Split `>= 2.34`, `>=2.34` or `>>2.33` into "<op> <version>". Leading run of
-# relation characters is the operator, the rest is the version — a space is
-# optional in a hand-written list, and taking the LAST space-separated token
-# instead (the old approach) silently turned `>=2.34` into the "version" `>=2.34`,
-# which dpkg then accepted against anything.
 smoke_split_constraint() {
   local c="${1:-}" op ver
   c="${c#"${c%%[![:space:]]*}"}"; c="${c%"${c##*[![:space:]]}"}"
@@ -177,36 +101,6 @@ smoke_split_constraint() {
 # Compare a COMPUTED dependency list against what the package DECLARES, and emit
 # one finding per line: `MISSING`, `UNCONSTRAINED`, `NOFLOOR`, `BADVERSION`,
 # `UNPARSEABLE` or `TOOLOW`, each followed by the dependency.
-#
-# Args: <declared-file> <computed-file> [provides-file]
-#   declared/computed: one `name (op ver)` per line.
-#   provides: optional, one `<package> <provides-name>...` per line — the names a
-#   computed package declares `Provides:`. Ubuntu's time_t transition renamed
-#   libgtk-3-0 -> libgtk-3-0t64 and libglib2.0-0 -> libglib2.0-0t64 on 24.04+ and
-#   debian:13, and dpkg-shlibdeps resolves to whatever the CURRENT image calls
-#   them — so a single hand-written declared list can never name both. The t64
-#   packages declare `Provides:` the old names (verified on 24.04, debian:13 and
-#   26.04, versioned), and a versioned dependency against a versioned Provides
-#   resolves, so declaring the non-t64 name installs correctly on all four
-#   images. This file's job is to agree with that reality: without the map the
-#   gate reports a correctly-installing package as MISSING, and a gate that goes
-#   red on a correct package is the one nobody reads.
-#
-# Lives here, and takes files rather than doing its own extraction, so
-# test-oracle.sh drives the REAL comparison against fixtures — the same reason
-# the matchers live here. Every bug fixed in this function was a way for the gate
-# to accept a declaration providing no usable floor, which is the one property it
-# exists to enforce, and none was visible by reading:
-#   - package names interpolated into an ERE, where `c++` is a quantifier, so a
-#     correctly-declared `libstdc++6` was reported MISSING;
-#   - only a BARE declaration counted, so `libc6 (>= 2.17)` against a computed
-#     `(>= 2.34)` passed;
-#   - the operator was discarded, so `libc6 (<= 2.40)` — an UPPER bound, no floor
-#     at all — passed;
-#   - `dpkg --compare-versions` returns 0 for a malformed version, so the
-#     plausible hand-written `libc6 (>=2.34)` (no space) made ANY value pass.
-# The declared list is hand-maintained in tauri.conf.json and this gate's premise
-# is that it is wrong, so nothing here may assume it is well-formed.
 smoke_depends_gaps() {
   local declared_file="${1:?declared file required}" computed_file="${2:?computed file required}"
   local provides_file="${3:-}"
@@ -275,14 +169,6 @@ smoke_depends_gaps() {
 # of the sequence, and a `--only <id>` mode that runs exactly one of them,
 # resuming from a state directory an earlier invocation left behind. release-
 # smoke.yaml drives that mode so each check is its own CI step.
-#
-# It lives here, driven by test-oracle.sh, for the same reason the matchers do:
-# every bug in this suite has been in the invocation rather than the logic, and a
-# copy of this dispatcher in each driver would be two places for the next one to
-# hide. A driver sets UNYT_SMOKE_CHECKS (`id|display name|function`, IN RUN
-# ORDER) and UNYT_SMOKE_GATE (the id nothing downstream works without), then
-# calls smoke_dispatch.
-#
 # shellcheck disable=SC2034  # read by the scripts that source this file
 smoke_results=()
 
@@ -318,18 +204,6 @@ smoke_print_checks() {
 # A GitHub Actions step is a separate process, so what check 1 learned — the
 # package name, the installed binary, whether it got that far at all — has to
 # outlive it. Inside the container that is just a file in /tmp.
-#
-# READ BACK BY SOURCING, EVEN WITHIN ONE PROCESS. The whole-run path re-loads
-# between checks rather than keeping the values in scope, so it exercises the
-# same file the split path depends on; a value a check forgot to record fails
-# locally instead of only in CI.
-#
-# AND THE FILE IS THE ONLY SOURCE, which is why loading UNSETS first. Sourcing
-# alone cannot remove a variable that is no longer in the file, so a GATE_OK
-# left over from an earlier artifact's run would outlive the reset and let every
-# downstream check report on an install that is not there. A driver declares
-# UNYT_SMOKE_STATE_VARS and smoke_state_set refuses anything else, so a fifth
-# value cannot be added without joining the list that gets cleared.
 smoke_state_dir()   { printf '%s\n' "${UNYT_SMOKE_STATE:-/tmp/unyt-smoke-state}"; }
 smoke_state_file()  { printf '%s/state.env\n' "$(smoke_state_dir)"; }
 smoke_state_reset() { mkdir -p "$(smoke_state_dir)" && : >"$(smoke_state_file)"; }
@@ -408,10 +282,6 @@ smoke_run_one() { # <id>
   echo "===== $name =====" >&2
   smoke_order_ok "$id" && "$fn" || rc=1
   # Recorded whatever the verdict: the next check needs to know this one RAN.
-  # A FAILED write fails THIS check, rather than being swallowed — the marker is
-  # the whole basis of the order guarantee, and an unwritable state directory
-  # would otherwise produce a pass row whose successor then blames the wrong
-  # check (or, for the last check in a sequence, nothing at all).
   if ! smoke_state_set "$(smoke_state_var "$id")" 1; then
     echo "::error::could not record that '$name' ran in $(smoke_state_file) — the checks after" >&2
     echo "  it would be refused as though it had never happened." >&2

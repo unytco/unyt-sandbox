@@ -105,20 +105,6 @@ check_launch() {
 
   # The app runs as the inner binary, not as the .AppImage filename, so the launch
   # oracle is told what process to watch.
-  #
-  # READ FROM THE .desktop FILE, NOT `find usr/bin | head -1`. This bundle ships
-  # xdg-mime alongside the app, and `find` returns directory order, not sorted
-  # order — so which of the two came first was a coin flip per machine. On a
-  # developer's box it was the app; on the CI runner it was xdg-mime, and the
-  # launch oracle then watched for a process by that name, never saw one, and
-  # failed a WORKING artifact at the 20s mark on all four images. The same value
-  # also feeds the ui_ready probe below, so the breadcrumb was being looked for in
-  # xdg-mime — a skip that happened to be right for v0.100.0 and would have been
-  # silently wrong for any newer build. Same bug class as check-appimage.sh's N1:
-  # `find` order is not an answer to "which file do I want".
-  #
-  # The .desktop file at the AppDir root is the AppImage's own statement of what it
-  # runs (`Exec=unyt-sandbox`), which is exactly the question being asked.
   desktop_exec="$(grep -hm1 '^Exec=' "$APPDIR"/*.desktop 2>/dev/null |
     sed 's/^Exec=//; s/[[:space:]].*//')"
   inner_bin="$APPDIR/usr/bin/$desktop_exec"

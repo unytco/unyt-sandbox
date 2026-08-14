@@ -67,8 +67,6 @@ UNYT_SMOKE_IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:13 ubuntu:26.04)
 # YAML — two copies of it would drift the moment someone adds a distro here and
 # not there, and the drift would be invisible: the workflow would simply stop
 # testing the image nobody remembered to add. Declared once, below; read here.
-# Deliberately before the artifact argument is required, since listing the matrix
-# needs no artifact.
 if [ "${1:-}" = "--print-images" ]; then
   printf '%s\n' "${UNYT_SMOKE_IMAGES[@]}"
   exit 0
@@ -161,22 +159,6 @@ cmd_start() { # <artifact> <image>
   fi
   # --shm-size: WebKit needs more than Docker's 64MB default or the webview
   # process dies on start for reasons that look nothing like the real cause.
-  #
-  # PID 1 IS A BASH LOOP, AND `sleep infinity` IS WRONG HERE. Something has to
-  # hold the container open between execs, and the obvious choice does not reap:
-  # when the app is orphaned (xvfb-run exits first) it is reparented to PID 1,
-  # and under `sleep` it stays a ZOMBIE — whose pid still answers `kill -0`. The
-  # launch check's `alive()` is that exact test, so a perfectly clean shutdown
-  # reported as "still running 30s after SIGTERM — hung on shutdown". Measured,
-  # not reasoned: under `sleep infinity` the orphan sits in state `Z`, under a
-  # bash loop it is reaped. This is what PID 1 already was before the run was
-  # split into one exec per check (the driver script itself), so the loop
-  # restores the old behaviour rather than compensating for it.
-  #
-  # `--init` fixes it too, and is deliberately NOT used: it bind-mounts the
-  # host's tini into the container, and host tooling inside the image is the one
-  # thing this lane may not have — the same reason the job-level `container:` key
-  # is refused. A loop built from the image's own bash injects nothing.
   out="$(docker run -d --shm-size=1g \
     -v "$artifact:/artifact/$(basename "$artifact"):ro" \
     -v "$here:/smoke:ro" \
@@ -257,9 +239,6 @@ cmd_exec() { # <check-id>
   fi
 
   # THE ROW IS READ BACK OUT OF THE CONTAINER, not taken from the exit status.
-  # The status alone cannot tell a check that went red from a driver that died
-  # before reaching a verdict, and those must never look the same — the whole
-  # suite exists because "nothing was checked" kept reading as "nothing wrong".
   row="$(docker exec "$cid" tail -n 1 /tmp/unyt-smoke-state/results 2>/dev/null || true)"
   if [ "${row%%|*}" != "$name" ]; then
     if [ "$(container_state Running "$cid")" != true ]; then

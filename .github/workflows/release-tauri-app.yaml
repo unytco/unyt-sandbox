@@ -7,6 +7,7 @@ on:
 
 jobs:
   publish-happ:
+    name: Stage 1 - publish happ
     permissions:
       contents: write
     runs-on: ubuntu-22.04
@@ -18,8 +19,7 @@ jobs:
         with:
           token: ${{ secrets.GIT_PAT }}
           submodules: recursive
-          # Full history so a UI (patch) release can read the parent tag's submodule pointer and
-          # diff the DNA source between the parent commit and this one (scripts/inherit-ui-release.sh).
+          # Full history: a UI release diffs the parent tag's submodule pointer.
           fetch-depth: 0
 
       - name: Install nix
@@ -80,23 +80,22 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          # Fail the release if any declared artifact is missing — keeps the manifest honest so a
-          # declared-but-unbuilt artifact (e.g. a DNA the repo no longer produces) can't slip through.
+          # Declared-but-unbuilt artifacts must fail, not slip through.
           artifactErrorsFailBuild: true
           artifacts: |
             unyt/workdir/unyt.happ
             unyt/workdir/unyt.webhapp
             unyt/dnas/alliance/workdir/alliance.dna
           body: ${{ steps.changelog.outputs.notes }}
-          # Tag the release with the EXACT pushed tag so an -rc.* push stays an RC release (never the
-          # stable vM.m.p shape the router accepts); the version contract already asserts its core
-          # equals Cargo.toml. APP_VERSION (the stripped core) still names the changelog + assets.
+          # The EXACT pushed tag, so an -rc.* push cannot become a stable vM.m.p
+          # release the router would accept. APP_VERSION still names the assets.
           name: Unyt Sandbox ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: true
           draft: true
 
   release-tauri-app:
+    name: Stage 2 - release tauri apps (${{ matrix.config.label }})
     needs: publish-happ
     strategy:
       fail-fast: false
@@ -105,15 +104,19 @@ jobs:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
             arc_factor: default
+            label: macos-arm64
           - platform: macos-latest
             args: "--target x86_64-apple-darwin"
             arc_factor: default
+            label: macos-x64
           - platform: ubuntu-22.04
             args: "--bundles deb,appimage"
             arc_factor: default
+            label: linux
           - platform: windows-latest
             args: ""
             arc_factor: default
+            label: windows
           # - platform: macos-latest
           #   args: "--target aarch64-apple-darwin"
           #   arc_factor: "zero"
@@ -132,11 +135,8 @@ jobs:
         matrix.config.arc_factor || '' }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       CARGO_PROFILE_RELEASE_LTO: "false"
-      # The base URL of the migration router the shipped app polls for BOTH update channels
-      # (mandatory migration banner + dismissible build-update notice). Vite embeds it at build
-      # time (VITE_ prefix → import.meta.env); empty → every check short-circuits to "unreachable"
-      # and neither channel can ever appear. Defined here so the guard step can assert it and the
-      # build step passes it through. A public HTTPS endpoint, not a credential.
+      # Vite embeds this at build time; empty means the shipped app can never
+      # check for updates on either channel. Public endpoint, not a credential.
       VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
     permissions: write-all
 
@@ -158,11 +158,7 @@ jobs:
           node-version: 22
 
       - name: install Rust 1.95.0
-        # A hard floor, not a style choice: src-tauri compiles holochain 0.7.0 in,
-        # which needs a toolchain new enough to have `cfg_select!` — an older one
-        # cannot build a release at all. Kept in lockstep with the app's pin and
-        # the nix dev shell; the version reasoning lives once at
-        # unyt/.github/workflows/rust.yaml.
+        # A floor, not a preference: holochain 0.7.0 needs `cfg_select!` (1.95).
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
@@ -194,24 +190,12 @@ jobs:
 
       - name: Install and prepare
         working-directory: unyt
-        # This step installs the `tauri` CLI the build step below runs.
-        # `--ignore-engines` for the same reason as the White-label UI workflow
-        # (hc-spin's native helper declares `engines.node >= 24` while node here
-        # is 22), except that here yarn aborting the install meant no CLI, no
-        # bundle, and no installer at all — every build job of v0.101.0-rc.0
-        # died on this line. The UI-release path needed the same flag, in
-        # scripts/inherit-ui-release.sh.
-        #
-        # NODE 22 IS THE DELIBERATE HALF. It is the app's own `engines.node`
-        # floor and what the nix dev shell ships; raising the runner to 24 for
-        # one dev-only launcher would diverge from both to satisfy a package the
-        # tauri build never loads.
-        #
-        # `--frozen-lockfile` keeps THIS install from re-resolving. It is not an
-        # end-to-end guarantee about the shipped bundle: tauri-action's
-        # `beforeBuildCommand` is `make ci-build-ui`, whose `force-install`
-        # target runs its own `yarn install --ignore-engines` without a lockfile
-        # pin. Pinning that one belongs in the app repo's Makefile, not here.
+        # `--ignore-engines` as in the White-label UI workflow: hc-spin's native
+        # helper wants node >= 24, node here is 22, and yarn aborts the WHOLE
+        # install — which is how v0.101.0-rc.0 produced no installers at all.
+        # Node 22 is deliberate: the app's own floor and what the nix shell ships.
+        # `--frozen-lockfile` pins this install only — `make ci-build-ui` re-runs
+        # yarn unpinned inside the build.
         run: |
           yarn install --frozen-lockfile --ignore-engines
 
@@ -262,61 +246,31 @@ jobs:
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
 
-  # Install what was just built and prove the app starts — see release-smoke.yaml.
-  # Called directly (not via `workflow_run`, which only fires for workflow files
-  # on the DEFAULT branch and so would silently never run on a release branch).
+  # Called directly, not via `workflow_run`, which only fires for workflow files
+  # on the DEFAULT branch and so would never run on a release branch.
   #
-  # NON-BLOCKING TAKES TWO THINGS, and structure is only the first of them.
-  # Nothing `needs` this job, so its failure cannot stop the release that
-  # produced the artifacts — do not add it to another job's `needs`. But a job's
-  # failure also feeds the RUN's conclusion no matter who depends on it, so a red
-  # smoke used to make the whole release run read as a failed release. It is not
-  # one: this job only downloads a release back and runs scripts against it — no
-  # step in it builds, packs, publishes or edits anything, so its red says
-  # something about the artifacts rather than about whether the run did its job.
-  # Spending the run's colour on it means a fine build reads as a broken one.
+  # Nothing `needs` this job — do not add it to another job's `needs`. That keeps
+  # it from blocking a release; `non-blocking` below is what keeps a red check
+  # out of the run's CONCLUSION. Neither extends to the build jobs: a build that
+  # fails must still fail the run.
   #
-  # THE SMOKE IS STILL A PRE-PUBLISH SIGNAL, and this must not bury it. The
-  # release is created `draft: true` and a human undrafts it, so a red check is
-  # read while that decision is still open. That is why the answer here is a run
-  # that stays green while the smoke jobs THEMSELVES stay red — never a smoke
-  # that reports success.
-  #
-  # The lever for that is NOT here. `continue-on-error` is illegal on a job that
-  # calls a reusable workflow — actionlint: "when a reusable workflow is called
-  # with `uses`, `continue-on-error` is not available" — so it lives on the
-  # called workflow's own jobs, which are jobs of THIS run, behind the
-  # `non-blocking` input passed below. A failing check still fails its step,
-  # annotates the run with what broke, writes its summary table and uploads its
-  # log; it just no longer colours the run.
-  #
-  # THIS DOES NOT EXTEND TO THE BUILD JOBS. A build that fails must still fail
-  # the run — there is nothing to report on if no installer exists.
+  # Each lane skips when its own artifact is absent, so a failed Windows build
+  # costs the Windows lane and nothing else.
   smoke-test:
+    name: Stage 3 - smoke the artifacts
     needs: [publish-happ, release-tauri-app]
-    # `needs` alone SKIPS this job if any matrix row failed, so a Windows build
-    # failure would suppress a perfectly good Linux check. Run whenever the happ
-    # job produced a release id — the Linux artifacts either exist or the
-    # download step says so plainly.
-    # `!cancelled()` rather than `always()`: a cancelled release run should take
-    # the smoke with it instead of starting a 30-minute container sweep nobody
-    # is waiting for.
+    # NOT gated on the build job: `needs` alone skips this whenever ANY matrix
+    # row failed, which would suppress a good Linux check for a Windows failure.
+    # `!cancelled()` rather than `always()`: a cancelled run should take the
+    # smoke with it, not start a 30-minute container sweep nobody is waiting for.
     if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' }}
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}
-      # Report, not gate — see the note above. Set ONLY here: a hand-dispatched
-      # release-smoke has to be able to answer red.
+      # Set ONLY here: a hand-dispatched release-smoke must answer red.
       non-blocking: true
-    # EXPLICIT, NOT `inherit`. This job sits above a build holding the Apple
-    # signing certificate, its password and the Tauri signing private key, and
-    # `secrets: inherit` would pass all of them to a workflow whose entire job is
-    # to download an already-published artifact and run shell scripts against it
-    # inside containers. Nothing in that path needs them, so a report-only
-    # post-release check would have become a signing-secret exposure path — every
-    # smoke script, every container image and every action they pull inside the
-    # blast radius. It needs exactly one secret, the PAT that can see a draft
-    # release, so it gets exactly that one.
+    # Explicit, not `inherit`: the build above holds the Apple signing
+    # credentials and the Tauri signing key, which this job must not see.
     secrets:
       GIT_PAT: ${{ secrets.GIT_PAT }}
 

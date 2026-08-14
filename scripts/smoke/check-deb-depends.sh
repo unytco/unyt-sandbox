@@ -80,9 +80,6 @@ for tool in dpkg-shlibdeps dpkg-deb; do
 done
 
 # One dependency per line, trimmed and sorted, so the sets compare as text.
-# `|| true` on the grep: it exits 1 when it filters everything out, i.e. for an
-# EMPTY `Depends:` — which is the worst under-declaration there is, and under
-# `set -e` it killed the script instead of reporting it.
 normalize() { tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | { grep -v '^$' || true; } | sort -u; }
 
 declared="$(dpkg-deb -f "$DEB" Depends | normalize)"

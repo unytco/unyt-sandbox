@@ -174,10 +174,6 @@ version_max() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
 # lexicographic one that puts 9.0 above 10.13 — every floor comparison below
 # would then be wrong, and wrong in the permissive direction, which is the one
 # that reads as a pass.
-#
-# BEFORE THE MODE DISPATCH, so it runs on EVERY invocation. Each --only step is
-# its own process, and a sort that cannot compare versions does not make one
-# check wrong, it makes them all quietly permissive — so no mode may skip it.
 if [ "$(printf '10.13\n9.0\n' | sort -V 2>/dev/null | tail -1)" != "10.13" ]; then
   echo "::error::this sort does not do version ordering (-V), so no deployment-target" >&2
   echo "  comparison here can be trusted. Refusing to report checks that cannot be right." >&2
@@ -190,8 +186,6 @@ version_within() { [ "$(version_max "$1" "$2")" = "$2" ]; }
 # macOS's file(1) and every other implementation, so a grep of it is a check that
 # quietly matches nothing on the wrong host — and this script is deliberately
 # runnable off a Mac for its own regression test.
-# No `--` before the path: BSD od's option handling is not GNU's, and the paths
-# here are always absolute, so there is nothing for it to guard against.
 is_macho() {
   case "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" in
     cffaedfe|cefaedfe|feedface|feedfacf|cafebabe|cafebabf) return 0 ;;
@@ -252,13 +246,6 @@ macho_min_os() { # <file> [arch]
 }
 
 # The libraries a Mach-O records as dependencies.
-#
-# RETURNS NON-ZERO WHEN IT READ NOTHING, and that distinction is the whole point:
-# every Mach-O links at least libSystem, so an empty result is ALWAYS a broken
-# tool and NEVER a clean binary. `2>/dev/null` hides otool's own diagnosis — a
-# stale `xcode-select` path makes the xcrun shim print to stderr and exit
-# non-zero — so without this the scan below would sweep zero paths, find no
-# violations, and report the same green row as a genuinely clean bundle.
 macho_dep_paths() {
   local out
   # Skip otool -L's header (the file's own path, unindented) — only the
@@ -392,16 +379,6 @@ check_mount() {
   # An explicit -mountpoint, rather than parsing hdiutil's tab-separated plist-ish
   # output for where it landed: one less thing to misparse, and it keeps the mount
   # inside the directory the trap already cleans up.
-  #
-  # NO -quiet: it suppresses the diagnosis as well as the noise, so a corrupt or
-  # truncated download failed with nothing said about why. The output is captured
-  # and printed only on failure.
-  #
-  # BOUNDED, and with stdin closed. A DMG carrying a software licence agreement
-  # makes `hdiutil attach` WAIT FOR A KEYPRESS; on a runner that is a job hanging
-  # until the six-hour ceiling with no diagnosis. </dev/null turns the prompt into
-  # an immediate error, and the deadline catches anything else that stalls.
-  # `timeout(1)` is not used because macOS does not ship it.
   attach_log="$WORK/hdiutil-attach.log"
   hdiutil attach -nobrowse -readonly -noverify -noautoopen \
     -mountpoint "$mnt" "$DMG" >"$attach_log" 2>&1 </dev/null &
@@ -569,14 +546,6 @@ check_no_build_machine_paths() {
     # never "did we manage to read any of it": with otool broken every file is
     # iterated, no path is examined, no violation is found, and the row goes
     # green having read nothing.
-    #
-    # ONE guard, per file, because that is the only formulation that is actually
-    # REACHABLE. An earlier version had this as two — a non-zero exit from
-    # macho_dep_paths, plus an aggregate count at the end — and the aggregate one
-    # could never fire: the per-file check returned first whenever deps was
-    # empty, so each guard was individually deletable without any test noticing.
-    # Counting per file covers both causes at once: otool exiting non-zero, and
-    # otool exiting 0 having printed nothing but its own header line.
     if [ "$file_paths" -eq 0 ]; then
       echo "::error::otool read no load paths from ${f#"$APP"/} (exit $dep_rc)." >&2
       echo "  Every Mach-O links at least libSystem, so this is a broken otool — a stale" >&2
@@ -606,18 +575,6 @@ check_no_build_machine_paths() {
 # which has been observed to miss an unsigned binary in Contents/Resources and
 # has been deprecated for signing since Ventura. Enumerating means nothing can be
 # skipped, and the failure names the exact file.
-#
-# WHY THE SHAPE OF THE SIGNATURE AND NOT `-R`. A designated-requirement pin —
-# `-R='anchor apple generic and certificate leaf[subject.OU] = "<TEAMID>"'` — is
-# the STRONGER form and was considered, not overlooked. It is deliberately not
-# used: it needs the team OU baked into this script, which drags an identity
-# into a job that currently touches no secrets and turns cert rotation into a
-# code change. Asserting the SHAPE rejects the same case with nothing to
-# maintain — an ad-hoc signature has no authority chain at all and reports
-# `TeamIdentifier=not set`, so requiring a Developer ID authority, a real team,
-# and one team across the bundle discriminates exactly what -R would here.
-# Set UNYT_EXPECTED_TEAM_ID (a constant above, overridable from the environment)
-# to pin the team without -R.
 check_every_macho_signed() {
   local f out rc info team teams="" bad=0 total=0
   while IFS= read -r f; do
@@ -631,12 +588,6 @@ check_every_macho_signed() {
     fi
 
     # VERIFYING IS NOT ENOUGH, and on arm64 that gap is the whole check.
-    # Apple Silicon binaries are ad-hoc codesigned BY DEFAULT, and an ad-hoc
-    # signature verifies perfectly under --verify --strict: without -R, code is
-    # only checked against its OWN designated requirement, which an ad-hoc
-    # signature trivially satisfies. So a bundled dylib the signing step missed
-    # passes on aarch64 while failing on x86_64 — the exact case this check
-    # exists for, invisible on half the artifacts. Read who actually signed it.
     info="$(codesign -dv --verbose=4 "$f" 2>&1)"
     if printf '%s' "$info" | grep -q 'Signature=adhoc'; then
       echo "::error::  ${f#"$APP"/} carries an AD-HOC signature — it verifies, but no Developer ID" >&2
@@ -720,15 +671,6 @@ check_gatekeeper() {
 # Notarized but unstapled works only while Apple's service is reachable: offline,
 # or during an outage, the first launch fails. Stapling is what makes the ticket
 # part of the download.
-#
-# EXIT STATUS ALONE, AND THAT IS CORRECT HERE — the asymmetry with check 8 is
-# deliberate, not an oversight. stapler(1) DOCUMENTS its statuses (0 on success,
-# and 65/66/68/77 via sysexits), and documents that success is SILENT without
-# -v. So the status is a real contract, and grepping for a success string would
-# be a false-red trap: there is no string to find. Check 8 reads its tool's
-# output precisely because Apple documents no status for that one. Same rule
-# both times — trust what is documented — reaching opposite conclusions because
-# what is documented differs.
 check_stapled() {
   local out rc
   out="$(xcrun stapler validate "$APP" 2>&1)"
@@ -858,9 +800,6 @@ check_deployment_target() {
     # architecture, each with its own minimum AND its own floor: taking the
     # first slice judged an arm64 build (11.0, correct) against x86_64's 10.13
     # floor and reported a FALSE RED on a build with nothing wrong with it.
-    # Comparing only the maxima would be the opposite error — an x86_64 slice
-    # raised to 11.0 hides behind the arm64 slice that is legitimately there,
-    # and every Intel Mac on 10.13-10.15 is dropped in silence.
     for a in $slices; do
       slices_seen=$((slices_seen + 1))
       v="$(macho_min_os "$f" "$a")"

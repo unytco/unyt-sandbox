@@ -83,7 +83,6 @@ ROOT="$(mktemp -d)"
 # tally at the end, and `set -uo pipefail` has no `-e` — so a truncated file, an
 # injected `exit 0`, or an early return produces NO OUTPUT AND STATUS 0, which
 # reads as "every check is proven able to fail" while nothing was proven at all.
-# The same shape as the bugs this file exists to catch, one level up.
 COMPLETED=""
 # shellcheck disable=SC2317  # invoked through the EXIT trap
 finish() {
@@ -130,19 +129,6 @@ LC_X86='Load command 9
 # ── the stub toolchain ────────────────────────────────────────────────────────
 # One directory of executables, prepended to PATH. Each reads $STUB_BREAK to
 # decide whether to behave or to misbehave in exactly one way.
-#
-# THE ONES THAT MATTER RECORD WHAT THEY WERE CALLED WITH, into
-# $STUB_FIXTURE/calls/<tool>. Two things are invisible without it. A `detach` is
-# one: nothing an assertion can read changes when an image is unmounted, so
-# `--cleanup` deleting its detach went unnoticed. The other is WHAT a check was
-# pointed at: checks 4, 5 and 9 name the population they swept, so an assertion
-# can pin it, but 6, 7 and 8 sweep nothing — without a record, a check aimed at
-# the disk image, or at a path that does not exist, produces the same green row
-# as one reading the bundle the mount check extracted.
-#
-# And those three now READ their target instead of ignoring it, so being aimed at
-# nothing is a failure rather than a canned pass. `-e`, not `-f`: spctl and
-# stapler are pointed at the .app BUNDLE, which is a directory.
 make_stubs() {
   local bin="$1"
   mkdir -p "$bin" "$(dirname "$bin")/calls"
@@ -208,9 +194,6 @@ printf '%s\n' "$val"
 EOF
 
   # Per-file canned output, written by the scenario next to the fixture.
-  # STUB_BREAK=otool_dead is the TOOL failing rather than the artifact being bad:
-  # it prints its complaint to stderr (which the script's 2>/dev/null swallows)
-  # and exits non-zero, which is what a stale xcode-select path actually does.
   cat >"$bin/otool" <<'EOF'
 #!/usr/bin/env bash
 if [ "${STUB_BREAK:-}" = otool_dead ]; then
@@ -472,7 +455,6 @@ EOF
 # A .app with three Mach-O files (main binary, a bundled dylib, and a helper in
 # Contents/Resources — the place `codesign --deep` has been observed to miss) and
 # one non-Mach-O, so the enumeration has something to correctly exclude.
-# `version`/`claim`/`arch` are the knobs the scenarios turn.
 build_fixture() { # <dir> [version] [plist-claim] [lc-flavour]
   local dir="$1" version="${2:-0.100.0}" claim="${3:-10.13}" flavour="${4:-x86}"
   local app="$dir/mnt/Unyt Sandbox.app" lc
@@ -588,8 +570,6 @@ run_scenario() { # <name> [env assignments...]
 # directory shared across calls. That sharing is itself under test: on the split
 # path each check runs in its own process, so what check 1 extracts has to reach
 # check 9 through UNYT_SMOKE_STATE rather than through a variable.
-# Each invocation gets its own stderr log, so an expect_err after any of them
-# reads that call's diagnosis and not the previous call's.
 only_check() { # <id> [env assignments...]
   local id="$1"; shift
   ONLY_SEQ=$((ONLY_SEQ + 1))
@@ -629,11 +609,6 @@ expect_row() { # <check substring> <pass|FAIL> <description>
 # Which DIAGNOSIS the run produced, not merely that it went red. Where several
 # guards can reject the same fixture, only this pins the one under test — the
 # row alone stays red when the guard is deleted, so the deletion is invisible.
-# NOTE: reads $ERR, which run_scenario re-points on every call — so an expect_err
-# always refers to the MOST RECENT scenario, and moving one above its
-# run_scenario silently asserts against the previous scenario's log. Kept as a
-# global rather than threaded through because every call site sits directly
-# under its scenario; if that stops being true, pass the log explicitly.
 expect_err() { # <substring> <description>
   if grep -qF -e "$1" "$ERR"; then pass=$((pass + 1)); return; fi
   fail=$((fail + 1))
@@ -664,10 +639,6 @@ expect_no_err() { # <substring> <description>
   printf 'FAIL  %-58s "%s" was in the diagnosis and should not have been\n' "$2" "$1" >&2
 }
 # What a tool was actually POINTED AT, read back from the stub's own record.
-# Checks 4, 5 and 9 pin the population they swept; 6, 7 and 8 have no population,
-# so this is their equivalent — the tool has to have been aimed at the bundle the
-# mount check left in the state directory, not at the disk image and not at a
-# path that does not exist.
 expect_target() { # <tool> <substring> <description>
   local rec="$SCEN_DIR/calls/$1"
   if [ -f "$rec" ] && grep -qF -e "$2" "$rec"; then pass=$((pass + 1)); return; fi
@@ -911,7 +882,6 @@ expect_only_failure "passes Apple's own distribution assessment" \
 # build. syspolicy_check reports per check, so a fatal notarization problem sits
 # in the same output as "Codesign check passed."; a pass token matching `pass`
 # anywhere matched that line, and none of Missing/Fatal/Error was a fail token.
-# Fail must be broad and win; pass must be the one documented whole sentence.
 run_scenario break-syspolicy-mixed STUB_BREAK=syspolicy_mixed
 expect_only_failure "passes Apple's own distribution assessment" \
   "a per-check 'passed' inside a FATAL report is not a pass"
@@ -1248,11 +1218,6 @@ expect_rc nonzero "--only deployment goes red on a too-new dependency"
 expect_err "requires macOS 12.0" "--only deployment names the version it cannot accept"
 
 # A CHECK WHOSE PREREQUISITE NEVER RAN — the failure mode the split path invents.
-# With the extracted bundle living in a directory instead of a variable, a check
-# that cannot find it could sweep an empty list and report clean. Every one of
-# the eight must go red INSTEAD, and must name the check that has to run first:
-# "the check did not run" and "the check passed" are the two things this whole
-# suite exists to keep apart.
 build_scenario only-no-mount
 i=0
 for id in "${CHECK_IDS[@]}"; do
@@ -1337,9 +1302,6 @@ expect_err "mounts and yields a .app bundle" "a failed mount invalidates the sta
 # output to the checks after it, so writing it is part of the check, not
 # bookkeeping after it: without that, check 1 reports pass and every check after
 # it goes red naming check 1 as the one that never ran — true, and useless.
-# A DIRECTORY in the state file's place rather than a chmod, because a
-# permission bit means nothing to a run that happens to be root and this
-# assertion has to hold either way.
 build_scenario only-unwritable-state
 mkdir -p "$SCEN_STATE/state.env"
 only_check mount
@@ -1394,12 +1356,6 @@ expect_err "mounts and yields a .app bundle" "stale state names the prerequisite
 # The rows the workflow collects. Nine steps append to one file, and the guard
 # step compares it against --print-checks — so the file has to accumulate, in
 # order, alongside the stdout row rather than instead of it.
-#
-# AND A FAILING ROW HAS TO REACH IT. Asserting only passing rows leaves the file
-# unable to carry a FAIL at all: a run that wrote `pass` into it regardless of
-# the verdict would satisfy every passing assertion, and the file is what the
-# summary and the did-it-run guard read. stdout being right does not make the
-# file right — they are two writes of the same verdict.
 build_scenario only-results-file
 only_check mount UNYT_SMOKE_RESULTS="$SCEN_DIR/rows.txt"
 only_check version UNYT_SMOKE_RESULTS="$SCEN_DIR/rows.txt"
@@ -1420,10 +1376,6 @@ fi
 # --report never gates. It exists so the log carries the DMG's own assessment and
 # the main binary's linkage; a report block that could turn a step red would be a
 # check pretending not to be one.
-#
-# THE LIST, NOT THE HEADING ABOVE IT. "what the main binary links against" is
-# printed either way, so asserting it cannot tell a report that listed the
-# linkage from one that listed nothing — and the linkage is the whole content.
 build_scenario only-report
 only_check mount
 mode_check report --report "$SCEN_DMG"

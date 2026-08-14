@@ -39,16 +39,6 @@ status=0
 # ── the ceiling, across every ELF the bundle ships ────────────────────────────
 # THE APP'S OWN BINARY, named by the .desktop file's Exec — not
 # `find usr/bin | head -1`, which is directory order and therefore a coin flip.
-# This bundle ships xdg-mime beside the app, and on the CI runner find returned
-# THAT: the ceiling scan below then ran over xdg-mime plus the .so files with the
-# application binary silently absent from its own compatibility check, and the
-# "libraries required from the system" report described xdg-mime's needs rather
-# than the app's. Same failure that made the launch oracle watch the wrong
-# process (container-checks-appimage.sh), and the same class as N1 below: find
-# order is not an answer to "which file do I want".
-# `|| true`: with no .desktop the glob does not match, grep exits non-zero, and
-# under `set -e` an assignment from a failing substitution aborts the script —
-# killing the diagnosis below before it can be printed.
 desktop_exec="$(grep -hm1 '^Exec=' "$APPDIR"/*.desktop 2>/dev/null | sed 's/^Exec=//; s/[[:space:]].*//' || true)"
 inner="$APPDIR/usr/bin/$desktop_exec"
 if [ -z "$desktop_exec" ] || [ ! -x "$inner" ]; then
@@ -59,22 +49,6 @@ if [ -z "$desktop_exec" ] || [ ! -x "$inner" ]; then
 fi
 
 # EVERY ELF IN THE BUNDLE, found by MAGIC BYTES rather than by name.
-#
-# `*.so*` plus one binary was the old shape, and it does not match what the
-# header and the gate below both promise. It misses a bundled EXECUTABLE — and a
-# usr/bin helper is precisely where a too-new-glibc dependency arrives: a helper
-# built on a newer host requiring GLIBC_2.38 breaks the AppImage on the oldest
-# supported distro while this check stays green, because the maximum it did look
-# at came from libwebkit2gtk either way.
-#
-# Note what this file's own header already said — find order is not an answer to
-# "which file do I want" — and note that the fix for that became "only the Exec
-# binary matters", which is a different wrong answer to the same question. The
-# right answer is that for the CEILING no single file matters: all of them do.
-# The .desktop Exec still names the app, but only for the two app-specific
-# reports below (its own version, and what it wants from the host).
-#
-# Reading four bytes of every file is affordable: the v0.100.0 bundle has 235.
 elf_list="$(mktemp)"
 trap 'rm -f "$elf_list" "$elf_list.versions"' EXIT
 while IFS= read -r f; do
