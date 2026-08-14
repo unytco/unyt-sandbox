@@ -572,6 +572,75 @@ else
   echo "SKIP  workflow/registry correspondence (no release-smoke.yaml)" >&2
 fi
 
+# ── a tag the msi cannot carry must die in stage 1 ───────────────────────────
+# msi-version.sh is the only thing that rejects a tag the trigger admits: the
+# trigger is a glob, so it takes any `-dev.*`, numeric or not. Derived in the
+# Windows job it fired four platform builds in.
+rel="$here/../../.github/workflows/release-tauri-app.yaml"
+if [ -f "$rel" ]; then
+  stage1="$(sed -n '/^  publish-happ:/,/^  release-tauri-app:/p' "$rel")"
+  stage2="$(sed -n '/^  release-tauri-app:/,/^  smoke-test:/p' "$rel")"
+  # A slice that stopped matching makes every assertion below pass on nothing.
+  for slice in "$stage1" "$stage2"; do
+    if [ -n "$slice" ]; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "a release-tauri-app job slice came out empty" "a job key was renamed" >&2
+    fi
+  done
+  # WHOLE lines: `# bash …--self-test` still contains the substring, and `id: msiver`
+  # still contains `id: msi`. Both are how a real regression would read.
+  in_stage() { # <slice> <line, verbatim> <description>
+    if printf '%s\n' "$1" | grep -qxF -- "$2"; then pass=$((pass + 1)); else
+      fail=$((fail + 1)); printf 'FAIL  %-58s %s\n' "$3" "$2" >&2; fi
+  }
+  in_stage "$stage1" '          bash scripts/msi-version.sh --self-test' \
+    "stage 1 must prove the derivation still works"
+  in_stage "$stage1" '        id: msi' "the derivation step must keep the id its output reads"
+  if printf '%s\n' "$stage1" | grep -qF -- 'steps.msi.outputs.MSI_VERSION'; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "stage 1 must publish the derived version" "as a job output the build can read" >&2
+  fi
+  if printf '%s\n' "$stage2" | grep -qF -- 'needs.publish-happ.outputs.msiVersion'; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the build job must consume the stage-1 value" "not derive one of its own" >&2
+  fi
+  if printf '%s\n' "$stage2" | grep -qF -- '.bundle.windows.wix.version'; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "nothing writes the key the bundler reads" "bundle.windows.wix.version" >&2
+  fi
+  # BOTH halves of the guard. Without the version half a stable release writes an
+  # empty wix.version and the bundler rejects it — the user-facing channel, this time.
+  pin_if="$(printf '%s\n' "$stage2" | sed -n '/name: Pin the MSI product version/,/run:/p' | grep -m1 '^ *if:')"
+  if printf '%s\n' "$pin_if" | grep -qF -- "runner.os == 'Windows'" &&
+     printf '%s\n' "$pin_if" | grep -qF -- "msiVersion != ''"; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the msi pin is not gated on Windows AND a version" "${pin_if:-<no if: found>}" >&2
+  fi
+  if printf '%s\n' "$stage2" | grep -qF -- 'msi-version.sh'; then
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the build job derives the msi version itself" \
+      "a bad tag then fails four platform builds in, not in seconds" >&2
+  else pass=$((pass + 1)); fi
+  # The channels msi-version.sh is written against. Add one and every tag on it dies
+  # in stage 1 on a message about -dev, from a step named for the msi. The case
+  # patterns are QUOTED, or `[0-9]` would be read as a character class and match both.
+  tags="$(sed -n '/^    tags:$/,/^jobs:$/p' "$rel" | grep -oE '"[^"]+"' | tr -d '"')"
+  unknown=""
+  for tag in $tags; do
+    case "$tag" in
+      'v[0-9]+.[0-9]+.[0-9]+' | 'v[0-9]+.[0-9]+.[0-9]+-dev.*') ;;
+      *) unknown="${unknown:+$unknown }$tag" ;;
+    esac
+  done
+  if [ -n "$tags" ] && [ -z "$unknown" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a release tag channel msi-version.sh cannot derive" \
+      "${unknown:-no tag patterns found at all}" >&2
+  fi
+else
+  echo "SKIP  release-tauri-app stage-1 checks (no release-tauri-app.yaml)" >&2
+fi
+
 # ── the inventory decides which lanes run, so it must not be able to lie ─────
 # A lane skips when its artifact is absent — right for a build that failed, wrong
 # for an inventory that reports nothing by accident, which would leave a run that
@@ -649,8 +718,8 @@ fi
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-if [ "$pass" -lt 125 ]; then
-  echo "::error::only $pass assertions ran; expected at least 125 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 135 ]; then
+  echo "::error::only $pass assertions ran; expected at least 135 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

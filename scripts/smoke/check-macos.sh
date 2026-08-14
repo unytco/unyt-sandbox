@@ -387,7 +387,10 @@ check_mount() {
 check_version_matches_artifact() {
   local want got
   # Release assets are named unyt_<version>_Unyt.Sandbox_<...>_<arch>_darwin.dmg.
-  want="$(basename "$DMG" | sed -n 's/^unyt_\([0-9][0-9.]*\)_.*/\1/p')"
+  # The pre-release tail is PART of the version: stopping at the `-` reads nothing
+  # out of unyt_0.101.0-dev.0_… and reds the check on every -dev release. -E, not a
+  # BRE `\?`, which BSD sed on the macOS runner does not have.
+  want="$(basename "$DMG" | sed -nE 's/^unyt_([0-9][0-9.]*(-[0-9A-Za-z.]+)?)_.*/\1/p')"
   got="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist" 2>/dev/null)"
   echo "  filename says '$want', Info.plist says '${got:-<none>}'" >&2
   if [ -z "$want" ]; then

@@ -3,7 +3,8 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-rc.*"
+      # A throwaway build that proves the pipeline. Never something a user installs.
+      - "v[0-9]+.[0-9]+.[0-9]+-dev.*"
 
 jobs:
   publish-happ:
@@ -14,6 +15,7 @@ jobs:
     outputs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
+      msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,6 +51,18 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: bash scripts/release-kind.sh "$TAG" >> "$GITHUB_OUTPUT"
+
+      # Here, not in the Windows job: a tag the msi cannot carry then fails in seconds rather
+      # than after yarn install, the happ download and three other platforms building.
+      - name: Derive and self-test the MSI product version
+        id: msi
+        env:
+          APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
+        run: |
+          bash scripts/msi-version.sh --self-test
+          msi="$(bash scripts/msi-version.sh "$APP_VERSION")"
+          echo "msi product version: ${msi:-none — a stable build, tauri derives its own}"
+          echo "MSI_VERSION=$msi" >> "$GITHUB_OUTPUT"
 
       - name: Build DNA + happ (migration release, vM.m.0)
         if: steps.kind.outputs.kind == 'migration'
@@ -86,7 +100,7 @@ jobs:
             unyt/workdir/unyt.webhapp
             unyt/dnas/alliance/workdir/alliance.dna
           body: ${{ steps.changelog.outputs.notes }}
-          # The pushed tag, not APP_VERSION: an -rc.* must not ship as stable.
+          # The pushed tag, not APP_VERSION: a -dev.* must not ship as stable.
           name: Unyt Sandbox ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: true
@@ -197,6 +211,19 @@ jobs:
             echo "::error::VITE_MIGRATION_SERVICE_URL is empty — a shipped build without it can never check for updates (both channels short-circuit to 'unreachable')."
             exit 1
           }
+
+      - name: Pin the MSI product version
+        # Written here, never committed: a wix.version in tauri.conf.json would outlive the
+        # release that set it. Empty means a stable build, which tauri versions itself —
+        # writing the key anyway would hand the bundler an empty string.
+        if: runner.os == 'Windows' && needs.publish-happ.outputs.msiVersion != ''
+        shell: bash
+        env:
+          MSI_VERSION: ${{ needs.publish-happ.outputs.msiVersion }}
+        run: |
+          conf=unyt/src-tauri/tauri.conf.json
+          jq --arg v "$MSI_VERSION" '.bundle.windows.wix.version = $v' "$conf" >"$conf.tmp"
+          mv "$conf.tmp" "$conf"
 
       - name: build (${{ matrix.config.arc_factor }} arc)
         uses: tauri-apps/tauri-action@v0

@@ -92,9 +92,22 @@ $script:WindowsGuaranteedDlls = @(
 # Returns $null when the name carries no version — "cannot answer", not a pass.
 function Get-ArtifactVersion {
   param([Parameter(Mandatory)][string]$FileName)
-  $m = [regex]::Match([System.IO.Path]::GetFileName($FileName), '^unyt_([0-9][0-9.]*)_')
+  # The pre-release tail is PART of the version. Stopping at the `-` reads no version
+  # at all out of unyt_0.101.0-dev.0_…, which every check that compares one then fails.
+  $m = [regex]::Match([System.IO.Path]::GetFileName($FileName), '^unyt_([0-9][0-9.]*(?:-[0-9A-Za-z.]+)?)_')
   if ($m.Success) { return $m.Groups[1].Value }
   return $null
+}
+
+# What an MSI registers for a pre-release build. tauri's msi bundler cannot carry
+# `0.101.0-dev.0`, so scripts/msi-version.sh gives it `0.101.0.0` and Windows writes
+# THAT as the entry's DisplayVersion — while the asset keeps the tag's own name. Both
+# spellings of one build; the mapping is duplicated from that script and pinned here.
+function ConvertTo-MsiProductVersion {
+  param([Parameter(Mandatory)][string]$Version)
+  $m = [regex]::Match($Version, '^([0-9]+\.[0-9]+\.[0-9]+)-dev\.([0-9]+)$')
+  if ($m.Success) { return "$($m.Groups[1].Value).$($m.Groups[2].Value)" }
+  return $Version
 }
 
 function Get-InstallerKind {
@@ -350,7 +363,10 @@ function Get-NewUninstallEntry {
 function Test-UninstallEntry {
   param(
     [object]$Entry,
-    [AllowNull()][string]$ExpectedVersion
+    [AllowNull()][string]$ExpectedVersion,
+    # Mandatory: defaulting to one installer would judge the other against a version
+    # it never registers, and pass or fail it for the wrong reason.
+    [Parameter(Mandatory)][ValidateSet('nsis', 'msi')][string]$Kind
   )
   if (-not $Entry) {
     return [PSCustomObject]@{ Ok = $false; Message = 'the install added no uninstall entry — the app cannot be removed from Settings' }
@@ -360,8 +376,9 @@ function Test-UninstallEntry {
     # question. Unknown is not a pass.
     return [PSCustomObject]@{ Ok = $false; Message = 'the artifact name carries no version, so nothing can be compared against it' }
   }
-  if ($Entry.DisplayVersion -ne $ExpectedVersion) {
-    return [PSCustomObject]@{ Ok = $false; Message = "the artifact is named $ExpectedVersion but registered version $($Entry.DisplayVersion)" }
+  $want = if ($Kind -eq 'msi') { ConvertTo-MsiProductVersion -Version $ExpectedVersion } else { $ExpectedVersion }
+  if ($Entry.DisplayVersion -ne $want) {
+    return [PSCustomObject]@{ Ok = $false; Message = "the artifact is named $ExpectedVersion, so the entry should read $want — it reads $($Entry.DisplayVersion)" }
   }
   return [PSCustomObject]@{ Ok = $true; Message = "registered $($Entry.DisplayName) $($Entry.DisplayVersion)" }
 }
@@ -725,7 +742,7 @@ Register-Check -Id 'registers' -Name 'registers an uninstall entry for this vers
   # files down, and check 6 has to be able to remove them.
   Save-SmokeState -Name 'Entry' -Value $entry
   Write-Note "  $($entry.DisplayName) $($entry.DisplayVersion) -> $($entry.InstallLocation)"
-  $v = Test-UninstallEntry -Entry $entry -ExpectedVersion $wantVersion
+  $v = Test-UninstallEntry -Entry $entry -ExpectedVersion $wantVersion -Kind $kind
   if (-not $v.Ok) { Write-Note "::error::$($v.Message)"; return $false }
   Write-Note "OK: $($v.Message)"
   return $true

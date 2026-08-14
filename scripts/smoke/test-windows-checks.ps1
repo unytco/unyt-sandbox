@@ -349,6 +349,12 @@ try {
   Assert-That 'and out of the .msi name' `
   (Get-ArtifactVersion -FileName 'unyt_1.2.3_Unyt.Sandbox_default-arc_x64_windows.msi') '1.2.3'
   Assert-That 'a hand-built file has no version to read' (Get-ArtifactVersion -FileName 'handbuilt.exe') $null
+  # THE PRE-RELEASE CHANNEL. Read as far as the `-` and this returns $null, which
+  # reds every check that compares a version — on every artifact of every -dev tag.
+  Assert-That 'a -dev asset carries its whole version, tail included' `
+  (Get-ArtifactVersion -FileName 'unyt_0.101.0-dev.0_Unyt.Sandbox_default-arc_x64_windows.exe') '0.101.0-dev.0'
+  Assert-That 'and so does its .msi' `
+  (Get-ArtifactVersion -FileName 'unyt_0.101.0-dev.12_Unyt.Sandbox_default-arc_x64_windows.msi') '0.101.0-dev.12'
   # NSIS artifacts here are a plain .exe, never -setup.exe; a name that does not
   # match must be unknown rather than silently accepted.
   Assert-That 'a non-release name is unknown' (Get-ArtifactVersion -FileName 'unyt-setup.exe') $null
@@ -369,16 +375,37 @@ try {
   @(Get-NewUninstallEntry -Before @() -After @($c)).Count 1
 
   # ── Test-UninstallEntry ─────────────────────────────────────────────────────
-  Assert-True 'the registered version matching the artifact passes' (Test-UninstallEntry -Entry $c -ExpectedVersion '0.100.0').Ok
-  Assert-False 'a version mismatch fails' (Test-UninstallEntry -Entry $c -ExpectedVersion '0.99.0').Ok
-  Assert-False 'no entry at all fails' (Test-UninstallEntry -Entry $null -ExpectedVersion '0.100.0').Ok
+  Assert-True 'the registered version matching the artifact passes' (Test-UninstallEntry -Entry $c -ExpectedVersion '0.100.0' -Kind nsis).Ok
+  Assert-False 'a version mismatch fails' (Test-UninstallEntry -Entry $c -ExpectedVersion '0.99.0' -Kind nsis).Ok
+  Assert-False 'no entry at all fails' (Test-UninstallEntry -Entry $null -ExpectedVersion '0.100.0' -Kind nsis).Ok
   # Cannot answer is not a pass — and it must fail FOR THAT REASON. Both verdicts
   # are red, so without pinning the message a check that had stopped
   # distinguishing "no version to compare" from "the versions differ" would look
   # identical here.
-  Assert-False 'an unknown expected version fails' (Test-UninstallEntry -Entry $c -ExpectedVersion $null).Ok
+  Assert-False 'an unknown expected version fails' (Test-UninstallEntry -Entry $c -ExpectedVersion $null -Kind nsis).Ok
   Assert-True 'and fails as unanswerable, not as a mismatch' `
-  ((Test-UninstallEntry -Entry $c -ExpectedVersion $null).Message -match 'carries no version')
+  ((Test-UninstallEntry -Entry $c -ExpectedVersion $null -Kind nsis).Message -match 'carries no version')
+
+  # ── the two installers register a -dev build under different versions ───────
+  # The .msi cannot carry `0.101.0-dev.0`, so it registers the four-field form the
+  # bundler was handed. Judged as one, the other lane goes red on every -dev release.
+  Assert-That 'the msi form of a -dev version is the four-field one' `
+  (ConvertTo-MsiProductVersion -Version '0.101.0-dev.3') '0.101.0.3'
+  Assert-That 'a stable version is its own msi form' `
+  (ConvertTo-MsiProductVersion -Version '0.101.0') '0.101.0'
+  Assert-That 'and a channel the bundler never sees is left alone' `
+  (ConvertTo-MsiProductVersion -Version '0.101.0-rc.3') '0.101.0-rc.3'
+  $devMsi = [PSCustomObject]@{ KeyPath = 'HKLM:\...\Unyt'; DisplayName = 'Unyt Sandbox'; DisplayVersion = '0.101.0.0' }
+  $devNsis = [PSCustomObject]@{ KeyPath = 'HKCU:\...\Unyt'; DisplayName = 'Unyt Sandbox'; DisplayVersion = '0.101.0-dev.0' }
+  Assert-True 'the msi registering 0.101.0.0 for a -dev.0 artifact passes' `
+  (Test-UninstallEntry -Entry $devMsi -ExpectedVersion '0.101.0-dev.0' -Kind msi).Ok
+  Assert-True 'while the .exe registering the tag itself passes too' `
+  (Test-UninstallEntry -Entry $devNsis -ExpectedVersion '0.101.0-dev.0' -Kind nsis).Ok
+  Assert-False 'and neither is accepted under the other installer' `
+  ((Test-UninstallEntry -Entry $devMsi -ExpectedVersion '0.101.0-dev.0' -Kind nsis).Ok -or
+    (Test-UninstallEntry -Entry $devNsis -ExpectedVersion '0.101.0-dev.0' -Kind msi).Ok)
+  Assert-False 'an msi off by one in the fourth field still fails' `
+  (Test-UninstallEntry -Entry $devMsi -ExpectedVersion '0.101.0-dev.1' -Kind msi).Ok
 
   # ── Get-UninstallCommand ────────────────────────────────────────────────────
   Assert-That 'a QuietUninstallString is used as given' `
@@ -652,10 +679,10 @@ try {
     Assert-That 'and it is still the uppercase NSIS silent switch' `
     (Get-UninstallCommand -Entry $back) '"C:\Users\runneradmin\AppData\Local\Unyt Sandbox\uninstall.exe" /S'
     Assert-That 'the round-tripped entry gives the same version verdict' `
-    (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0').Ok `
-    (Test-UninstallEntry -Entry $spaced -ExpectedVersion '0.100.0').Ok
-    Assert-True 'and that verdict is still the passing one' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0').Ok
-    Assert-False 'while a mismatch still fails after a round trip' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.99.0').Ok
+    (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0' -Kind nsis).Ok `
+    (Test-UninstallEntry -Entry $spaced -ExpectedVersion '0.100.0' -Kind nsis).Ok
+    Assert-True 'and that verdict is still the passing one' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0' -Kind nsis).Ok
+    Assert-False 'while a mismatch still fails after a round trip' (Test-UninstallEntry -Entry $back -ExpectedVersion '0.99.0' -Kind nsis).Ok
 
     # Round-trips through the shape check 2 reads it in. These do NOT pin the
     # storage wrapper — `return` unrolls a list either way; the stored-shape
@@ -932,8 +959,8 @@ Write-Output "windows check regression: $script:Pass passed, $script:Fail failed
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding
 # assertions.
-if ($script:Pass -lt 223) {
-  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 223 — the test file is truncated or a block was skipped")
+if ($script:Pass -lt 232) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 232 — the test file is truncated or a block was skipped")
   exit 1
 }
 if ($script:Fail -gt 0) { exit 1 }

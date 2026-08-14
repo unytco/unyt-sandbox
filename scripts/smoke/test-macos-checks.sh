@@ -678,6 +678,22 @@ FIX_DMG_NAME=handbuilt.dmg run_scenario break-unnamed
 expect_row "the bundled app is the version the artifact claims" FAIL \
   "an artifact whose name carries no version"
 
+# THE PRE-RELEASE CHANNEL. Read only as far as the `-` and a -dev DMG carries no
+# readable version, so this check reds on every artifact of every -dev release —
+# a red saying nothing about the build.
+FIX_VERSION=0.101.0-dev.0 \
+  FIX_DMG_NAME=unyt_0.101.0-dev.0_Unyt.Sandbox_default-arc_x64_darwin.dmg \
+  run_scenario dev-version
+expect_row "the bundled app is the version the artifact claims" pass \
+  "a -dev DMG matching its bundle"
+FIX_VERSION=0.101.0 \
+  FIX_DMG_NAME=unyt_0.101.0-dev.0_Unyt.Sandbox_default-arc_x64_darwin.dmg \
+  run_scenario dev-version-mismatch
+expect_row "the bundled app is the version the artifact claims" FAIL \
+  "a -dev DMG packaging the stable version"
+expect_err "named 0.101.0-dev.0 but packages version 0.101.0" \
+  "and the tail is compared, not discarded"
+
 # ── 3. architecture ───────────────────────────────────────────────────────────
 run_scenario break-arch STUB_BIN_ARCH=arm64 STUB_RUNNER_ARCH=x86_64
 expect_row "the bundle's architecture matches the runner" FAIL \
@@ -1367,8 +1383,8 @@ echo "macos check regression: $pass passed, $fail failed"
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
 # scenarios.
-if [ "$pass" -lt 430 ]; then
-  echo "::error::only $pass assertions ran; expected at least 430 — the test file is truncated or a block was skipped" >&2
+if [ "$pass" -lt 433 ]; then
+  echo "::error::only $pass assertions ran; expected at least 433 — the test file is truncated or a block was skipped" >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]
