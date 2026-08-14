@@ -79,16 +79,21 @@ jobs:
 
       - name: Get Changelog Content
         id: changelog
+        # Through env, not interpolated into the script: a tag is attacker-shaped input
+        # and `${{ }}` would splice it into the shell before bash ever sees a quote.
+        env:
+          APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
         run: |
-          VERSION="${{ steps.version.outputs.APP_VERSION }}"
-          awk -v ver="$VERSION" '
+          awk -v ver="$APP_VERSION" '
             $0 ~ "^## \\[" ver "\\]" {p=1; next}
             p && /^## \[/ {exit}
             p {print}
           ' unyt/CHANGELOG.md > release_notes.txt
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          cat release_notes.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "notes<<EOF"
+            cat release_notes.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - id: create-release
         uses: ncipollo/release-action@v1
@@ -225,6 +230,12 @@ jobs:
           jq --arg v "$MSI_VERSION" '.bundle.windows.wix.version = $v' "$conf" >"$conf.tmp"
           mv "$conf.tmp" "$conf"
 
+      - name: Free disk before the build (linux)
+        # The number to size a fix from when this ENOSPCs. No RUSTFLAGS strip alongside it:
+        # that changes the binary users get, not just what CI costs.
+        if: matrix.config.platform == 'ubuntu-22.04'
+        run: df -h /
+
       - name: build (${{ matrix.config.arc_factor }} arc)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -253,6 +264,10 @@ jobs:
           assetNamePattern: ${{
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
+
+      - name: Free disk when the job ends (linux)
+        if: always() && matrix.config.platform == 'ubuntu-22.04'
+        run: df -h /
 
   # Nothing needs this; non-blocking keeps a red check out of the run's
   # conclusion. Not `workflow_run` — that only fires on the default branch.

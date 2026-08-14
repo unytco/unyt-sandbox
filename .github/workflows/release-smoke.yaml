@@ -288,9 +288,11 @@ jobs:
       - name: Prepare the smoke state directory
         run: |
           mkdir -p "$RUNNER_TEMP/smoke-state"
-          echo "UNYT_SMOKE_STATE=$RUNNER_TEMP/smoke-state" >> "$GITHUB_ENV"
-          echo "UNYT_SMOKE_RESULTS=$RUNNER_TEMP/smoke-results" >> "$GITHUB_ENV"
-          echo "SMOKE_LOG=$RUNNER_TEMP/smoke-macos.log" >> "$GITHUB_ENV"
+          {
+            echo "UNYT_SMOKE_STATE=$RUNNER_TEMP/smoke-state"
+            echo "UNYT_SMOKE_RESULTS=$RUNNER_TEMP/smoke-results"
+            echo "SMOKE_LOG=$RUNNER_TEMP/smoke-macos.log"
+          } >> "$GITHUB_ENV"
 
       # Before any download: proves the checks below can still fail.
       - name: Can each check still fail?
