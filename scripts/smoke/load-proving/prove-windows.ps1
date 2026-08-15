@@ -3,9 +3,16 @@
   Does the released Windows build put a visible first screen on screen?
 
 .DESCRIPTION
-  prove-windows.ps1 -Artifact <installer.exe> -Shots <dir>
+  prove-windows.ps1 -Artifact <installer.exe|installer.msi> -Shots <dir>
+  prove-windows.ps1 -SelfTest
 
   TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+
+  BOTH INSTALLERS, ONE LANE. The release ships an NSIS .exe and an .msi, and they
+  install to different places under different registry hives — so proving one
+  proves nothing about the other. The only thing that differs here is the command
+  that installs it and where Windows records that; everything after the launch is
+  the same code, because two copies of a capture path would drift.
 
   WINDOWS POWERSHELL 5.1, not pwsh: System.Drawing belongs to the .NET Framework
   and is NOT in PowerShell 7's shared framework, so the capture below only exists
@@ -34,19 +41,201 @@
   trusted. Only 0 is a pass, and none of the others is a skip.
 
 .PARAMETER Artifact
-  The NSIS installer (.exe).
+  The NSIS installer (.exe) or the .msi.
 
 .PARAMETER Shots
   Directory to write frames into; verdict\ is analysed, context\ is uploaded only.
+
+.PARAMETER SelfTest
+  Prove the decisions this lane makes about an installer can still come out
+  wrong, and exit. Needs no artifact, installs nothing, and runs before anything
+  that requires a window station.
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Prove')]
 param(
-  [Parameter(Mandatory)][string]$Artifact,
-  [Parameter(Mandatory)][string]$Shots
+  [Parameter(Mandatory, ParameterSetName = 'Prove')][string]$Artifact,
+  [Parameter(Mandatory, ParameterSetName = 'Prove')][string]$Shots,
+  [Parameter(Mandatory, ParameterSetName = 'SelfTest')][switch]$SelfTest
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+function Write-Note { param([string]$Message) [Console]::Error.WriteLine($Message) }
+
+# ── which installer this is, and what that changes ────────────────────────────
+# DEFINED ABOVE EVERYTHING PLATFORM-SPECIFIC so -SelfTest can drive the real
+# functions: the Add-Type below needs .NET Framework, and the checks after it
+# need a window station.
+
+function Get-InstallerKind {
+  param([Parameter(Mandatory)][string]$Path)
+  switch ([System.IO.Path]::GetExtension($Path).ToLowerInvariant()) {
+    '.exe' { 'nsis' }
+    '.msi' { 'msi' }
+    default { 'unsupported' }
+  }
+}
+
+# THE SAME COMMANDS check-windows.ps1 USES, and that agreement is the point: the
+# smoke and this lane must install to the same place under the same product
+# identity, or they are not talking about the same install.
+#   NSIS — UPPERCASE /S. The switch is case-sensitive and /s runs the installer
+#   interactively, hanging the job on a dialog. Per-user, under %LOCALAPPDATA%.
+#   MSI — msiexec /i /quiet /norestart. Per-machine, under Program Files, which
+#   needs the elevation a runner's account already has.
+function Get-InstallInvocation {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][ValidateSet('nsis', 'msi')][string]$Kind
+  )
+  if ($Kind -eq 'msi') {
+    return [PSCustomObject]@{
+      FilePath  = 'msiexec.exe'
+      Arguments = @('/i', $Path, '/quiet', '/norestart')
+    }
+  }
+  return [PSCustomObject]@{ FilePath = $Path; Arguments = @('/S') }
+}
+
+# Start-Process joins -ArgumentList with spaces and quotes NOTHING, so an
+# artifact path with a space in it is re-split before msiexec ever sees it. Its
+# own function so -SelfTest can drive it: inline at the call site, the one
+# argument that can carry a space is the one no fixture there has.
+function Get-StartProcessArgv {
+  param([string[]]$Arguments = @())
+  return @($Arguments | ForEach-Object {
+      if ($_ -match '\s' -and $_ -notmatch '^".*"$') { '"' + $_ + '"' } else { $_ }
+    })
+}
+
+# Only 0. msiexec's 3010 and 1641 mean it installed and wants a reboot, and this
+# lane refuses them on purpose: a reboot-pending install is not a state any user
+# is looking at. A policy, so it is asserted rather than left to a comment.
+function Test-InstallSucceeded {
+  param([Parameter(Mandatory)][int]$ExitCode)
+  return ($ExitCode -eq 0)
+}
+
+# The registry value is not a clean path and the two installers disagree about
+# how it is spelled: NSIS writes it QUOTED, the MSI bare with a trailing
+# separator. Verbatim, the quoted form fails every Test-Path. Same normalisation
+# as check-windows.ps1's Test-InstallDirectory, so both agree where the app is.
+function Get-InstallLocation {
+  param([AllowNull()][AllowEmptyString()][string]$Raw)
+  if (-not $Raw) { return $null }
+  $path = $Raw.Trim().Trim('"').TrimEnd('\', '/')
+  if (-not $path) { return $null }
+  return $path
+}
+
+# Which of the entries an install added is the app — the same rule as
+# check-windows.ps1: prefer the one naming itself Unyt, and otherwise take the
+# first rather than giving up, since something did just install.
+function Select-InstallEntry {
+  param([object[]]$New = @())
+  $named = @($New | Where-Object { $_.DisplayName -like '*Unyt*' })
+  if ($named.Count -gt 0) { return $named[0] }
+  if ($New.Count -gt 0) { return $New[0] }
+  return $null
+}
+
+# EVERY LINE TO STDERR, and only the exit code returned: a function that also
+# emitted its narration would hand `exit` the whole collection instead of the
+# number, and the step's colour would stop meaning anything.
+function Invoke-SelfTest {
+  $script:selfTestPassed = 0
+  $script:selfTestFailed = 0
+  # ARITY IS PART OF THE VALUE, so an array is rendered with its count and a
+  # separator no argument can contain: joined on spaces, `@('/i','a b')` and
+  # `@('/i a b')` read the same — and the second is one argument msiexec would
+  # reject outright.
+  function Format-Value {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return '<null>' }
+    if ($Value -is [array]) { return "$($Value.Count):[$($Value -join '|')]" }
+    return "$Value"
+  }
+  function Test-Case {
+    param([string]$Name, [AllowNull()][object]$Want, [AllowNull()][object]$Got)
+    $wantText = Format-Value -Value $Want
+    $gotText = Format-Value -Value $Got
+    # Case-SENSITIVE: /S and /s are two different installers' behaviour.
+    if ($wantText -ceq $gotText) {
+      $script:selfTestPassed++
+      Write-Note ('pass  {0,-58} {1}' -f $Name, $gotText)
+    }
+    else {
+      $script:selfTestFailed++
+      Write-Note "FAIL  $Name — wanted '$wantText', got '$gotText'"
+    }
+  }
+
+  Test-Case 'an .exe is the NSIS installer' 'nsis' (Get-InstallerKind -Path 'C:\a\unyt_1.0.0_x64_windows.exe')
+  Test-Case 'an .msi is the MSI' 'msi' (Get-InstallerKind -Path 'C:\a\unyt_1.0.0_x64_windows.msi')
+  # The release names its assets in lower case, but an extension is not a
+  # promise: a case-sensitive match would read .MSI as unsupported.
+  Test-Case 'the extension is matched without case' 'msi' (Get-InstallerKind -Path 'C:\a\UNYT.MSI')
+  Test-Case 'anything else is refused rather than guessed' 'unsupported' (Get-InstallerKind -Path 'C:\a\unyt.zip')
+  Test-Case 'and a name with dots in it is read by its last one' 'nsis' (Get-InstallerKind -Path 'C:\a\unyt_0.101.0-dev.0_x64.exe')
+
+  $nsis = Get-InstallInvocation -Path 'C:\a\x.exe' -Kind 'nsis'
+  Test-Case 'NSIS runs itself' 'C:\a\x.exe' $nsis.FilePath
+  Test-Case 'NSIS is silenced with an uppercase /S' @('/S') $nsis.Arguments
+  $msi = Get-InstallInvocation -Path 'C:\a\x.msi' -Kind 'msi'
+  Test-Case 'an MSI is installed by msiexec' 'msiexec.exe' $msi.FilePath
+  Test-Case 'an MSI is installed silently, and reboots nothing' `
+    @('/i', 'C:\a\x.msi', '/quiet', '/norestart') $msi.Arguments
+
+  # The one argument that can carry a space is the artifact path, and a runner's
+  # temp directory is one Windows release away from having one.
+  Test-Case 'a path with a space reaches msiexec as one argument' `
+    @('/i', '"C:\Program Files\a b.msi"', '/quiet', '/norestart') `
+    (Get-StartProcessArgv -Arguments (Get-InstallInvocation -Path 'C:\Program Files\a b.msi' -Kind 'msi').Arguments)
+  # WRAPPED IN @() exactly as the caller wraps it: PowerShell unwraps a
+  # one-element array on return, so an assertion that did not wrap would be
+  # comparing a bare string and would not see the arity it is here to check.
+  Test-Case 'a switch is passed through untouched' @('/S') @(Get-StartProcessArgv -Arguments @('/S'))
+  Test-Case 'and an already-quoted argument is not quoted twice' `
+    @('"a b"') @(Get-StartProcessArgv -Arguments @('"a b"'))
+
+  Test-Case 'exit 0 is the only clean install' 'True' (Test-InstallSucceeded -ExitCode 0)
+  # 3010/1641 installed and want a reboot; refusing them is the policy, and a
+  # comment alone would not stop a well-meant relaxation.
+  Test-Case 'a reboot-pending install is not one a user is looking at' 'False' (Test-InstallSucceeded -ExitCode 3010)
+  Test-Case 'nor is the other reboot code' 'False' (Test-InstallSucceeded -ExitCode 1641)
+  Test-Case 'and a fatal msiexec error is not either' 'False' (Test-InstallSucceeded -ExitCode 1603)
+
+  # THE CLAIM THAT THE TWO LANES AGREE: NSIS records its directory quoted and the
+  # MSI records it with a trailing separator, and both have to name one place.
+  Test-Case 'NSIS quotes its install location' 'C:\Program Files\Unyt Sandbox' (Get-InstallLocation -Raw '"C:\Program Files\Unyt Sandbox"')
+  Test-Case 'the MSI trails a separator on the same directory' 'C:\Program Files\Unyt Sandbox' (Get-InstallLocation -Raw 'C:\Program Files\Unyt Sandbox\')
+  Test-Case 'an empty install location is unknown, not the current directory' $null (Get-InstallLocation -Raw '   ')
+  Test-Case 'and so is a missing one' $null (Get-InstallLocation -Raw $null)
+
+  $entries = @(
+    [PSCustomObject]@{ KeyPath = 'k1'; DisplayName = 'WebView2 Runtime'; InstallLocation = 'c:\wv2' },
+    [PSCustomObject]@{ KeyPath = 'k2'; DisplayName = 'Unyt Sandbox'; InstallLocation = 'c:\unyt' }
+  )
+  Test-Case 'the app is picked out of everything an install registered' 'k2' (Select-InstallEntry -New $entries).KeyPath
+  Test-Case 'an unrecognised name is still what just installed' 'k1' (Select-InstallEntry -New @($entries[0])).KeyPath
+  # Held in a variable rather than dotted into: a property read off $null is its
+  # own error under StrictMode, and this case is about the $null itself.
+  $none = Select-InstallEntry -New @()
+  Test-Case 'and nothing registered is nothing to launch' $null $none
+
+  Write-Note ''
+  Write-Note "prove-windows regression: $($script:selfTestPassed) passed, $($script:selfTestFailed) failed"
+  # A floor, so deleting cases fails as loudly as breaking one.
+  if (($script:selfTestPassed + $script:selfTestFailed) -lt 23) {
+    [Console]::Error.WriteLine('::error::assertions were deleted from prove-windows.ps1 -SelfTest')
+    return 1
+  }
+  if ($script:selfTestFailed -gt 0) { return 1 }
+  return 0
+}
+
+if ($SelfTest) { exit (Invoke-SelfTest) }
 
 $Label = "windows/$([System.IO.Path]::GetFileName($Artifact))"
 $Root = Split-Path -Parent $PSCommandPath
@@ -64,8 +253,6 @@ $HardMaxShots = 40
 $TimeoutSeconds = 240
 $PostSeconds = 30
 
-function Write-Note { param([string]$Message) [Console]::Error.WriteLine($Message) }
-
 function Exit-With {
   param([string]$Verdict, [string]$Why, [int]$Code)
   Write-Output "VERDICT ${Label}: $Verdict — $Why"
@@ -82,6 +269,15 @@ trap {
   Write-Output "VERDICT ${Label}: CANNOT PROVE — this lane failed before it could answer: $($_.Exception.Message)"
   exit 2
 }
+
+# ASKED BEFORE ANY OF THE RUNNER IS PROBED: an artifact this lane has no way to
+# install is a wrong invocation, and it must not be reported as anything about a
+# runner or a build.
+$kind = Get-InstallerKind -Path $Artifact
+if ($kind -eq 'unsupported') {
+  Exit-With -Verdict 'CANNOT PROVE' -Why "'$([System.IO.Path]::GetFileName($Artifact))' is neither an .exe nor an .msi, so there is no way to install it" -Code 2
+}
+Write-Note "artifact: $([System.IO.Path]::GetFileName($Artifact)) ($kind)"
 
 # ── the log patterns, read from their one home ────────────────────────────────
 # `NAME='<ere>'` in the shell files. Bash EREs and .NET regexes agree on
@@ -332,25 +528,33 @@ function Get-Entries {
 }
 
 $before = @(Get-Entries | ForEach-Object { $_.KeyPath })
-# UPPERCASE /S — NSIS's silent switch is case-sensitive, and /s runs the
-# installer interactively and hangs on its dialog.
-$installer = Start-Process -FilePath $Artifact -ArgumentList '/S' -PassThru -Wait:$false
+$run = Get-InstallInvocation -Path $Artifact -Kind $kind
+$argv = @(Get-StartProcessArgv -Arguments $run.Arguments)
+Write-Note "installing: $($run.FilePath) $($argv -join ' ')"
+$installer = Start-Process -FilePath $run.FilePath -ArgumentList $argv -PassThru -Wait:$false
 if (-not $installer.WaitForExit(300 * 1000)) {
   try { $installer.Kill() } catch { Write-Note "  (could not kill the installer: $($_.Exception.Message))" }
-  Exit-With -Verdict 'NOT PROVEN' -Why 'the installer never finished, so it was waiting for input' -Code 1
+  Exit-With -Verdict 'NOT PROVEN' -Why "the $kind installer never finished, so it was waiting for input" -Code 1
 }
-if ($installer.ExitCode -ne 0) {
-  Exit-With -Verdict 'NOT PROVEN' -Why "the installer exited $($installer.ExitCode), so nothing was installed" -Code 1
+# The message must not say "nothing was installed": 3010 means it did — see
+# Test-InstallSucceeded for why that is still refused.
+if (-not (Test-InstallSucceeded -ExitCode $installer.ExitCode)) {
+  Exit-With -Verdict 'NOT PROVEN' -Why "the $kind installer exited $($installer.ExitCode), so this is not an install a user would be looking at (3010 would mean it installed and wants a reboot first)" -Code 1
 }
 
-$new = @(Get-Entries | Where-Object { $before -notcontains $_.KeyPath })
-$entry = @($new | Where-Object { $_.DisplayName -like '*Unyt*' }) | Select-Object -First 1
-if (-not $entry) { $entry = @($new) | Select-Object -First 1 }
-if (-not $entry -or -not $entry.InstallLocation) {
-  Exit-With -Verdict 'NOT PROVEN' -Why 'the install registered no uninstall entry with an install location, so the program could not be found' -Code 1
+# CANNOT PROVE, not NOT PROVEN: this is how THIS LANE finds the program, and an
+# installer that registers no location has defeated the lookup rather than
+# demonstrated anything about whether the app shows a screen. The release smoke
+# owns the question of whether registering it is required — check-windows.ps1's
+# 'registers' and 'executable' checks red the build for exactly this.
+$entry = Select-InstallEntry -New @(Get-Entries | Where-Object { $before -notcontains $_.KeyPath })
+if (-not $entry) {
+  Exit-With -Verdict 'CANNOT PROVE' -Why "the $kind install registered no uninstall entry, so this lane has no way to find what it installed" -Code 2
 }
-# NSIS writes the value quoted; verbatim it fails every Test-Path.
-$installDir = $entry.InstallLocation.Trim().Trim('"').TrimEnd('\', '/')
+$installDir = Get-InstallLocation -Raw $entry.InstallLocation
+if (-not $installDir) {
+  Exit-With -Verdict 'CANNOT PROVE' -Why "the $kind install registered '$($entry.DisplayName)' with no InstallLocation, so this lane has no way to find what it installed" -Code 2
+}
 Write-Note "installed $($entry.DisplayName) -> $installDir"
 
 # The app, not the uninstaller: NSIS drops both under the same directory.
@@ -584,7 +788,8 @@ elseif ($foreign) {
   $screenNote = "every frame of its window shows something that is not the app ($($foreign -replace '^FOREIGN\s*', ''))"
 }
 else {
-  $screenNote = "every frame of its window is a flat fill ($((Get-FirstLine 'FLAT') -replace '^FLAT\s*', ''))"
+  # Names no cause — see the same line in proving-common.sh.
+  $screenNote = "no frame of its window carries enough to be a screen ($((Get-FirstLine 'FLAT') -replace '^FLAT\s*', ''))"
 }
 if ($failedState) { $stateNote = "the app reached a failure state ($failedState)" }
 elseif ($reached) { $stateNote = "the app reached $reached" }

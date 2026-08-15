@@ -12,13 +12,21 @@ name: "zz-TEMPORARY-load-proving"
 # the app exists: if that frame already passes for the app, the capture path is
 # photographing the desktop and every verdict that job could produce is void.
 #
-# The three lanes do not prove the same thing, and each says which it proved:
-# Linux and Windows photograph the app's own window; macOS cannot be granted
-# Screen Recording on a runner, so it gates on the window list and states that
-# webview paint is unverified there.
+# Every lane photographs the app's own window and says what the frame was.
+# macOS is the one that may not manage it: without the TCC Screen Recording
+# grant a capture returns the desktop with the app omitted rather than failing,
+# so that lane checks whether it has the grant, tries, and falls back to the
+# window list — reporting WINDOW-ONLY and saying webview paint is unverified —
+# whenever the frame it got is not the app's own screen.
 #
-# A lane that cannot launch or cannot capture reports UNTRUSTED or CANNOT PROVE
-# and goes red. It never skips, and it is never green.
+# ONE ARTIFACT PER LANE, not one per platform: the .deb and the AppImage install
+# differently, and so do the NSIS .exe and the .msi.
+#
+# A lane that cannot launch, or whose capture path cannot be trusted, reports
+# UNTRUSTED or CANNOT PROVE and goes red. It never skips, and it is never green.
+# macOS is the one exception and says so on the line: it has a second way to
+# answer, so it drops to WINDOW-ONLY — green, and explicit that paint is
+# unverified — rather than going red for a photograph it could not take.
 on:
   push:
     branches: [fix/release-pipeline-post-0.7-cutover]
@@ -101,13 +109,15 @@ jobs:
           # empty artifact is itself a finding.
           if-no-files-found: error
 
-  # PROVES LESS THAN THE OTHER TWO, and its verdict says so on every line: macOS
-  # gates on the window list, not on pixels. A runner cannot be granted Screen
-  # Recording, and without it `screencapture` returns the desktop with the app's
-  # windows omitted rather than failing — so a pixel verdict here could only ever
-  # be a lie. See prove-macos.sh.
+  # THE LANE THAT MAY PROVE LESS, and its verdict says which it managed. The
+  # design assumed a runner cannot be granted Screen Recording — without it
+  # `screencapture` returns the desktop with the app's windows omitted rather
+  # than failing — but the first run read our own window's TITLE, which is
+  # exactly what that grant withholds. So this lane now tries a window-scoped
+  # capture and reports PROVEN when the frame is the app's own screen, and falls
+  # back to the window list (WINDOW-ONLY) when it is not. See prove-macos.sh.
   macos:
-    name: "macos launches + shows a window (${{ matrix.arch }})"
+    name: "macos first screen or window (${{ matrix.arch }})"
     # PINNED, not macos-latest: the label moved to macOS 26 and its capture and
     # redaction rules differ, so a lane that answers today would change answer
     # without a commit.
@@ -153,21 +163,36 @@ jobs:
           bash scripts/smoke/load-proving/publish-verdict.sh \
             "$RUNNER_TEMP/verdict.txt" "macos ${{ matrix.arch }}" "$rc"
 
-      # Context here, not evidence — the job log says which, and so does the
-      # verdict. Uploaded anyway: seeing what the runner's screen actually
-      # contained is how we find out whether capture is worth anything on macOS.
+      # Both kinds here: shots/verdict holds window-scoped frames when the lane
+      # managed them, and shots/context the whole-screen ones, which are only
+      # ever evidence about the runner.
       - name: Upload every frame
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: load-proving-macos-${{ matrix.arch }}
           path: ${{ runner.temp }}/shots
-          # `warn` only here: this lane's verdict does not rest on a frame, so a
-          # run with nothing capturable is a real outcome rather than a fault.
+          # `warn` only here: this lane can still answer with the window list, so
+          # a run with nothing capturable is a real outcome rather than a fault.
           if-no-files-found: warn
 
+  # THREE JOBS, NOT FOUR, and the asymmetry is deliberate. The two images answer
+  # an OS-VERSION question, and they have already answered it identically —
+  # 50.00% dominant over 1847 distinct on windows-2022 against 50.86% over 1881
+  # on windows-2025, for the same frame of the same installer. The .msi answers
+  # an ARTIFACT question instead: a per-machine install into Program Files rather
+  # than a per-user one under %LOCALAPPDATA%, registered per-machine, with its
+  # own product version. Running it on both images would re-measure the OS delta
+  # at the cost of a runner rather than cover anything the .exe pair does not, so
+  # it runs on the newer image alone — where a policy or path difference would
+  # show up first.
+  #
+  # UNCONDITIONAL, unlike release-smoke.yaml's inventory-gated MSI steps: this
+  # lane is pointed at one pinned release that ships one. A release without an
+  # .msi reds this job at the download step, which prints the assets it does
+  # have — a true answer, and a louder one than a skip.
   windows:
-    name: "windows first screen (${{ matrix.runner }})"
+    name: "windows first screen (${{ matrix.kind }} on ${{ matrix.runner }})"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -175,29 +200,44 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [windows-2022, windows-2025]
+        include:
+          - runner: windows-2022
+            kind: nsis
+            suffix: x64_windows.exe
+          - runner: windows-2025
+            kind: nsis
+            suffix: x64_windows.exe
+          - runner: windows-2025
+            kind: msi
+            suffix: x64_windows.msi
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
+      # The third suite is Windows-only because the lane it tests is: it decides
+      # which command installs an artifact and where Windows recorded it, and
+      # `powershell` (not pwsh) is what runs that file.
       - name: Can the verdicts still fail?
         shell: bash
         run: |
           python scripts/smoke/load-proving/screenshot-stats.py --self-test
           bash scripts/smoke/load-proving/test-proving.sh
+          powershell -NoProfile -ExecutionPolicy Bypass \
+            -File scripts/smoke/load-proving/prove-windows.ps1 -SelfTest
 
       - name: Download the released installer
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GIT_PAT }}
+          SUFFIX: ${{ matrix.suffix }}
         run: |
           # Git Bash: `mkdir -p 'D:\a\_temp/x'` makes ONE dir with backslashes.
           out="${RUNNER_TEMP//\\//}/artifacts"
-          exe="$(bash scripts/smoke/download-release-asset.sh \
-            "$RELEASE" x64_windows.exe "$out")"
-          echo "EXE=$exe" >> "$GITHUB_ENV"
+          installer="$(bash scripts/smoke/download-release-asset.sh \
+            "$RELEASE" "$SUFFIX" "$out")"
+          echo "INSTALLER=$installer" >> "$GITHUB_ENV"
 
       # `powershell`, NOT `pwsh`: System.Drawing is a .NET Framework assembly and
       # is absent from PowerShell 7's shared framework, so the capture only exists
@@ -211,7 +251,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $verdict = & powershell -NoProfile -ExecutionPolicy Bypass `
             -File scripts/smoke/load-proving/prove-windows.ps1 `
-            -Artifact $env:EXE -Shots "$env:RUNNER_TEMP\shots"
+            -Artifact $env:INSTALLER -Shots "$env:RUNNER_TEMP\shots"
           # WriteAllLines, not `>`: Windows PowerShell writes UTF-16 and
           # Set-Content -Encoding utf8 adds a BOM, and the reader is bash.
           [System.IO.File]::WriteAllLines(
@@ -228,12 +268,15 @@ jobs:
         shell: bash
         run: |
           bash scripts/smoke/load-proving/publish-verdict.sh \
-            "${RUNNER_TEMP//\\//}/verdict.txt" "windows ${{ matrix.runner }}" "${PROVE_RC:-99}"
+            "${RUNNER_TEMP//\\//}/verdict.txt" \
+            "windows ${{ matrix.kind }} ${{ matrix.runner }}" "${PROVE_RC:-99}"
 
+      # The kind is in the name as well as the image: two jobs on one image would
+      # otherwise collide, and the upload of the second would fail the run.
       - name: Upload every frame
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: load-proving-${{ matrix.runner }}
+          name: load-proving-windows-${{ matrix.kind }}-${{ matrix.runner }}
           path: ${{ runner.temp }}/shots
           if-no-files-found: error

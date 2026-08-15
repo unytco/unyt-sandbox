@@ -97,25 +97,43 @@ BOOT_BACKGROUNDS = _boot_backgrounds()
 # region into somebody else's dark grey — at 16, #2c2c2c and #444444 both matched.
 BACKGROUND_TOLERANCE = 3
 
-# ── the threshold, and why ────────────────────────────────────────────────────
-# An unpainted webview is ONE flat colour: the window is mapped, the compositor
-# cleared it, and nothing drew. So is a capture taken with no visible desktop —
-# uniform black. Either way distinct == 1.
+# ── the two bars, and why they sit where they do ──────────────────────────────
+# MEASURED, NOT REASONED. The first pair of bars here were set from first
+# principles — "far above every degenerate case" — and an adversarial frame built
+# from the real Linux capture walked straight through them: the app's boot
+# background plus the native menu bar, with the modal blanked out, scored 96.88%
+# dominant over 203 distinct colours and passed both. The menu bar is drawn by
+# the native toolkit and not by the webview, so "the chrome renders, the webview
+# content is missing" — very nearly the bug this file exists to catch — was a
+# pass. Every frame run 31862262726 captured, plus that one:
 #
-# A real first screen is the boot view with the keystore password modal on it: a
-# logo ring, antialiased text and two buttons. Antialiasing alone puts the
-# distinct count in the thousands. 64 sits far above every degenerate case (1
-# colour flat, 2 with a mouse cursor, 3 with a scrollbar) and far below any real
-# render, so neither side is close to it.
-MIN_DISTINCT_COLOURS = 64
+#   frame                                        dominant   distinct
+#   linux-deb        13-t25s   real screen         53.26%       2039
+#   linux-appimage   14-t28s   real screen         53.90%       2360
+#   windows-2022     04-t8s    real screen         50.00%       1847
+#   windows-2025     04-t9s    real screen         50.86%       1881
+#   linux-appimage   13-t25s   unpainted white     99.69%        556
+#   windows-2022     01/02/03  early               92.94%        449
+#   windows-2025     01/02     early               96.55%         49
+#   windows-2025     03        early               96.92%          3
+#   menu bar only              adversarial         96.88%        203
+#
+# Nothing observed lives between 53.90% and 92.94% dominant, or between 556 and
+# 1847 distinct, so both bars go in the middle of their gap. A tighter bar costs
+# nothing in time — each lane polls until a frame passes rather than looking once
+# — and Linux painted three seconds into a thirty-second budget.
 
-# And at least this share of the frame must be something OTHER than its single
-# most common colour, which is the half that survives a noisy capture: a flat
-# fill with a cursor on it clears the distinct-colour bar on antialiasing while
-# being, visibly, a blank window. 0.5% of an 800x800 frame is a 57x57 square —
-# smaller than the boot logo ring and far smaller than the modal, so a genuine
-# screen clears it with room to spare.
-MIN_NON_DOMINANT_SHARE = 0.005
+# The geometric middle of 556..1847 (1014^2 ~ 556 x 1847). A CONSEQUENCE WORTH
+# STATING: at 8 bits per pixel a greyscale or palette PNG holds 256 colours at
+# most, so a capture in one can never clear this bar. That is right rather than
+# unfortunate — a tool that quantised the frame has not handed us a screen.
+MIN_DISTINCT_COLOURS = 1000
+
+# No single colour may be more than this much of the frame. THE BAR THE MENU-BAR
+# FRAME BROKE: a colour count alone cannot tell a screen from a blank window with
+# something small and rich on it, because a strip of chrome carries hundreds of
+# colours in 3% of the pixels.
+MAX_DOMINANT_SHARE = 0.75
 
 # A 1x1 or 16x16 capture is a tool that failed and wrote something anyway; it
 # cannot be evidence about an 800x800 window whatever its colour variance.
@@ -364,13 +382,13 @@ def assess(path):
 
     if len(counts) < MIN_DISTINCT_COLOURS:
         return FLAT, "%s — under %d distinct colours" % (facts, MIN_DISTINCT_COLOURS)
-    if (1.0 - share) < MIN_NON_DOMINANT_SHARE:
+    if share > MAX_DOMINANT_SHARE:
         return (
             FLAT,
-            "%s — under %.1f%% of the frame differs from its dominant colour"
+            "%s — over %.1f%% of the frame is one single colour, so whatever else is on it is too little to be a screen"
             % (
                 facts,
-                100.0 * MIN_NON_DOMINANT_SHARE,
+                100.0 * MAX_DOMINANT_SHARE,
             ),
         )
     matched = nearest_background(tuple(dominant))
@@ -491,18 +509,40 @@ def _flat_rgb(width, height, colour):
     return [bytes(colour) * width for _ in range(height)]
 
 
-def _with_modal(size, background):
-    """A boot background with something drawn on it — the shape of every real
-    frame this is asked about."""
+def _content_colour(n):
+    """The n'th of a run of distinct colours. Injective while n fits two bytes —
+    they ARE two of the channels — so a fixture's colour count is a number the
+    case states, not a side effect of arithmetic that happens to collide. Every
+    colour it returns is far darker in red than any background here, so content
+    can never merge into the fill it is drawn on."""
+    return bytes((n // 256, n % 256, (n * 7) % 256))
+
+
+# What the real captures contain, so the fixtures are calibrated the same way the
+# bars are: half the frame is content, over about two thousand colours (run
+# 31862262726 measured 50.00-53.90% dominant over 1847-2360 distinct).
+CONTENT_COLOURS = 2000
+
+
+def _drawn_on(size, background, content_rows, content_colours, top=0):
+    """A boot background with `content_rows` rows of exactly `content_colours`
+    distinct colours drawn across it. ONE BUILDER FOR EVERY CASE, because the two
+    bars look at exactly two things — how much of the frame is not its background,
+    and how many colours are on it — so the modal, a menu bar over a blank
+    window, and any margin between them differ only in these numbers."""
     rows = _flat_rgb(size, size, background)
-    for y in range(size // 3, size * 2 // 3):
+    for y in range(top, top + content_rows):
         row = bytearray(rows[y])
-        for x in range(size // 4, size * 3 // 4):
-            row[x * 3 : x * 3 + 3] = bytes(
-                ((x * 7) % 256, (y * 5) % 256, (x + y) % 256)
-            )
+        for x in range(size):
+            row[x * 3 : x * 3 + 3] = _content_colour((x + y * size) % content_colours)
         rows[y] = bytes(row)
     return rows
+
+
+def _with_modal(size, background):
+    """The keystore modal over the boot background, at the proportions the real
+    captures have: half the frame, over two thousand colours."""
+    return _drawn_on(size, background, size // 2, CONTENT_COLOURS, top=size // 4)
 
 
 def _wallpaper(size):
@@ -579,6 +619,26 @@ def _self_test():
             failed += 1
             print("FAIL  %-56s wanted %s, got %s" % (name, want, got), file=sys.stderr)
 
+    def calibration_case(name, png, want):
+        """(distinct, dominant share) of a fixture, asserted directly. The bars
+        are set from measurements of real frames, so a fixture that drifted off
+        those numbers would still pass every verdict above while quietly
+        testing them at a distance the real captures never sit at."""
+        nonlocal passed, failed
+        _, _, counts = run(png, count_colours)
+        got = (
+            len(counts),
+            round(counts.most_common(1)[0][1] / sum(counts.values()), 5),
+        )
+        if got == want:
+            passed += 1
+            print(
+                "pass  %-56s %d colours, %.2f%% dominant" % (name, got[0], 100 * got[1])
+            )
+        else:
+            failed += 1
+            print("FAIL  %-56s wanted %s, got %s" % (name, want, got), file=sys.stderr)
+
     size = 400
     prompt_background = _boot_backgrounds()[0]
 
@@ -611,13 +671,78 @@ def _self_test():
     case("a flat frame with only a cursor on it", _encode(size, size, cursor), FLAT)
 
     # Two flat blocks: a third of the frame differs from the dominant colour, so
-    # the share bar is satisfied and only the distinct-colour count says this is
+    # the SHARE bar is satisfied and only the distinct-colour count says this is
     # not a render. The boot screen has a conic-gradient logo ring and
-    # antialiased text on it; nothing it draws is two solid rectangles.
+    # antialiased text on it; nothing it draws is two solid rectangles. This is
+    # the one case the colour bar has to catch alone — remove that bar and this
+    # frame passes for the app.
     two_tone = _flat_rgb(size, size, prompt_background)
     for y in range(size * 2 // 3, size):
         two_tone[y] = bytes((90, 90, 90)) * size
     case("a window split into two flat blocks", _encode(size, size, two_tone), FLAT)
+
+    # THE ADVERSARIAL PAIR, at the real captures' 800x800: the first reproduces
+    # the frame that walked through the old bars exactly — 96.88% dominant over
+    # 203 distinct. The second carries a strip rich enough to clear the colour
+    # bar on its own, so the SHARE bar is the only thing rejecting it; remove
+    # that bar and a menu bar over a blank window passes for the app.
+    shot = 800
+    menu_bar = _encode(shot, shot, _drawn_on(shot, prompt_background, 25, 202))
+    case("the app's background with only a menu bar drawn on it", menu_bar, FLAT)
+    # The real frame's own numbers, to the hundredth: this fixture is only worth
+    # anything while it still IS the frame that walked through the old bars.
+    calibration_case(
+        "and it is the frame that was measured at 96.88%", menu_bar, (203, 0.96875)
+    )
+    calibration_case(
+        "a real first screen sits where the captures did",
+        _encode(size, size, _with_modal(size, prompt_background)),
+        (2001, 0.5),
+    )
+    case(
+        "the same frame with chrome rich enough to clear the colour bar",
+        _encode(shot, shot, _drawn_on(shot, prompt_background, 25, 1200)),
+        FLAT,
+    )
+
+    # ── THE MARGINS, which is where a bar is really pinned ────────────────────
+    # A case at the middle of the gap only proves the bar is somewhere in it: at
+    # 2001 colours and 50% dominant, MIN_DISTINCT_COLOURS could be 1900 and
+    # MAX_DOMINANT_SHARE 0.52 with every case still green — while both reject
+    # frames the table above records as REAL SCREENS. So one case sits on the
+    # worst real capture (windows-2022's 1847 colours, linux-appimage's 53.90%
+    # dominant, together), and one sits a single step the wrong side of each bar.
+    # Between them the two constants can only move inside the measured gap.
+    case(
+        "the worst real capture is still the app's own screen",
+        _encode(1000, 1000, _drawn_on(1000, prompt_background, 461, 1846)),
+        PAINTED,
+    )
+    case(
+        "one colour short of the bar, with room to spare on the other",
+        _encode(size, size, _drawn_on(size, prompt_background, size // 3, 998)),
+        FLAT,
+    )
+    case(
+        "one step over the dominant bar, with colours to spare",
+        _encode(size, size, _drawn_on(size, prompt_background, 99, 1200)),
+        FLAT,
+    )
+
+    # BOTH SIDES OF THE COLOUR SLACK, for the same reason: every other case uses
+    # a declared colour exactly, so nothing would notice a tolerance of zero —
+    # and the constant exists precisely because a real capture differs by a unit.
+    # #4f4f5e is the outlying background, so its neighbours cannot answer for it.
+    # The offsets are LITERAL, not BACKGROUND_TOLERANCE ± 1: written in terms of
+    # the constant they would move with it, and an assertion that follows the
+    # thing it asserts cannot fail.
+    for offset, verdict in ((3, PAINTED), (4, FOREIGN)):
+        drifted = tuple(c + offset for c in (0x4F, 0x4F, 0x5E))
+        case(
+            "a capture %d off the app's #4f4f5e in every channel" % offset,
+            _encode(size, size, _with_modal(size, drifted)),
+            verdict,
+        )
 
     # The slack around the app's palette has to stay narrow enough to exclude
     # ordinary dark-theme chrome — at a per-channel 16 both of these matched, and
@@ -698,17 +823,11 @@ def _self_test():
         for _ in range(size)
     ]
     case("an RGBA capture, flat", _encode(size, size, rgba, colour_type=6), FLAT)
+    # The same screen with an alpha channel on it, built from the same rows so
+    # the two cases cannot drift into testing different frames.
     rgba_painted = [
-        b"".join(
-            (
-                bytes(((x * 3) % 256, (y * 7) % 256, (x ^ y) % 256))
-                if size // 3 < y < size * 2 // 3
-                else bytes(prompt_background)
-            )
-            + b"\xff"
-            for x in range(size)
-        )
-        for y in range(size)
+        b"".join(bytes(row[i : i + 3]) + b"\xff" for i in range(0, size * 3, 3))
+        for row in painted
     ]
     case(
         "an RGBA capture, painted",
@@ -729,11 +848,15 @@ def _self_test():
         ),
         FLAT,
     )
+    # FLAT, not FOREIGN, and the format is the whole reason: eight bits per pixel
+    # of grey is 256 colours at the very most, so no greyscale capture can clear
+    # the colour bar however varied it looks. A tool that handed us one did not
+    # hand us a rendered screen.
     grey = [bytes([(x + y) % 256 for x in range(size)]) for y in range(size)]
     case(
-        "a greyscale capture with no app colour in it",
+        "a greyscale capture, which cannot hold a rendered screen",
         _encode(size, size, grey, colour_type=0),
-        FOREIGN,
+        FLAT,
     )
     # WHAT THE LINUX CONTROL FRAME ACTUALLY IS: ImageMagick writes a two-colour
     # capture as 1-bit grey, so a bare Xvfb root arrives at this decoder packed
@@ -792,28 +915,26 @@ def _self_test():
         ),
         (85, 85, 85),
     )
+    # Same reasoning as the greyscale case: a PLTE chunk holds 256 entries, so a
+    # palette capture is a quantised frame whatever it depicts.
     pal = bytes(b"".join(bytes((i, 255 - i, (i * 3) % 256)) for i in range(256)))
+    palette_rows = [bytes([(x + y) % 256 for x in range(size)]) for y in range(size)]
     case(
-        "a palette capture with no app colour in it",
-        _encode(
-            size,
-            size,
-            [bytes([(x + y) % 256 for x in range(size)]) for y in range(size)],
-            colour_type=3,
-            palette=pal,
-        ),
-        FOREIGN,
-    )
-    case(
-        "a palette capture, flat",
-        _encode(
-            size,
-            size,
-            [bytes([7] * size) for _ in range(size)],
-            colour_type=3,
-            palette=pal,
-        ),
+        "a palette capture, which cannot hold a rendered screen",
+        _encode(size, size, palette_rows, colour_type=3, palette=pal),
         FLAT,
+    )
+    flat_palette = _encode(
+        size, size, [bytes([7] * size) for _ in range(size)], colour_type=3, palette=pal
+    )
+    case("a palette capture, flat", flat_palette, FLAT)
+    # The palette lookup itself, which no verdict above would notice: a decoder
+    # that read the index as a grey level, or indexed the wrong entry, still
+    # reports a frame with too few colours in it.
+    dominant_case(
+        "a palette index resolves through the PLTE chunk",
+        flat_palette,
+        (7, 248, 21),
     )
 
     # "We could not look" must stay distinct from "there was nothing to see".
@@ -833,7 +954,7 @@ def _self_test():
     print("")
     print("screenshot stats regression: %d passed, %d failed" % (passed, failed))
     # A floor, so deleting cases fails as loudly as breaking one.
-    if passed + failed < 62:
+    if passed + failed < 76:
         print(
             "::error::only %d cases ran — assertions were deleted" % (passed + failed),
             file=sys.stderr,

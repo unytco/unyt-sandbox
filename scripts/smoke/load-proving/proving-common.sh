@@ -114,13 +114,22 @@ prove_init() { # <shots-root>
 # Kept out of the verdict directory on purpose: it is evidence about the RUNNER,
 # and a frame of the desktop must never be able to answer a question about the app.
 PROVE_CONTROL_NOTE=""
+# The same finding as a single word, because `advisory` throws the return code
+# away and a caller still has to be able to ask. `usable` is the ONLY value in
+# which a frame from this runner can decide anything; macOS reads it to choose
+# between a pixel verdict and the window list.
+PROVE_CONTROL_STATUS=""
 
 # `advisory` for a platform whose verdict does not rest on pixels: the control is
 # still run and still reported, but it cannot condemn a lane that never used a
 # frame as evidence in the first place. macOS is that platform.
-prove_control_check() { # <label> [advisory]
+prove_control_check() { # <label> [advisory] [slug]
   local label="${1:?label required}" advisory="${2:-}" path rc=0
-  path="$PROVE_SHOTS_CONTEXT/00-control-before-launch.png"
+  # Named, because a platform may need more than one: the whole screen answers
+  # "is this runner's screen mistakable for the app", and a sub-rect of it can
+  # clear a bar the whole screen does not.
+  path="$PROVE_SHOTS_CONTEXT/${3:-00-control-before-launch}.png"
+  PROVE_CONTROL_STATUS="uncapturable"
   if ! prove_control "$path"; then
     PROVE_CONTROL_NOTE="nothing could be captured at all"
     [ -n "$advisory" ] && return 0
@@ -131,10 +140,12 @@ prove_control_check() { # <label> [advisory]
   "$PROVE_PYTHON" "$PROVE_ANALYSER" --control "$path" >&2 || rc=$?
   case "$rc" in
     0)
+      PROVE_CONTROL_STATUS="usable"
       PROVE_CONTROL_NOTE="a pre-launch frame does not pass for the app"
       echo "OK: $PROVE_CONTROL_NOTE, so a later one that does means the app" >&2
       return 0 ;;
     5)
+      PROVE_CONTROL_STATUS="passes-for-app"
       PROVE_CONTROL_NOTE="A PRE-LAUNCH FRAME ALREADY PASSES FOR THE APP — no frame from this runner is evidence"
       if [ -n "$advisory" ]; then
         echo "::warning title=Capture on this runner cannot be trusted::$PROVE_CONTROL_NOTE" >&2
@@ -146,16 +157,49 @@ prove_control_check() { # <label> [advisory]
       printf 'VERDICT %s: UNTRUSTED — a frame captured before the app was even launched already scores as the app, so this capture path cannot answer the question\n' "$label"
       return 3 ;;
     4)
+      PROVE_CONTROL_STATUS="unreadable"
       PROVE_CONTROL_NOTE="the pre-launch frame could not be read as an image"
       [ -n "$advisory" ] && return 0
       printf 'VERDICT %s: CANNOT PROVE — the pre-launch frame could not be read, so the capture path is unusable\n' "$label"
       return 2 ;;
     *)
+      # shellcheck disable=SC2034  # read by prove-macos.sh, which sources this
+      PROVE_CONTROL_STATUS="analyser-failed"
       PROVE_CONTROL_NOTE="the frame analyser failed on the control frame (exit $rc)"
       [ -n "$advisory" ] && return 0
       printf 'VERDICT %s: CANNOT PROVE — %s\n' "$label" "$PROVE_CONTROL_NOTE"
       return 2 ;;
   esac
+}
+
+# MAY A FRAME FROM THIS RUNNER DECIDE ANYTHING? Two independent halves, and a
+# lane needs both: <capable> is the platform's own answer to "would a capture
+# return the app's own window at all" (on macOS, whether it has the TCC grant),
+# and the control statuses are this run's answer to "would this runner's screen
+# pass for the app even if it did". A single no anywhere is a no.
+#
+# Only a platform with a SECOND way to answer calls this — macOS, which falls
+# back to the window list. Linux and Windows have no fallback, so for them a
+# control that cannot be trusted reds the lane outright rather than dropping it
+# into a lesser verdict.
+# The word a platform's probe reported, as the yes/no that predicate takes. Two
+# lines with one home, because inverting them arms a pixel verdict on exactly the
+# runner that must not have one.
+prove_capable_word() { # <grant-word>
+  if [ "${1:-}" = granted ]; then echo yes; else echo no; fi
+}
+
+prove_pixels_may_decide() { # <capable:yes|no> <control-status>...
+  local capable="${1:?capable yes/no required}" status
+  shift
+  [ "$capable" = yes ] || return 1
+  # No statuses at all is a no: it means no control was taken, and an untested
+  # capture path is exactly what this whole exercise refuses to trust.
+  [ "$#" -gt 0 ] || return 1
+  for status in "$@"; do
+    [ "$status" = usable ] || return 1
+  done
+  return 0
 }
 
 # ── frames ────────────────────────────────────────────────────────────────────
@@ -198,6 +242,30 @@ prove_shoot_and_assess() { # <slug> [force]
 # believe, so it replaces this with the window list. Sets PROVE_EVIDENCE and
 # returns 0 once it has it.
 prove_seek_evidence() { prove_shoot_and_assess "$@"; }
+
+# A BOUNDED SECOND PHASE, for a lane that has its window and now wants the paint.
+# The watch below stops at the first evidence its platform accepts, and on macOS
+# that is the window list — so photographing the window is something that happens
+# AFTER it rather than during it, and it can only ever upgrade a verdict the lane
+# has already earned. Drives prove_capture, so the platform still decides what a
+# frame is; sets PROVE_EVIDENCE and returns 0 at the first frame that is the
+# app's own screen, 1 when the budget runs out having seen none.
+prove_seek_paint() { # <slug-prefix> <seconds>
+  local prefix="${1:?slug prefix required}" budget="${2:?a budget in seconds required}" started now taken
+  started="$(date +%s)"
+  while :; do
+    now="$(date +%s)"
+    taken="$PROVE_SHOT_COUNT"
+    prove_shoot_and_assess "$prefix-t$((now - started))s" force && return 0
+    # TWO BUDGETS, and the frame ceiling has to be able to end this too: past it
+    # prove_shoot refuses before it captures anything, so every further poll
+    # would sleep against a clock with nothing left to photograph — and the
+    # caller would read those non-attempts as frames that were not a screen.
+    [ "$PROVE_SHOT_COUNT" -gt "$taken" ] || return 1
+    [ "$(date +%s)" -lt $((started + budget)) ] || return 1
+    sleep "$PROVE_POLL"
+  done
+}
 
 # ── the watch ─────────────────────────────────────────────────────────────────
 prove_watch() {
@@ -302,7 +370,11 @@ prove_verdict() { # <label>
   elif printf '%s' "$analysis" | grep -q '^FOREIGN'; then
     screen_note="every frame of its window shows something that is not the app ($(printf '%s' "$analysis" | grep -m1 '^FOREIGN' | sed 's/^FOREIGN *//'))"
   else
-    screen_note="every frame of its window is a flat fill ($(printf '%s' "$analysis" | grep -m1 '^FLAT' | sed 's/^FLAT *//'))"
+    # NOT "a flat fill": FLAT covers three frames that are not flat at all — a
+    # blank window with a strip of chrome on it, and a greyscale or palette
+    # capture, which cannot hold the colours of a render whatever it depicts.
+    # The detail says which bar was missed; this line must not name a cause.
+    screen_note="no frame of its window carries enough to be a screen ($(printf '%s' "$analysis" | grep -m1 '^FLAT' | sed 's/^FLAT *//'))"
   fi
   if [ -n "$PROVE_FAILED_STATE" ]; then
     state_note="the app reached a failure state ($PROVE_FAILED_STATE)"
