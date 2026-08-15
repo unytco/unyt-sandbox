@@ -54,6 +54,14 @@ smoke_first_failures()     { grep -oE -e "($UNYT_RE_FAILED).*" | head -3; }
 smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
 
 # ── dependency comparison ────────────────────────────────────────────────────
+# One dependency per line, trimmed and sorted, so the sets compare as text.
+# Lives here rather than in check-deb-depends.sh so the regression test drives
+# the REAL ordering: `sort -u` puts a bare `libgtk-3-0` before `libgtk-3-0 (>=
+# 3.21.5)`, and that ordering is what used to decide the verdict.
+smoke_normalize_depends() {
+  tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | { grep -v '^$' || true; } | sort -u
+}
+
 # Computed vs DECLARED: one finding per line, MISSING/UNCONSTRAINED/TOOLOW.
 smoke_split_constraint() {
   local c="${1:-}" op ver
@@ -64,13 +72,108 @@ smoke_split_constraint() {
   printf '%s %s\n' "$op" "$ver"
 }
 
+# Rank one DECLARED constraint as evidence of a floor covering `$2` (the version
+# the computed entry requires), printing `<rank> [floor]`. 5 is adequate; 1–4 are
+# all inadequate and all red, and their order decides only WHICH declaration the
+# report names — the one closest to a usable floor, because that is the one worth
+# fixing. Printed rather than returned because every rank is non-zero, which
+# `set -e` would read as this function failing.
+smoke_declared_rank() { # <declared-constraint> <required-version>
+  local cconstraint="${1:-}" want="${2:-}" dop dver
+  [ -n "$cconstraint" ] || { printf '1\n'; return 0; }   # bare: no floor at all
+  read -r dop dver <<<"$(smoke_split_constraint "$cconstraint")"
+  if [ "$dop" != ">=" ] && [ "$dop" != ">>" ]; then
+    # An upper bound or an equality pins nothing below itself: `libc6 (<= 2.40)`
+    # still permits installing on glibc 2.17.
+    printf '2\n'
+  elif [ -z "$dver" ] || ! dpkg --validate-version "$dver" 2>/dev/null; then
+    # dpkg --compare-versions returns 0 for a malformed version, so an
+    # unvalidated one would make every comparison pass.
+    printf '3\n'
+  elif ! dpkg --compare-versions "$dver" ge "$want" 2>/dev/null; then
+    printf '4 %s\n' "$dver"
+  else
+    printf '5\n'
+  fi
+}
+
+# The branches of a declared entry, one per line, trimmed. `a (>= 1) | b` is an
+# alternation: apt may satisfy it through EITHER package.
+# The trailing newline is load-bearing — `read` returns non-zero on a final line
+# without one, so a `while read` caller would silently drop the last branch, and
+# a line with no `|` at all is nothing BUT a last branch.
+smoke_declared_branches() { # <declared-line>
+  printf '%s\n' "${1:-}" | tr '|' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+# Rank a whole DECLARED line, alternations included, printing `<rank> [floor]`.
+#
+# AN ALTERNATION IS ONLY AS STRONG AS ITS WEAKEST BRANCH. apt is free to satisfy
+# `libgtk-3-0 | libgtk-3-0t64 (>= 3.21.5)` by installing an unversioned
+# `libgtk-3-0`, so the floor on the second branch guarantees nothing — and a
+# branch naming a package outside the alias set can satisfy the whole line
+# without our dependency being met at all. The line's rank is therefore the
+# MINIMUM across its branches. Declaring the floor on every branch is what makes
+# an alternation count.
+smoke_declared_line_rank() { # <declared-line> <required-version> <aliases>
+  local line="${1:-}" want="${2:-}" aliases="${3:-}"
+  local branch bname bconstraint brank bver alias bmatch rank=5 floor=""
+  while read -r branch; do
+    [ -n "$branch" ] || continue
+    bname="${branch%% *}"; bname="${bname%%:*}"
+    bmatch=""
+    for alias in $aliases; do [ "$bname" = "$alias" ] && { bmatch=1; break; }; done
+    if [ -n "$bmatch" ]; then
+      bconstraint=""
+      case "$branch" in *\(*\)) bconstraint="${branch#*\(}"; bconstraint="${bconstraint%%\)*}" ;; esac
+      read -r brank bver <<<"$(smoke_declared_rank "$bconstraint" "$want")"
+    else
+      brank=1; bver=""     # another package could satisfy the OR on its own
+    fi
+    case "$brank" in [1-5]) ;; *) printf '%s\n' "$brank"; return 0 ;; esac
+    if [ "$brank" -lt "$rank" ]; then rank="$brank"; floor="$bver"; fi
+  done < <(smoke_declared_branches "$line")
+  printf '%s %s\n' "$rank" "$floor"
+}
+
+# Does declared entry A (rank/floor/constraint) beat the best seen so far (B)?
+# A higher rank always wins. At EQUAL rank the tie is broken without reference to
+# input order — among too-low floors the highest, since ANDing the entries puts
+# that one in force, and otherwise the lexicographically smaller constraint.
+# Arbitrary, but stable: two runs over the same declared set must name the same
+# entry whatever order it arrives in. (Two too-low floors of the SAME version,
+# `>= 1.0` and `>> 1.0`, also fall to the lexicographic tie — they differ by an
+# epsilon and both are red, so which one is named does not matter.)
+smoke_declared_supersedes() { # <rank> <floor> <constraint> <best-rank> <best-floor> <best-constraint>
+  # Byte order, not the caller's collation: en_US.UTF-8 and C disagree on where
+  # `<` sorts against `=`, and the entry a CI log names should not depend on that.
+  local LC_ALL=C LC_COLLATE=C
+  [ "$1" -gt "$4" ] && return 0
+  [ "$1" -eq "$4" ] || return 1
+  if [ "$1" -eq 4 ]; then
+    dpkg --compare-versions "$2" gt "$5" 2>/dev/null && return 0
+    dpkg --compare-versions "$2" lt "$5" 2>/dev/null && return 1
+  fi
+  [[ "$3" < "$6" ]]
+}
+
 # Compare a COMPUTED dependency list against what the package DECLARES, and emit
 # one finding per line: `MISSING`, `UNCONSTRAINED`, `NOFLOOR`, `BADVERSION`,
 # `UNPARSEABLE` or `TOOLOW`, each followed by the dependency.
+#
+# EVERY declared entry for a name is weighed, never just the first one found.
+# Debian `Depends` is a comma-separated AND list, so a duplicate entry ADDS a
+# requirement rather than replacing one — `libgtk-3-0 (>= 3.21.5), libgtk-3-0`
+# still requires 3.21.5, as apt and dpkg both confirm. tauri-bundler appends
+# exactly those bare duplicates, and `smoke_normalize_depends`'s `sort -u` puts
+# the bare entry first (a prefix sorts before its extension), so judging on the
+# first match reported a correctly-floored package as UNCONSTRAINED. Order must
+# not change the verdict.
 smoke_depends_gaps() {
   local declared_file="${1:?declared file required}" computed_file="${2:?computed file required}"
   local provides_file="${3:-}"
-  local dep name constraint cline cname cconstraint found op ver dop dver alias pline aliases matched
+  local dep name constraint cline cconstraint found op ver dver alias pline aliases matched
+  local rank best_rank best_detail best_ver branch bname internal
   while read -r dep; do
     [ -n "$dep" ] || continue
     name="${dep%% *}"; name="${name%%:*}"   # strip any :arch qualifier
@@ -80,6 +183,18 @@ smoke_depends_gaps() {
     # alternation `libfoo (>= 9) | libbar`) must not silently skip the floor check.
     if [ -z "$constraint" ] && case "$dep" in *\(*) true ;; *) false ;; esac; then
       printf 'UNPARSEABLE %s\n' "$dep"; continue
+    fi
+    # `op` is parsed and deliberately unused: dpkg-shlibdeps only ever computes
+    # `>=`, so the requirement is read as a floor whatever it says.
+    op=""; ver=""
+    if [ -n "$constraint" ]; then
+      read -r op ver <<<"$(smoke_split_constraint "$constraint")"
+      # A REQUIREMENT with no version is not a weaker requirement, it is an
+      # unreadable one: `dpkg --compare-versions X ge ''` is true for every X, so
+      # letting it through would mark every declaration adequate.
+      if [ -z "$ver" ]; then
+        printf 'UNPARSEABLE %s (no version in its constraint)\n' "$dep"; continue
+      fi
     fi
 
     # The declared list may legitimately name something this package PROVIDES
@@ -95,37 +210,64 @@ smoke_depends_gaps() {
       done <"$provides_file"
     fi
 
-    found=""
+    found=""; best_rank=0; best_detail=""; best_ver=""; internal=""
     while read -r cline; do
       [ -n "$cline" ] || continue
-      cname="${cline%% *}"; cname="${cname%%:*}"
+      # A line matches if ANY of its alternation branches names the package (or
+      # something it provides) — the floor is then judged across all of them.
       matched=""
-      for alias in $aliases; do [ "$cname" = "$alias" ] && { matched=1; break; }; done
+      while read -r branch; do
+        [ -n "$branch" ] || continue
+        bname="${branch%% *}"; bname="${bname%%:*}"
+        for alias in $aliases; do [ "$bname" = "$alias" ] && { matched=1; break; }; done
+        [ -z "$matched" ] || break
+      done < <(smoke_declared_branches "$cline")
       [ -n "$matched" ] || continue
-      found="$cline"
-      cconstraint=""
-      case "$cline" in *\(*\)) cconstraint="${cline#*\(}"; cconstraint="${cconstraint%%\)*}" ;; esac
-      break
+      found=1
+      # Nothing to prove beyond presence when the computed entry carries no floor.
+      [ -n "$constraint" ] || continue
+      read -r rank dver <<<"$(smoke_declared_line_rank "$cline" "$ver" "$aliases")"
+      # A rank outside 1–5 means the ranking itself broke. Staying quiet here
+      # would pass the gate, so it is reported and reds the run.
+      case "$rank" in
+        [1-5]) ;;
+        *) printf 'UNPARSEABLE %s (internal: rank %s for declared "%s")\n' "$dep" "$rank" "$cline"
+           internal=1; break ;;
+      esac
+      # An alternation's finding must quote the whole line: naming one branch's
+      # constraint would point at a floor that is not the one in doubt.
+      case "$cline" in
+        *\|*) cconstraint="$cline" ;;
+        *) cconstraint=""
+           case "$cline" in *\(*\)) cconstraint="${cline#*\(}"; cconstraint="${cconstraint%%\)*}" ;; esac ;;
+      esac
+      # One adequate floor settles it — the others only add requirements on top.
+      if [ "$rank" -eq 5 ]; then best_rank=5; break; fi
+      # Otherwise keep whichever entry came CLOSEST to a usable floor, so the
+      # report names the declaration worth fixing.
+      if smoke_declared_supersedes "$rank" "$dver" "$cconstraint" \
+                                   "$best_rank" "$best_ver" "$best_detail"; then
+        best_rank="$rank"; best_detail="$cconstraint"; best_ver="$dver"
+      fi
     done <"$declared_file"
 
-    if [ -z "$found" ]; then
+    if [ -n "$internal" ]; then
+      : # already reported above
+    elif [ -z "$found" ]; then
       printf 'MISSING %s\n' "$dep"
-    elif [ -n "$constraint" ] && [ -z "$cconstraint" ]; then
-      printf 'UNCONSTRAINED %s\n' "$dep"
-    elif [ -n "$constraint" ]; then
-      read -r op ver <<<"$(smoke_split_constraint "$constraint")"
-      read -r dop dver <<<"$(smoke_split_constraint "$cconstraint")"
-      if [ "$dop" != ">=" ] && [ "$dop" != ">>" ]; then
-        # An upper bound or an equality pins nothing below itself: `libc6 (<= 2.40)`
-        # still permits installing on glibc 2.17.
-        printf 'NOFLOOR %s declared (%s) — not a lower bound\n' "$dep" "$cconstraint"
-      elif [ -z "$dver" ] || ! dpkg --validate-version "$dver" 2>/dev/null; then
-        # dpkg --compare-versions returns 0 for a malformed version, so an
-        # unvalidated one would make every comparison pass.
-        printf 'BADVERSION %s declared (%s)\n' "$dep" "$cconstraint"
-      elif ! dpkg --compare-versions "$dver" ge "$ver" 2>/dev/null; then
-        printf 'TOOLOW %s declared (%s)\n' "$dep" "$cconstraint"
-      fi
+    elif [ -z "$constraint" ]; then
+      : # presence was the whole requirement
+    else
+      case "$best_rank" in
+        5) ;;
+        1) printf 'UNCONSTRAINED %s\n' "$dep" ;;
+        2) printf 'NOFLOOR %s declared (%s) — not a lower bound\n' "$dep" "$best_detail" ;;
+        3) printf 'BADVERSION %s declared (%s)\n' "$dep" "$best_detail" ;;
+        4) printf 'TOOLOW %s declared (%s)\n' "$dep" "$best_detail" ;;
+        # Matched, had a floor to prove, yet nothing was ever judged — the loop
+        # above is broken. Silence would pass the gate, so this reds it instead.
+        *) printf 'UNPARSEABLE %s (internal: no declared entry was judged)\n' "$dep" ;;
+      esac
     fi
   done <"$computed_file"
 }

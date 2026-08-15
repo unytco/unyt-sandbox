@@ -6,10 +6,15 @@
 # Two comparisons: A. computed vs the per-image EXPECTED file (a review gate a
 # human edits), and B. DECLARED vs computed, which fails on under-declaration.
 #
-# B exists because tauri-bundler writes `Depends:` VERBATIM from tauri.conf.json
+# B exists because tauri-bundler copies `Depends:` VERBATIM from tauri.conf.json
 # and never runs dpkg-shlibdeps (tauri-apps/tauri#7074). So `apt --simulate` and
 # `apt satisfy` prove nothing here — they check the declared list is satisfiable,
 # and the declared list is exactly what is wrong.
+#
+# It does append two bare entries of its own, `libwebkit2gtk-4.1-0` and
+# `libgtk-3-0`, so the shipped list is longer than the configured one and names
+# those two twice. That is harmless — Depends is an AND list — but it is why the
+# comparison must weigh every declared entry, not the first (see common.sh).
 #
 # The usual consequence is a missing FLOOR, not a failed install: without
 # `libc6 (>= 2.34)` it installs on an older glibc and dies at exec.
@@ -33,14 +38,16 @@ BIN="${2:?installed binary path required}"
 image_id="$( . /etc/os-release && printf '%s-%s' "${ID:-unknown}" "${VERSION_ID:-rolling}" )"
 EXPECTED="$here/expected-deb-depends.$image_id.txt"
 
-for tool in dpkg-shlibdeps dpkg-deb; do
+# `dpkg` is in this list because every version comparison below runs through it
+# with stderr discarded: a dpkg that cannot run reports as BADVERSION on each
+# correctly-declared floor, which sends the reader to fix declarations that are fine.
+for tool in dpkg-shlibdeps dpkg-deb dpkg; do
   command -v "$tool" >/dev/null || { echo "::error::$tool not found (apt-get install dpkg-dev)" >&2; exit 1; }
 done
 
-# One dependency per line, trimmed and sorted, so the sets compare as text.
-normalize() { tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | { grep -v '^$' || true; } | sort -u; }
-
-declared="$(dpkg-deb -f "$DEB" Depends | normalize)"
+# `smoke_normalize_depends` (common.sh) is the one definition, so the regression
+# test sorts exactly as this gate does.
+declared="$(dpkg-deb -f "$DEB" Depends | smoke_normalize_depends)"
 
 # dpkg-shlibdeps insists on a debian/control next to it even with -O (stdout).
 work="$(mktemp -d)"
@@ -60,7 +67,7 @@ shlibdeps_err="$work/shlibdeps.err"
 cd "$work"
 computed_raw="$(dpkg-shlibdeps -O --ignore-missing-info "$BIN" 2>"$shlibdeps_err" || true)"
 cd - >/dev/null
-computed="$(printf '%s' "$computed_raw" | sed 's/^shlibs:Depends=//' | normalize)"
+computed="$(printf '%s' "$computed_raw" | sed 's/^shlibs:Depends=//' | smoke_normalize_depends)"
 
 if [ -z "$computed" ]; then
   echo "::error::dpkg-shlibdeps computed nothing for $BIN — the gate cannot run" >&2
@@ -103,7 +110,7 @@ if [ ! -f "$EXPECTED" ]; then
   echo "  Capture it with: scripts/smoke/run-smoke.sh --print-computed-depends <artifact.deb> $image_id" >&2
   status=1
 else
-expected="$(grep -v '^[[:space:]]*#' "$EXPECTED" | normalize)"
+expected="$(grep -v '^[[:space:]]*#' "$EXPECTED" | smoke_normalize_depends)"
 if ! drift="$(diff <(printf '%s\n' "$expected") <(printf '%s\n' "$computed"))"; then
   echo "::error::the binary's real dependencies changed on $image_id — review and update $(basename "$EXPECTED")" >&2
   printf '%s\n' "$drift" | sed 's/^/  /' >&2
@@ -167,7 +174,11 @@ if [ -n "$gaps" ]; then
   fi
   echo "" >&2
   echo "  Fix: add or raise them in bundle.linux.deb.depends in unyt/src-tauri/tauri.conf.json." >&2
-  echo "  tauri-bundler writes that list verbatim and never computes one." >&2
+  echo "  tauri-bundler copies that list verbatim and then APPENDS bare, unversioned" >&2
+  echo "  libwebkit2gtk-4.1-0 and libgtk-3-0 entries of its own. It never runs" >&2
+  echo "  dpkg-shlibdeps, so no floor is ever computed for you — but those appended" >&2
+  echo "  bare entries do not cancel a floor either: Depends is an AND list, so a" >&2
+  echo "  floor you declare stays in force alongside them." >&2
   status=1
 else
   echo "OK: every computed dependency is declared, with a covering version floor" >&2

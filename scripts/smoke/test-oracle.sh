@@ -200,6 +200,229 @@ rm -f "$prov_d" "$prov_c" "$prov_p"
 
 rm -f "$dep_d" "$dep_c"
 
+# ── B: a duplicate declared entry must not read as a missing floor ───────────
+# tauri-bundler appends bare `libwebkit2gtk-4.1-0` and `libgtk-3-0` on top of the
+# floored list it copied from tauri.conf.json, and `sort -u` puts the bare entry
+# FIRST (a prefix sorts before its extension). Matching only the first declared
+# entry therefore reported a correctly-floored package as UNCONSTRAINED, red on
+# all four images in v0.101.0-dev.1.
+#
+# Debian `Depends` is a comma-separated AND list, so a duplicate ADDS a
+# requirement rather than replacing one. Verified empirically, not from the
+# policy text: on ubuntu:22.04 and debian:13, both apt and dpkg refuse to install
+# a package declaring `libgtk-3-0 (>= 99.0), libgtk-3-0` — in either order —
+# against libgtk-3-0 3.24, and accept it once the floor is satisfiable.
+dup_case() { # <description> <computed> <expected-finding-or-empty> <declared...>
+  local desc="$1" computed="$2" want="$3"; shift 3
+  local df cf out
+  df="$(mktemp)"; cf="$(mktemp)"
+  printf '%s\n' "$@" >"$df"
+  printf '%s\n' "$computed" >"$cf"
+  out="$(smoke_depends_gaps "$df" "$cf")"
+  if [ "$out" = "$want" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s expected [%s], got [%s]\n' "$desc" "${want:-<no finding>}" "${out:-<no finding>}" >&2
+    printf '      declared was: %s\n' "$*" >&2
+  fi
+  rm -f "$df" "$cf"
+}
+GTK='libgtk-3-0 (>= 3.21.5)'
+# Order must not change the verdict — the whole defect was that it did.
+dup_case "floored THEN bare"                  "$GTK" "" 'libgtk-3-0 (>= 3.21.5)' 'libgtk-3-0'
+dup_case "bare THEN floored"                  "$GTK" "" 'libgtk-3-0' 'libgtk-3-0 (>= 3.21.5)'
+dup_case "two floors, adequate one first"     "$GTK" "" 'libgtk-3-0 (>= 3.21.5)' 'libgtk-3-0 (>= 1.0)'
+dup_case "two floors, adequate one last"      "$GTK" "" 'libgtk-3-0 (>= 1.0)' 'libgtk-3-0 (>= 3.21.5)'
+dup_case "an adequate floor behind two duds"  "$GTK" "" 'libgtk-3-0' 'libgtk-3-0 (<= 9)' 'libgtk-3-0 (>= 3.21.5)'
+# MUST still fire — the fix may not weaken the real check.
+dup_case "bare only is still unconstrained"   "$GTK" 'UNCONSTRAINED libgtk-3-0 (>= 3.21.5)' 'libgtk-3-0'
+# Both too low: still TOOLOW, and it names the HIGHEST declared floor, which is
+# the one actually in force once the entries are ANDed.
+dup_case "two floors, both too low"           "$GTK" 'TOOLOW libgtk-3-0 (>= 3.21.5) declared (>= 3.0)' \
+  'libgtk-3-0 (>= 1.0)' 'libgtk-3-0 (>= 3.0)'
+dup_case "two floors, both too low, reversed" "$GTK" 'TOOLOW libgtk-3-0 (>= 3.21.5) declared (>= 3.0)' \
+  'libgtk-3-0 (>= 3.0)' 'libgtk-3-0 (>= 1.0)'
+# A real-but-too-low floor is more useful to report than the bare duplicate.
+dup_case "a too-low floor outranks a bare dup" "$GTK" 'TOOLOW libgtk-3-0 (>= 3.21.5) declared (>= 1.0)' \
+  'libgtk-3-0' 'libgtk-3-0 (>= 1.0)'
+dup_case "a non-floor outranks a bare dup"    "$GTK" 'NOFLOOR libgtk-3-0 (>= 3.21.5) declared (<= 9) — not a lower bound' \
+  'libgtk-3-0' 'libgtk-3-0 (<= 9)'
+# MISSING is still MISSING when every entry names something else.
+dup_case "duplicates of the wrong package"    "$GTK" 'MISSING libgtk-3-0 (>= 3.21.5)' 'libfoo' 'libfoo (>= 1)'
+# Entries that tie on rank are broken apart WITHOUT reference to input order, so
+# the same declared set always names the same entry. The tie-break compares in
+# byte order rather than the caller's collation: en_US.UTF-8 and C disagree on
+# where `<` sorts against `=`, which would otherwise make this locale-dependent.
+NOFL='NOFLOOR libgtk-3-0 (>= 3.21.5) declared (<= 9) — not a lower bound'
+dup_case "two non-floors tie, first order"    "$GTK" "$NOFL" 'libgtk-3-0 (<= 9)' 'libgtk-3-0 (= 4)'
+dup_case "two non-floors tie, reversed"       "$GTK" "$NOFL" 'libgtk-3-0 (= 4)' 'libgtk-3-0 (<= 9)'
+EQFL='TOOLOW libgtk-3-0 (>= 3.21.5) declared (>= 1.0)'
+dup_case "equal too-low floors, first order"  "$GTK" "$EQFL" 'libgtk-3-0 (>= 1.0)' 'libgtk-3-0 (>> 1.0)'
+dup_case "equal too-low floors, reversed"     "$GTK" "$EQFL" 'libgtk-3-0 (>> 1.0)' 'libgtk-3-0 (>= 1.0)'
+# The verdict must not move with the locale either. en_US.UTF-8 is the leg that
+# bites: its collation ignores punctuation at the primary level, so `<= 9` and
+# `= 4` compare by their digits and swap round against C's byte order.
+tie_under_locale() { # <locale>
+  LC_ALL="$1" LANG="$1" bash -c '
+    . "'"$here"'/common.sh"
+    d=$(mktemp); c=$(mktemp)
+    printf "libgtk-3-0 (= 4)\nlibgtk-3-0 (<= 9)\n" >"$d"
+    printf "libgtk-3-0 (>= 3.21.5)\n" >"$c"
+    smoke_depends_gaps "$d" "$c"; rm -f "$d" "$c"'
+}
+for loc in C en_US.UTF-8; do
+  # A locale the machine does not have silently falls back to C, which would make
+  # this assertion pass without testing anything. `locale -a` spells them without
+  # the dash and in lower case (`en_US.utf8`), so the dash is dropped from both
+  # sides and the match is case-insensitive — no name is special-cased.
+  loc_key="${loc//-/}"
+  if ! locale -a 2>/dev/null | tr -d '-' | grep -qixF "$loc_key"; then
+    echo "SKIP  tie-break under LC_ALL=$loc (locale not generated)" >&2
+    continue
+  fi
+  tie_out="$(tie_under_locale "$loc")"
+  if [ "$tie_out" = "$NOFL" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s got: %s\n' "the tie-break is the same under LC_ALL=$loc" "$tie_out" >&2
+  fi
+done
+
+# ── a declared ALTERNATION guarantees only what its weakest branch does ──────
+# `a | b` lets apt satisfy the dependency through EITHER package, so a floor on
+# one branch proves nothing. The constraint parser reads "the first (…) on the
+# line" and credits it to the line's first name, so an alternation used to hand
+# one package's floor to another; weighing every declared entry then removed the
+# accidental red that a bare duplicate had been providing. Every branch must
+# carry the floor for the line to count.
+WK='libwebkit2gtk-4.1-0 (>= 2.41.90)'
+UNWK='UNCONSTRAINED libwebkit2gtk-4.1-0 (>= 2.41.90)'
+dup_case "an alternation's floor is not the other branch's" "$WK" "$UNWK" \
+  'libwebkit2gtk-4.1-0' 'libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37 (>= 2.41.90)'
+dup_case "an alternation alone is not a floor"              "$WK" "$UNWK" \
+  'libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37 (>= 2.41.90)'
+dup_case "a floor on only the first branch"                 "$WK" "$UNWK" \
+  'libwebkit2gtk-4.1-0 (>= 2.41.90) | libwebkit2gtk-4.0-37'
+dup_case "a matching branch behind a non-matching one"      "$GTK" 'UNCONSTRAINED libgtk-3-0 (>= 3.21.5)' \
+  'libfoo | libgtk-3-0 (>= 3.21.5)'
+# The WEAKEST branch decides, not the first and not the last. Both orders, because
+# reading either end alone happens to give the right answer for the cases above.
+dup_case "a bare branch after a floored one"                "$GTK" 'UNCONSTRAINED libgtk-3-0 (>= 3.21.5)' \
+  'libgtk-3-0 (>= 1.0) | libgtk-3-0'
+dup_case "a bare branch before a floored one"               "$GTK" 'UNCONSTRAINED libgtk-3-0 (>= 3.21.5)' \
+  'libgtk-3-0 | libgtk-3-0 (>= 1.0)'
+# MUST NOT fire: an alternation whose every branch carries the floor is sound.
+dup_case "every branch floored"                             "$GTK" "" \
+  'libgtk-3-0 (>= 3.21.5) | libgtk-3-0 (>= 3.21.5)'
+# A too-low branch is reported against the WHOLE line: quoting one branch's
+# constraint would point at a floor that is not the one in doubt.
+dup_case "an alternation with one too-low branch"           "$GTK" \
+  'TOOLOW libgtk-3-0 (>= 3.21.5) declared (libgtk-3-0 (>= 3.21.5) | libgtk-3-0 (>= 1.0))' \
+  'libgtk-3-0 (>= 3.21.5) | libgtk-3-0 (>= 1.0)'
+
+# ── a computed entry with NO floor needs only to be present ──────────────────
+# `libjavascriptcoregtk-4.1-0` is exactly this shape and is in all four expected
+# files, so this is the production path, not a corner.
+JSC='libjavascriptcoregtk-4.1-0'
+dup_case "an unconstrained computed dep, declared once"  "$JSC" "" "$JSC"
+dup_case "an unconstrained computed dep, declared twice" "$JSC" "" "$JSC" "$JSC"
+dup_case "an unconstrained computed dep, absent"         "$JSC" "MISSING $JSC" 'libfoo'
+
+# ── a computed constraint with no version is unreadable, not absent ──────────
+# `dpkg --compare-versions X ge ''` is true for every X, so treating an empty
+# requirement as "nothing to prove" would mark every declaration adequate.
+dup_case "a computed entry whose constraint has no version" 'libgtk-3-0 (>=)' \
+  'UNPARSEABLE libgtk-3-0 (>=) (no version in its constraint)' 'libgtk-3-0 (>= 0.1)'
+
+# ── duplicates through the t64 PROVIDES alias — the path on 3 of the 4 images ─
+# debian:13, ubuntu:24.04 and ubuntu:26.04 all compute `libgtk-3-0t64`, which
+# resolves through the provides map to `libgtk-3-0` and then matches BOTH the
+# floored declaration and the bundler's bare one.
+prov_case() { # <description> <computed> <expected> <provides-line> <declared...>
+  local desc="$1" computed="$2" want="$3" provides="$4"; shift 4
+  local df cf pf out
+  df="$(mktemp)"; cf="$(mktemp)"; pf="$(mktemp)"
+  printf '%s\n' "$@" >"$df"; printf '%s\n' "$computed" >"$cf"; printf '%s\n' "$provides" >"$pf"
+  out="$(smoke_depends_gaps "$df" "$cf" "$pf")"
+  if [ "$out" = "$want" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s expected [%s], got [%s]\n' "$desc" "${want:-<no finding>}" "${out:-<no finding>}" >&2
+  fi
+  rm -f "$df" "$cf" "$pf"
+}
+T64='libgtk-3-0t64 (>= 3.21.5)'
+PMAP='libgtk-3-0t64 libgtk-3-0'
+prov_case "t64: bare dup before the floored alias"  "$T64" "" "$PMAP" 'libgtk-3-0' 'libgtk-3-0 (>= 3.21.5)'
+prov_case "t64: bare dup after the floored alias"   "$T64" "" "$PMAP" 'libgtk-3-0 (>= 3.21.5)' 'libgtk-3-0'
+prov_case "t64: the bare dup uses the t64 name"     "$T64" "" "$PMAP" 'libgtk-3-0t64' 'libgtk-3-0 (>= 3.21.5)'
+prov_case "t64: the floor arrives on either name"   "$T64" "" "$PMAP" 'libgtk-3-0 (>= 1.0)' 'libgtk-3-0t64 (>= 3.21.5)'
+# MUST still fire, and name the strongest floor even across the two names.
+prov_case "t64: every floor too low, highest named" "$T64" \
+  'TOOLOW libgtk-3-0t64 (>= 3.21.5) declared (>= 3.0)' "$PMAP" \
+  'libgtk-3-0 (>= 1.0)' 'libgtk-3-0t64 (>= 3.0)'
+prov_case "t64: bare on both names is still a gap"  "$T64" \
+  'UNCONSTRAINED libgtk-3-0t64 (>= 3.21.5)' "$PMAP" 'libgtk-3-0' 'libgtk-3-0t64'
+
+# The SAME defect through the sorted path the gate actually uses, so a change to
+# `smoke_normalize_depends` cannot silently reintroduce it. This is the verbatim
+# `Depends` field of the shipped v0.101.0-dev.1 .deb.
+real_depends='libc6 (>= 2.34), libcairo-gobject2 (>= 1.10.0), libcairo2 (>= 1.10.0), libgcc-s1 (>= 4.2), libgdk-pixbuf-2.0-0 (>= 2.36.9), libglib2.0-0 (>= 2.66.0), libgtk-3-0 (>= 3.21.5), libjavascriptcoregtk-4.1-0, libpango-1.0-0 (>= 1.14.0), libsoup-3.0-0 (>= 3.0.3), libwebkit2gtk-4.1-0 (>= 2.41.90), libwebkit2gtk-4.1-0, libgtk-3-0'
+sorted_d="$(mktemp)"; sorted_c="$(mktemp)"
+printf '%s\n' "$real_depends" | smoke_normalize_depends >"$sorted_d"
+# The premise: smoke_normalize_depends must carry BOTH entries through to the
+# comparison. If it ever de-duplicated by package name the gap check would be
+# judging a list the package does not have.
+for dupname in libgtk-3-0 libwebkit2gtk-4.1-0; do
+  if [ "$(grep -c "^$dupname\( \|$\)" "$sorted_d")" = 2 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s kept %s copies\n' "both $dupname entries survive normalize" \
+      "$(grep -c "^$dupname\( \|$\)" "$sorted_d")" >&2
+  fi
+done
+# The other half of the premise: the BARE entry has to sort AHEAD of the floored
+# one, because that ordering is the whole defect this block reproduces. If a
+# change to the sort reverses it, this block quietly stops testing anything —
+# so it fails here instead, and whoever made the change re-picks the fixture.
+for dupname in libgtk-3-0 libwebkit2gtk-4.1-0; do
+  if [ "$(grep "^$dupname\( \|$\)" "$sorted_d" | head -1)" = "$dupname" ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s first was: %s\n' "the bare $dupname sorts ahead of the floored one" \
+      "$(grep "^$dupname\( \|$\)" "$sorted_d" | head -1)" >&2
+  fi
+done
+# The whole computed list, not a subset: `libjavascriptcoregtk-4.1-0` is the one
+# entry with no floor, and it is what exercises the presence-only path here.
+printf 'libc6 (>= 2.34)\nlibgtk-3-0 (>= 3.21.5)\nlibjavascriptcoregtk-4.1-0\nlibwebkit2gtk-4.1-0 (>= 2.41.90)\n' >"$sorted_c"
+sorted_out="$(smoke_depends_gaps "$sorted_d" "$sorted_c")"
+if [ -z "$sorted_out" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s got: %s\n' "the shipped Depends, sorted as the gate sorts it" "$sorted_out" >&2
+fi
+# And the gate still fires on the same sorted list when a floor really is absent.
+printf 'libpangocairo-1.0-0 (>= 1.14.0)\n' >"$sorted_c"
+if smoke_depends_gaps "$sorted_d" "$sorted_c" | grep -q '^MISSING libpangocairo-1.0-0'; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  the sorted real list must still report a genuinely absent dep" >&2
+fi
+rm -f "$sorted_d" "$sorted_c"
+
+# check-deb-depends.sh only ever runs inside a container, so nothing else here
+# would notice it being left unparseable.
+if bash -n "$here/check-deb-depends.sh" 2>/dev/null; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL  check-deb-depends.sh does not parse" >&2
+fi
+
+# Every image the smoke runs on needs an expectation file, or check A silently
+# does not run there. check-deb-depends.sh fails loudly at release time; this
+# says so at desk time instead, which is the lesson of the snapshots going stale.
+while read -r smoke_image; do
+  [ -n "$smoke_image" ] || continue
+  if [ -f "$here/expected-deb-depends.${smoke_image/:/-}.txt" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s no expected-deb-depends.%s.txt\n' \
+      "every smoke image has a dependency expectation" "${smoke_image/:/-}" >&2
+  fi
+done < <(bash "$here/run-smoke.sh" --print-images 2>/dev/null || true)
+
 # ── N1: the bundle scan must survive a file with no GLIBC_ symbols LAST ──────
 # `[ -n "$v" ] && printf` as a loop body's last statement makes the `while` exit
 # non-zero, pipefail carries it, and set -e skips every check below. Which file
@@ -1267,11 +1490,12 @@ fi
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-# DELIBERATELY 2 BELOW a full run: the GLIBC-patch branch legitimately costs
-# exactly 2 on a machine that cannot patch a version, so a floor at the full
-# count would red a legitimate skip. Do not "tidy" it up to match.
-if [ "$pass" -lt 180 ]; then
-  echo "::error::only $pass assertions ran; expected at least 180 — the test file is truncated or a block was skipped"
+# DELIBERATELY 3 BELOW a full run of 228: the GLIBC-patch branch legitimately
+# costs exactly 2 on a machine that cannot patch a version, and the tie-break's
+# en_US.UTF-8 leg costs 1 where that locale is not generated. A floor at the full
+# count would red both legitimate skips. Do not "tidy" it up to match.
+if [ "$pass" -lt 225 ]; then
+  echo "::error::only $pass assertions ran; expected at least 225 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]
