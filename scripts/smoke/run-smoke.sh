@@ -89,7 +89,7 @@ record_row() { # <artifact> <image> <name> <verdict>
 
 # ── start ─────────────────────────────────────────────────────────────────────
 cmd_start() { # <artifact> <image>
-  local artifact image driver lane out rc
+  local artifact image driver lane out err rc
   artifact="$(abs_artifact "${1:?usage: --start <artifact> <image>}")" || return 1
   image="${2:?usage: --start <artifact> <image>}"
   driver="$(driver_for "$artifact")" || return 1
@@ -123,16 +123,25 @@ cmd_start() { # <artifact> <image>
   fi
   # --shm-size: WebKit needs more than Docker's 64MB default or the webview
   # process dies on start for reasons that look nothing like the real cause.
+  #
+  # STDOUT ONLY. `2>&1` here folded docker's own narration into the container id:
+  # on a runner with no cached image, `Unable to find image 'ubuntu:24.04'
+  # locally` and the pull progress go to stderr, so $out became a multi-line blob
+  # and every later `docker exec "$out"` failed — which the reaping probe below
+  # then reported as "PID 1 is not reaping orphans". The stderr is kept in the
+  # lane so a genuine docker failure is still diagnosable.
+  err="$lane/docker-run.err"
   out="$(docker run -d --shm-size=1g \
     -v "$artifact:/artifact/$(basename "$artifact"):ro" \
     -v "$here:/smoke:ro" \
-    "$image" bash -c 'while :; do sleep 1; done' 2>&1)"
+    "$image" bash -c 'while :; do sleep 1; done' 2>"$err")"
   rc=$?
   if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
     # The lane is kept, with a reason: every check step then reports "did not
     # run, because <this>" instead of a pile of unrelated diagnoses.
-    printf 'the %s container never started (docker exit %s): %s\n' "$image" "$rc" "$out" >"$lane/down"
-    echo "::error::could not start a $image container (exit $rc): $out" >&2
+    printf 'the %s container never started (docker exit %s): %s\n' "$image" "$rc" "$(cat "$err" 2>/dev/null)" >"$lane/down"
+    echo "::error::could not start a $image container (exit $rc):" >&2
+    sed 's/^/  /' "$err" >&2
     return 1
   fi
   printf '%s\n' "$out" >"$lane/cid"

@@ -35,3 +35,7 @@ Application-level changes belong in
 - **Release pipeline: publish only artifacts the repo builds.** Drop the never-built `agent_details.dna` from the release, and set `artifactErrorsFailBuild` so a declared-but-missing artifact fails the release. The matrix job takes the version from the `publish-happ` job output instead of re-reading `tauri.conf.json`.
 - **`AGENTS.md` lists the release scripts this repo owns and the four harnesses in `scripts/smoke/` that test them.**
 
+### Fixed
+
+- **Release smoke: the Linux lane starts on a runner with no cached image.** `docker run`'s stderr was folded into its stdout, so the pull narration became the container id and every later `docker exec` failed — which the reaping probe then reported as "PID 1 is not reaping orphans". The stderr is captured to the lane instead, and a genuine docker failure still prints it.
+
