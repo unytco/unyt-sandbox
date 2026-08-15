@@ -87,15 +87,35 @@ function Get-InstallerKind {
 function Get-InstallInvocation {
   param(
     [Parameter(Mandatory)][string]$Path,
-    [Parameter(Mandatory)][ValidateSet('nsis', 'msi')][string]$Kind
+    [Parameter(Mandatory)][ValidateSet('nsis', 'msi')][string]$Kind,
+    [string]$LogPath = ''
   )
   if ($Kind -eq 'msi') {
-    return [PSCustomObject]@{
-      FilePath  = 'msiexec.exe'
-      Arguments = @('/i', $Path, '/quiet', '/norestart')
-    }
+    $argv = @('/i', $Path, '/quiet', '/norestart')
+    # /l*v, because an msiexec exit code says almost nothing: 1619 is the code
+    # for a package it could not open, and it is the same whether the path was
+    # wrong, the file was truncated or the installer is corrupt. The log names
+    # which, and it rides in the artifact this lane already uploads. NSIS has no
+    # equivalent, so the parameter is simply ignored there.
+    if ($LogPath) { $argv += @('/l*v', $LogPath) }
+    return [PSCustomObject]@{ FilePath = 'msiexec.exe'; Arguments = $argv }
   }
   return [PSCustomObject]@{ FilePath = $Path; Arguments = @('/S') }
+}
+
+# msiexec WILL NOT OPEN A FORWARD-SLASH PATH. It reports 1619,
+# ERROR_INSTALL_PACKAGE_OPEN_FAILED, which reads as a corrupt package rather
+# than a mistyped one — and the path reaches this script from
+# download-release-asset.sh, a bash script, through $GITHUB_ENV, so it arrives
+# with bash's separators. Resolve-Path normalises them (which is how
+# check-windows.ps1 installs the same .msi from the same variable without
+# noticing), and this is the belt to that pair of braces: one no-op string
+# replacement against the chance that the assumption about Resolve-Path is
+# wrong, which would otherwise cost another ten-minute round trip to learn.
+# A forward slash is never part of a Windows filename, so it cannot corrupt one.
+function ConvertTo-WindowsPath {
+  param([Parameter(Mandatory)][AllowEmptyString()][string]$Path)
+  return $Path.Replace('/', '\')
 }
 
 # Start-Process joins -ArgumentList with spaces and quotes NOTHING, so an
@@ -187,6 +207,21 @@ function Invoke-SelfTest {
   Test-Case 'an MSI is installed silently, and reboots nothing' `
     @('/i', 'C:\a\x.msi', '/quiet', '/norestart') $msi.Arguments
 
+  # THE ONE THAT COST A RUN: msiexec answers a forward-slash path with 1619,
+  # ERROR_INSTALL_PACKAGE_OPEN_FAILED, which reads as a corrupt package. The path
+  # comes from a bash script through $GITHUB_ENV, so it arrives like this.
+  Test-Case 'a bash path is spelled the way msiexec can open it' `
+    'D:\a\_temp\artifacts\unyt.msi' (ConvertTo-WindowsPath -Path 'D:/a/_temp/artifacts/unyt.msi')
+  Test-Case 'and a path already in that spelling is left alone' `
+    'D:\a\_temp\unyt.msi' (ConvertTo-WindowsPath -Path 'D:\a\_temp\unyt.msi')
+
+  $logged = Get-InstallInvocation -Path 'C:\a\x.msi' -Kind 'msi' -LogPath 'C:\shots\msiexec.log'
+  # Without a log, 1619 is all a failed install ever says.
+  Test-Case 'an MSI install logs what it did' `
+    @('/i', 'C:\a\x.msi', '/quiet', '/norestart', '/l*v', 'C:\shots\msiexec.log') $logged.Arguments
+  Test-Case 'and NSIS, which has no such switch, is unchanged by one' `
+    @('/S') (Get-InstallInvocation -Path 'C:\a\x.exe' -Kind 'nsis' -LogPath 'C:\shots\msiexec.log').Arguments
+
   # The one argument that can carry a space is the artifact path, and a runner's
   # temp directory is one Windows release away from having one.
   Test-Case 'a path with a space reaches msiexec as one argument' `
@@ -227,7 +262,7 @@ function Invoke-SelfTest {
   Write-Note ''
   Write-Note "prove-windows regression: $($script:selfTestPassed) passed, $($script:selfTestFailed) failed"
   # A floor, so deleting cases fails as loudly as breaking one.
-  if (($script:selfTestPassed + $script:selfTestFailed) -lt 23) {
+  if (($script:selfTestPassed + $script:selfTestFailed) -lt 27) {
     [Console]::Error.WriteLine('::error::assertions were deleted from prove-windows.ps1 -SelfTest')
     return 1
   }
@@ -277,7 +312,16 @@ $kind = Get-InstallerKind -Path $Artifact
 if ($kind -eq 'unsupported') {
   Exit-With -Verdict 'CANNOT PROVE' -Why "'$([System.IO.Path]::GetFileName($Artifact))' is neither an .exe nor an .msi, so there is no way to install it" -Code 2
 }
-Write-Note "artifact: $([System.IO.Path]::GetFileName($Artifact)) ($kind)"
+# RESOLVED BEFORE ANYTHING TOUCHES IT, and that answers two questions at once:
+# whether the artifact is actually on disk — so "the installer would not open it"
+# can never be confused with "it was never downloaded" — and what its path is in
+# Windows' own spelling.
+$resolved = Resolve-Path -LiteralPath $Artifact -ErrorAction SilentlyContinue
+if (-not $resolved) {
+  Exit-With -Verdict 'CANNOT PROVE' -Why "there is no file at '$Artifact', so nothing was installed and nothing could have been" -Code 2
+}
+$Artifact = ConvertTo-WindowsPath -Path $resolved.Path
+Write-Note "artifact: $Artifact ($kind, $((Get-Item -LiteralPath $Artifact).Length) bytes)"
 
 # ── the log patterns, read from their one home ────────────────────────────────
 # `NAME='<ere>'` in the shell files. Bash EREs and .NET regexes agree on
@@ -528,7 +572,10 @@ function Get-Entries {
 }
 
 $before = @(Get-Entries | ForEach-Object { $_.KeyPath })
-$run = Get-InstallInvocation -Path $Artifact -Kind $kind
+# Into the shots directory, which is uploaded whatever the verdict — an installer
+# log nobody can read afterwards is not evidence.
+$installLog = ConvertTo-WindowsPath -Path (Join-Path $Shots 'msiexec.log')
+$run = Get-InstallInvocation -Path $Artifact -Kind $kind -LogPath $installLog
 $argv = @(Get-StartProcessArgv -Arguments $run.Arguments)
 Write-Note "installing: $($run.FilePath) $($argv -join ' ')"
 $installer = Start-Process -FilePath $run.FilePath -ArgumentList $argv -PassThru -Wait:$false
@@ -557,14 +604,23 @@ if (-not $installDir) {
 }
 Write-Note "installed $($entry.DisplayName) -> $installDir"
 
+# THE INSTALL IS CHECKED AGAINST THE DISK, not against its own exit code. An
+# installer that returns 0 and registers a directory it never created has
+# installed nothing, and the only thing worse than that going unnoticed is it
+# going unnoticed until a capture step fails for a reason that sounds like the
+# app. This is the artifact's failure, so it reds the lane as one.
+if (-not (Test-Path -LiteralPath $installDir)) {
+  Exit-With -Verdict 'NOT PROVEN' -Why "the $kind install registered '$installDir' and did not create it, so nothing was installed there" -Code 1
+}
+
 # The app, not the uninstaller: NSIS drops both under the same directory.
 $exe = @(Get-ChildItem -LiteralPath $installDir -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notlike 'uninstall*' } |
     Sort-Object Length -Descending) | Select-Object -First 1
 if (-not $exe) {
-  Exit-With -Verdict 'NOT PROVEN' -Why "the installer registered itself but put no program under $installDir" -Code 1
+  Exit-With -Verdict 'NOT PROVEN' -Why "the $kind installer registered itself but put no program under $installDir" -Code 1
 }
-Write-Note "launching $($exe.FullName)"
+Write-Note "launching $($exe.FullName) ($($exe.Length) bytes)"
 
 # ── launch ────────────────────────────────────────────────────────────────────
 $env:RUST_LOG = 'info'

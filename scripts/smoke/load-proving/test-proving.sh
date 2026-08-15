@@ -14,6 +14,13 @@
 # The platform capture paths (Xvfb + import, screencapture, PrintWindow) cannot
 # be driven off their platform; the CI job is what tests those, and its
 # pre-launch control frame is what says whether they can be trusted at all.
+#
+# BASH 3.2 IS A TARGET, because /bin/bash on a macOS runner is 3.2.57 and this
+# file runs there. Its parser differs in ways `bash -n` cannot see — a `case`
+# inside a $( ) is the one that has already cost a round trip — so anything
+# written here has to be checked against it, not against the bash on a laptop:
+#   docker run --rm -v "$PWD:/w:ro" -w /w bash:3.2 \
+#     sh -c 'apk add --no-cache python3 >/dev/null; bash scripts/smoke/load-proving/test-proving.sh'
 # The stubs below are called by the library each scenario sources, inside a
 # subshell shellcheck cannot follow into. SC2031 for the same reason: the reads
 # it flags are outside that subshell, of a local it never touched.
@@ -24,6 +31,11 @@ set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES="$(mktemp -d)"
 trap 'rm -rf "$FIXTURES"' EXIT INT TERM
+
+# Stated in every lane's log, because a failure that only happens under one
+# bash is diagnosable from the log alone or not at all — and the six lanes run
+# three different ones.
+echo "$(uname -s), bash $BASH_VERSION"
 
 pass=0
 fail=0
@@ -166,6 +178,16 @@ evidence_case "a window with no state is still not enough" "" yes 1
 # bounded phase AFTER the watch — so it can only ever upgrade a verdict the lane
 # already earned. A budget that never ran out, or a loop that stopped at the
 # first frame whatever it contained, would both turn that upgrade into a lie.
+#
+# NOTHING INSIDE THE $( ) BELOW MAY CARRY A LOOSE QUOTE OR PAREN — no `case`
+# statement, and no prose comment either. bash 3.2, which is /bin/bash on a macOS
+# runner, finds the end of a substitution by scanning for its closing paren
+# rather than by parsing, and that scan skips neither comments nor case patterns.
+# What it produces is not a syntax error where the character is: it is the
+# truncated half running alone, reporting an unbound variable or an unmatched
+# quote from a line that reads perfectly, on macOS only. `bash -n` cannot see it
+# — a substitution is parsed when it is expanded — so the check is running the
+# suite under 3.2, as the header says. Both halves of this have cost a round trip.
 paint_case() { # <name> <never|nocapture|paints-on-nth> <budget> <want-rc> [ceiling] [max-seconds]
   local name="$1" behaviour="$2" budget="$3" want_rc="$4" ceiling="${5:-8}" max="${6:-}" out rc=0 started elapsed
   started="$(date +%s)"
@@ -181,16 +203,12 @@ paint_case() { # <name> <never|nocapture|paints-on-nth> <budget> <want-rc> [ceil
     attempts=0
     prove_capture() {
       attempts=$((attempts + 1))
-      case "$behaviour" in
-        nocapture) return 1 ;;
-        never) cp "$FIXTURES/flat.png" "$PROVE_SHOTS_VERDICT/$1.png" ;;
-        *)
-          if [ "$attempts" -ge "$behaviour" ]; then
-            cp "$FIXTURES/app.png" "$PROVE_SHOTS_VERDICT/$1.png"
-          else
-            cp "$FIXTURES/flat.png" "$PROVE_SHOTS_VERDICT/$1.png"
-          fi ;;
-      esac
+      if [ "$behaviour" = nocapture ]; then return 1; fi
+      if [ "$behaviour" != never ] && [ "$attempts" -ge "$behaviour" ]; then
+        cp "$FIXTURES/app.png" "$PROVE_SHOTS_VERDICT/$1.png"
+      else
+        cp "$FIXTURES/flat.png" "$PROVE_SHOTS_VERDICT/$1.png"
+      fi
     }
     # Seeded the way macOS arrives here — its watch has already put the window
     # list in PROVE_EVIDENCE — so a loop that stopped setting it would be caught
@@ -265,6 +283,11 @@ paint_case "a window that is the app's screen at once" 1 1 0
 paint_case "a window that paints on the third attempt" 3 3 0
 paint_case "a window that never paints runs out of budget" never 1 1
 paint_case "a window nothing could photograph is not a pass" nocapture 1 1
+# THE PATH WHERE THE CAPTURE IS NEVER REACHED AT ALL: a ceiling of zero means
+# prove_shoot refuses before it calls anything, so nothing this phase counts on
+# is ever touched. It has to end, and end saying so, rather than fall over
+# reading something the capture would have written.
+paint_case "a phase with no frames left to take never calls the capture" never 5 1 0 2
 # THE OTHER BUDGET. Past the frame ceiling nothing is captured at all, so a loop
 # that only watched the clock would poll out its remaining seconds taking no
 # frames — and the caller would then report those non-attempts as frames that
@@ -513,7 +536,7 @@ fi
 echo ""
 echo "load-proving regression: $pass passed, $fail failed"
 # A floor, so deleting assertions fails as loudly as breaking one.
-if [ "$((pass + fail))" -lt 61 ]; then
+if [ "$((pass + fail))" -lt 62 ]; then
   echo "::error::only $((pass + fail)) cases ran — assertions were deleted" >&2
   exit 1
 fi
