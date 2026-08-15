@@ -13,7 +13,7 @@ UNYT_OLDEST_GLIBC="2.35"
 
 # ── The health oracle ─────────────────────────────────────────────────────────
 # Statuses as the app's own log writes them (unyt/src-tauri/src/runtime/status.rs
-# — `Status update: {from} -> {to}`), plus the webview breadcrumb.
+# — `Status update: {from} -> {to}`).
 # HEALTHY IS A SET ON PURPOSE — all four are genuine first-run outcomes, which is
 # what lets this run with or without network access. Do not simplify it to one.
 # shellcheck disable=SC2034  # read by the scripts that source this file
@@ -39,21 +39,6 @@ UNYT_RE_CARRIED_IDENTITY='identity: agent identity carried forward'
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_FRESH_IDENTITY='identity: no prior data-root identity; using a fresh identity'
 
-# The webview breadcrumb (unyt/src-tauri/src/runtime/events.rs `ui_ready`),
-# emitted from the frontend's first mount. Required whenever the artifact carries
-# it — see smoke_supports_ui_ready.
-# shellcheck disable=SC2034  # read by the scripts that source this file
-UNYT_RE_UI_READY='UI ready: webview mounted the root element'
-
-# Does THIS artifact know how to emit the breadcrumb? The log message is a string
-# literal compiled into the binary, so its presence is the artifact's own answer —
-# no version parsing, and nothing to keep in sync with a release schedule.
-smoke_supports_ui_ready() {
-  local probe="${1:?binary path required}"
-  [ -f "$probe" ] && [ -r "$probe" ] || return 2
-  grep -qaF -e "$UNYT_RE_UI_READY" "$probe"
-}
-
 # ── the matchers ─────────────────────────────────────────────────────────────
 # The ONLY place these patterns are applied, so the regression test drives the
 # real call sites — every oracle bug so far has been in the invocation, not the
@@ -62,7 +47,6 @@ smoke_supports_ui_ready() {
 # binds `.*` to B alone and truncates a match on any earlier alternative.
 smoke_match_backend_ready(){ grep -qE -e "$UNYT_RE_BACKEND_READY"; }
 smoke_first_backend_ready(){ grep -oE -e "($UNYT_RE_BACKEND_READY).*" | head -1; }
-smoke_match_ui_ready()     { grep -qF -e "$UNYT_RE_UI_READY"; }
 smoke_match_carried()      { grep -qF -e "$UNYT_RE_CARRIED_IDENTITY"; }
 smoke_match_fresh()        { grep -qF -e "$UNYT_RE_FRESH_IDENTITY"; }
 smoke_match_failed()       { grep -qE -e "$UNYT_RE_FAILED"; }

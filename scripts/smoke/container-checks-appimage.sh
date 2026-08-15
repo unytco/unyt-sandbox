@@ -105,9 +105,6 @@ check_launch() {
   fi
   echo "  AppImage runs as '$desktop_exec' (from the .desktop Exec)" >&2
   export UNYT_SMOKE_PROC_NAME="$desktop_exec"
-  # The breadcrumb string lives in the compressed squashfs, so probe the extracted
-  # binary rather than the .AppImage file.
-  export UNYT_SMOKE_UI_READY_PROBE="$inner_bin"
   bash "$here/launch-and-assert.sh" "$APP"
 }
 

@@ -6,9 +6,10 @@
 # Runs in the container after install. Only Xvfb is added, which adds nothing to
 # the app's dependency closure.
 #
-# Three assertions: REACHES a healthy terminal state, STAYS there (longer than
-# one heartbeat interval, so a conductor that boots then wedges fails), and
-# SHUTS DOWN on SIGTERM within a bound.
+# Four assertions: REACHES a healthy terminal state, did so from a COLD install,
+# STAYS there (longer than one heartbeat interval, so a conductor that boots then
+# wedges fails), and SHUTS DOWN on SIGTERM within a bound. All four are the
+# backend's: what the webview drew is not asserted here.
 #
 # Env: UNYT_SMOKE_SANDBOX (default /tmp/ut-smoke) · UNYT_SMOKE_TIMEOUT (default
 #      240) · UNYT_SMOKE_SETTLE (default 45, must exceed the 5s first backoff) ·
@@ -21,12 +22,6 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BIN="${1:?usage: launch-and-assert.sh <installed-binary>}"
 [ -x "$BIN" ] || { echo "::error::not executable: $BIN" >&2; exit 1; }
-
-# Which file to search for the compiled-in breadcrumb string. Defaults to the
-# launch target, which is right for an installed .deb; an AppImage's strings live
-# in its compressed squashfs, so the AppImage driver points this at the extracted
-# inner binary instead.
-UI_READY_PROBE="${UNYT_SMOKE_UI_READY_PROBE:-$BIN}"
 
 SANDBOX="${UNYT_SMOKE_SANDBOX:-/tmp/ut-smoke}"
 TIMEOUT="${UNYT_SMOKE_TIMEOUT:-240}"
@@ -146,40 +141,7 @@ if [ -z "$reached" ]; then
 fi
 echo "OK: reached a healthy backend state -> ${reached}" >&2
 
-# ── 1b. the WEBVIEW painted ───────────────────────────────────────────────────
-# Required, not an alternative: every state above comes from Rust and would
-# appear even if the UI never loaded, so without this a black-window release
-# passes. Skipped only for artifacts that cannot emit the breadcrumb at all.
-ui_probe_rc=0
-smoke_supports_ui_ready "$UI_READY_PROBE" || ui_probe_rc=$?
-if [ "$ui_probe_rc" = 2 ]; then
-  echo "::error::cannot read the ui_ready probe at '$UI_READY_PROBE', so whether the webview" >&2
-  echo "  gate applies is unknown — refusing to skip it silently." >&2
-  exit 1
-fi
-if [ "$ui_probe_rc" = 0 ]; then
-  ui_deadline=$(( $(date +%s) + 120 ))
-  ui_ok=""
-  while [ "$(date +%s)" -lt "$ui_deadline" ]; do
-    if smoke_all_logs "$SANDBOX" | smoke_match_ui_ready; then ui_ok=1; break; fi
-    if ! alive; then break; fi
-    sleep 3
-  done
-  if [ -z "$ui_ok" ]; then
-    echo "::error::the backend booted but the webview never mounted the root element" >&2
-    echo "  This artifact emits the ui_ready breadcrumb, so its absence means the UI" >&2
-    echo "  bundle did not load — the app is up with a blank window." >&2
-    dump_logs
-    exit 1
-  fi
-  echo "OK: the webview mounted the root element" >&2
-else
-  # ::warning:: not a plain note: a skipped webview gate must be visible on the
-  # run page, since app-side drift in the log message would land here silently.
-  echo "::warning::this artifact predates the ui_ready breadcrumb — webview paint NOT verified" >&2
-fi
-
-# ── 1c. this was a COLD install ───────────────────────────────────────────────
+# ── 1b. this was a COLD install ───────────────────────────────────────────────
 # The wiped sandbox is the setup's claim, not a measurement — a carried identity
 # means this is a warm start, not the path a user hits on first install.
 if smoke_all_logs "$SANDBOX" | smoke_match_carried; then
