@@ -37,5 +37,6 @@ Application-level changes belong in
 
 ### Fixed
 
+- **Release smoke: the macOS check harness worked in the release's own state and results files.** `run_scenario` gave the real `check-macos.sh` a stub toolchain but no state directory of its own, so under the workflow's environment — which sets `UNYT_SMOKE_STATE` and `UNYT_SMOKE_RESULTS` before the harness step — every scenario mounted into one shared directory, the scenario whose image holds no `.app` passed nine checks against the bundle the previous one had extracted, and 48 fixture rows landed in the results file the release's real checks report from, where a duplicate row reads as "a check is wired up twice". A bare local run hid both: with the variable unset the script mints a temp directory per invocation. Every invocation now gets its own state and results files, the harness puts itself in CI's shape whatever the environment it is run from, and a seeded caller directory is checked at the end to prove nothing reached it.
 - **Release smoke: the Linux lane starts on a runner with no cached image.** `docker run`'s stderr was folded into its stdout, so the pull narration became the container id and every later `docker exec` failed — which the reaping probe then reported as "PID 1 is not reaping orphans". The stderr is captured to the lane instead, and a genuine docker failure still prints it.
 

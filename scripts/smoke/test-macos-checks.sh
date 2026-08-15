@@ -53,6 +53,42 @@ finish() {
 }
 trap finish EXIT INT TERM
 
+# ── the caller's environment, set here rather than inherited ──────────────────
+# release-smoke.yaml runs this harness with UNYT_SMOKE_STATE and
+# UNYT_SMOKE_RESULTS already in the environment, and that is what hid the one bug
+# this harness shipped: run_scenario handed the real script no state directory of
+# its own, so every scenario mounted into that one shared directory and a
+# scenario found the PREVIOUS one's extracted bundle — nine green checks on a
+# disk image with no .app in it. Bare, the script mints a temp directory per
+# invocation and nothing leaks, so the same file reported 435/435 locally and
+# 433/2 in CI.
+#
+# Setting it HERE makes the run independent of how it was invoked: every
+# invocation below — run_scenario, only_check and mode_check alike — runs in the
+# shape CI has, and the two guards at the end of this file say whether any of
+# them reached it. Seeded rather than left absent, because --cleanup removes the
+# directory it is given: a leak can DELETE as well as write, and an
+# absence-only check reads a deletion as a pass.
+ISO_AMBIENT="$ROOT/caller"
+mkdir -p "$ISO_AMBIENT/state"
+printf 'sentinel\n' >"$ISO_AMBIENT/state/keep"
+printf 'seed|pass\n' >"$ISO_AMBIENT/rows.txt"
+export UNYT_SMOKE_STATE="$ISO_AMBIENT/state"
+export UNYT_SMOKE_RESULTS="$ISO_AMBIENT/rows.txt"
+
+# THE PREMISE OF THOSE GUARDS, read back through a CHILD. They assert that
+# nothing leaked into the caller's environment, which is vacuously true if there
+# is no caller's environment — and demoting the two lines above from `export` to
+# a plain assignment would do exactly that while every variable still reads
+# correctly here. Only a child answers the question the scenarios ask.
+iso_seen="$(bash -c 'printf "%s|%s" "${UNYT_SMOKE_STATE:-}" "${UNYT_SMOKE_RESULTS:-}"')"
+if [ "$iso_seen" = "$ISO_AMBIENT/state|$ISO_AMBIENT/rows.txt" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  the caller's smoke environment does not reach a child process: '$iso_seen'" >&2
+fi
+
 # ── the real thing, captured ──────────────────────────────────────────────────
 # Verbatim from the v0.100.0 artifacts. The two arches do NOT share a load
 # command — aarch64 LC_BUILD_VERSION, x86_64 the older LC_VERSION_MIN_MACOSX —
@@ -468,7 +504,7 @@ EOF
 # so a row is read only from the table and never from a `===== name =====`
 # header that happens to contain the same words.
 OUT=""; RC=0; ERR=""
-SCEN_DIR=""; SCEN_DMG=""; SCEN_STATE=""; ONLY_SEQ=0
+SCEN_DIR=""; SCEN_DMG=""; SCEN_STATE=""; ONLY_SEQ=0; SCEN_ENV=()
 # FIX_* are prefix assignments, cleared in build_scenario: a leaked one would
 # mis-build every later scenario, which is the one failure a test cannot report.
 scenario_reset() {
@@ -492,16 +528,43 @@ build_scenario() { # <name>
   SCEN_STATE="$SCEN_DIR/state"
   mv "$SCEN_DIR/artifact.dmg" "$SCEN_DMG"
   scenario_reset
+  # Cleared alongside the FIX_* prefixes, and for the same reason: an invoker
+  # that forgot to rebuild it would otherwise run THIS scenario against the
+  # previous one's stubs and state directory.
+  SCEN_ENV=()
+}
+
+# THE ENVIRONMENT EVERY INVOCATION RUNS UNDER, in one place because the one bug
+# this harness shipped was a single invoker missing a variable: run_scenario
+# passed PATH and STUB_FIXTURE but not UNYT_SMOKE_STATE, so with that variable
+# set in the caller's environment — which is exactly what release-smoke.yaml does
+# — every scenario shared one mountpoint, and a scenario found the previous one's
+# extracted bundle. NOTHING THE SCRIPT OR ITS STUBS READ IS INHERITED: a scenario
+# reads and writes only its own directory, and breaks only what it says it
+# breaks. Call-site assignments are applied after these, so a scenario that needs
+# its own results file or its own breakage still gets it.
+scen_env() { # <results file>
+  SCEN_ENV=(
+    PATH="$SCEN_DIR/bin:$PATH"
+    STUB_FIXTURE="$SCEN_DIR"
+    UNYT_SMOKE_STATE="$SCEN_STATE"
+    UNYT_SMOKE_RESULTS="$1"
+    # The stub toolchain's own knobs, and the two the real script reads. Emptied
+    # rather than left alone: each is how ONE scenario breaks ONE thing, so an
+    # exported STUB_BREAK in the caller's shell would break every scenario at
+    # once and red the suite for a reason that has nothing to do with the checks.
+    # Empty is as good as unset — every consumer reads them as ${VAR:-default}.
+    STUB_BREAK= STUB_BIN_ARCH= STUB_RUNNER_ARCH=
+    UNYT_EXPECTED_TEAM_ID= UNYT_HDIUTIL_TIMEOUT=
+  )
 }
 
 run_scenario() { # <name> [env assignments...]
   local name="$1"; shift
   build_scenario "$name"
   ERR="$SCEN_DIR/stderr.log"
-  OUT="$(env "$@" \
-    PATH="$SCEN_DIR/bin:$PATH" \
-    STUB_FIXTURE="$SCEN_DIR" \
-    bash "$SCRIPT" "$SCEN_DMG" 2>"$ERR")"
+  scen_env "$SCEN_DIR/rows.txt"
+  OUT="$(env "${SCEN_ENV[@]}" "$@" bash "$SCRIPT" "$SCEN_DMG" 2>"$ERR")"
   RC=$?
 }
 
@@ -513,11 +576,8 @@ only_check() { # <id> [env assignments...]
   local id="$1"; shift
   ONLY_SEQ=$((ONLY_SEQ + 1))
   ERR="$SCEN_DIR/stderr-$ONLY_SEQ-$id.log"
-  OUT="$(env "$@" \
-    PATH="$SCEN_DIR/bin:$PATH" \
-    STUB_FIXTURE="$SCEN_DIR" \
-    UNYT_SMOKE_STATE="$SCEN_STATE" \
-    bash "$SCRIPT" --only "$id" "$SCEN_DMG" 2>"$ERR")"
+  scen_env "$SCEN_DIR/only-rows.txt"
+  OUT="$(env "${SCEN_ENV[@]}" "$@" bash "$SCRIPT" --only "$id" "$SCEN_DMG" 2>"$ERR")"
   RC=$?
 }
 
@@ -527,11 +587,8 @@ mode_check() { # <tag> <script args...>
   local tag="$1"; shift
   ONLY_SEQ=$((ONLY_SEQ + 1))
   ERR="$SCEN_DIR/stderr-$ONLY_SEQ-$tag.log"
-  OUT="$(env \
-    PATH="$SCEN_DIR/bin:$PATH" \
-    STUB_FIXTURE="$SCEN_DIR" \
-    UNYT_SMOKE_STATE="$SCEN_STATE" \
-    bash "$SCRIPT" "$@" 2>"$ERR")"
+  scen_env "$SCEN_DIR/mode-rows.txt"
+  OUT="$(env "${SCEN_ENV[@]}" bash "$SCRIPT" "$@" 2>"$ERR")"
   RC=$?
 }
 
@@ -1378,13 +1435,83 @@ expect_err "does not do version ordering" "--only diagnoses a sort without -V"
 mode_check print-no-sort --print-checks
 expect_rc nonzero "--print-checks stops on a sort without -V too"
 
+# ── the harness's own isolation ───────────────────────────────────────────────
+# THE BUG THIS BLOCK EXISTS FOR, which reached a release green: `break-noapp`,
+# whose image holds only a README, found the previous scenario's extracted bundle
+# in the shared state directory and passed all nine checks on a disk image with
+# no .app in it. Named here rather than left to that one scenario, because what
+# is under test is the harness giving each scenario a state directory of its own
+# — not the mount check, which was correct throughout.
+run_scenario isolation-good
+expect_rc zero "scenario isolation: the good image before it still passes"
+# The whole-run path reports through stdout and the summary table only, so the
+# results file run_scenario names must stay unwritten. Pinning it is what makes
+# that assignment more than decoration: a whole run that started appending rows
+# would say so here, with the rows already going somewhere harmless.
+if [ ! -e "$SCEN_DIR/rows.txt" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  a whole run wrote rows to a results file; only --only reports that way" >&2
+  sed 's/^/      /' "$SCEN_DIR/rows.txt" >&2
+fi
+
+# The same image break-noapp uses, run straight after a scenario that extracted a
+# bundle. It can only go green by seeing that bundle.
+run_scenario isolation-noapp STUB_BREAK=noapp
+expect_row "mounts and yields a .app bundle" FAIL \
+  "a scenario cannot see the previous scenario's extracted bundle"
+expect_rc nonzero "a leaked bundle cannot turn an image with no .app green"
+expect_err "mounted but contains no .app" \
+  "and the diagnosis is the empty image, not whatever a leak left behind"
+
+# The --only path too, since its rows are what the workflow collects: they belong
+# in the scenario's own file, never in the caller's.
+build_scenario isolation-only
+only_check mount
+expect_only_row "mounts and yields a .app bundle" pass \
+  "scenario isolation: --only mount still passes"
+if [ "$(cat "$SCEN_DIR/only-rows.txt" 2>/dev/null)" = "mounts and yields a .app bundle|pass" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  --only wrote its row somewhere other than the scenario's own results file" >&2
+fi
+
+# ── nothing reached the caller ────────────────────────────────────────────────
+# Every invocation in this file ran with the seeded UNYT_SMOKE_STATE and
+# UNYT_SMOKE_RESULTS from the top, so these two answer for all of them at once —
+# run_scenario, only_check and mode_check alike — rather than for the handful of
+# calls a block of its own could make. The seeds are compared, not just looked
+# for: --cleanup is an `rm -rf` of the directory it is given, so a leak that
+# DELETES is as real as one that writes.
+iso_left="$(find "$ISO_AMBIENT/state" -mindepth 1 2>/dev/null | sort | tr '\n' ' ')"
+if [ "$iso_left" = "$ISO_AMBIENT/state/keep " ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  an invocation used the CALLER's UNYT_SMOKE_STATE directory" >&2
+  printf '      %s\n' "${iso_left:-<the seeded directory is gone>}" >&2
+fi
+if [ "$(cat "$ISO_AMBIENT/rows.txt" 2>/dev/null)" = "seed|pass" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL  an invocation wrote to the CALLER's UNYT_SMOKE_RESULTS file" >&2
+  sed 's/^/      /' "$ISO_AMBIENT/rows.txt" 2>/dev/null >&2
+fi
+
 COMPLETED=1
 echo "macos check regression: $pass passed, $fail failed"
-# A floor on the COUNT, not just on failures: truncate this file and it would
-# otherwise report "2 passed, 0 failed" and exit 0. Raise it when adding
-# scenarios.
-if [ "$pass" -lt 433 ]; then
-  echo "::error::only $pass assertions ran; expected at least 433 — the test file is truncated or a block was skipped" >&2
+# THE COUNT, not just the failures: truncate this file and it would otherwise
+# report "2 passed, 0 failed" and exit 0. Counted as pass+fail so a FAILING
+# assertion is reported as a failure rather than as a missing one, and compared
+# EXACTLY rather than as a floor — every tool is stubbed here, so nothing is
+# skipped on any machine and the total is the same everywhere. Update it when you
+# add or remove a scenario; a number that no longer matches is the point.
+if [ "$((pass + fail))" -ne 445 ]; then
+  echo "::error::$((pass + fail)) assertions ran; expected exactly 445 — the file was truncated, a block" >&2
+  echo "  was skipped, or assertions were added or removed without updating this number." >&2
   exit 1
 fi
 [ "$fail" -eq 0 ]
