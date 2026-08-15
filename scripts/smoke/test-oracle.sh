@@ -1049,27 +1049,41 @@ if [ -f "$rel" ]; then
   in_stage "$stage3" '    uses: ./.github/workflows/release-smoke.yaml' \
     "the release must call the smoke workflow"
 
-  # macos-latest moved to macOS 26, whose screen-capture rules differ from the
-  # ones phase 1 is proven against — and an unpinned BUILD ships an artifact the
-  # gates never tested. windows-latest/ubuntu-latest are not the same risk: the
-  # Windows lanes name both images explicitly and the Linux static lane runs in
-  # containers, so the host image is not what either asserts.
+  # ── the macOS labels, and why the two files answer differently ─────────────
+  # A GATE MAY NOT RIDE A ROLLING LABEL. macos-latest moved to macOS 26, whose
+  # screen-capture rules differ from the ones phase 1 is proven against, so a
+  # gate on it would quietly change what "proven" means with no commit to point
+  # at. windows-latest/ubuntu-latest are not the same risk: the Windows lanes
+  # name both images explicitly and the Linux static lane runs in containers, so
+  # the host image is not what either asserts.
+  #
   # Full-line comments stripped, because the label is named in the comments that
-  # explain the pinning; a trailing comment is left in place, since a line that
+  # explain all this; a trailing comment is left in place, since a line that
   # still RUNS on it is exactly what this looks for.
   #
   # COUNTED, never `| grep -q`: under `pipefail` the -q exits on the first match
   # and the upstream grep dies of SIGPIPE, so the pipeline reports 141 and the
   # `if` reads it as "no match" — this assertion passed a mutation before it was
   # written this way.
-  for f in "$wf" "$rel"; do
-    [ -f "$f" ] || continue
-    if [ "$(grep -v '^[[:space:]]*#' "$f" | grep -c 'macos-latest' || true)" -ne 0 ]; then
-      fail=$((fail + 1))
-      printf 'FAIL  %-58s %s\n' "$(basename "$f") rides the rolling macOS image" \
-        "pin macos-15 / macos-15-intel — the images phase 1 is proven on" >&2
-    else pass=$((pass + 1)); fi
-  done
+  if [ "$(grep -v '^[[:space:]]*#' "$wf" | grep -c 'macos-latest' || true)" -ne 0 ]; then
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a smoke lane rides the rolling macOS image" \
+      "gates run macos-15 / macos-15-intel — the images phase 1 is proven on" >&2
+  else pass=$((pass + 1)); fi
+
+  # THE BUILD IS THE OPPOSITE RULE, and it is deliberate: these legs produce what
+  # users install, so pinning them changes the product rather than a gate, and
+  # that is a decision of its own — not something a change to the tests carries
+  # in. So macos-latest is REQUIRED here, and both a pin and a move fail: the
+  # artifact is meant to be built on a newer macOS than the gates install it on
+  # (release-smoke.yaml's header says why that gap is the useful direction).
+  build_macos="$(grep -v '^[[:space:]]*#' "$rel" |
+    grep -oE 'platform: macos[a-z0-9.-]*' | sed 's/platform: //' | sort -u | tr '\n' ' ')"
+  if [ "$build_macos" = "macos-latest " ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the macOS build legs no longer roll" \
+      "[$build_macos] — pinning what ships is its own decision, not a test change" >&2
+  fi
 else
   echo "SKIP  release-tauri-app stage-1 checks (no release-tauri-app.yaml)" >&2
 fi
@@ -1161,28 +1175,16 @@ x_aarch64_darwin.app.tar.gz"; then pass=$((pass + 1)); else
 x_x64_windows.msi.zip" 2>&1 | tail -1)" >&2
 fi
 
-# ── the macOS images are pinned, not merely not-latest ──────────────────────
-# `macos-15` → `macos-26` is neither `-latest` nor proven: it would move the
-# gates to an image phase 1 has never answered on, and — in the build matrix —
-# ship an artifact against an SDK no gate ever tested. So the set is closed.
+# ── the gate images are pinned, not merely not-latest ───────────────────────
+# `macos-15` → `macos-26` is neither `-latest` nor proven: it moves the gates to
+# an image phase 1 has never answered on, and nothing in the ban above would say
+# so. A CLOSED SET, therefore — the images the 7/7 proof was taken on. The build
+# legs are deliberately not in it; that asymmetry is asserted where the build is.
 got="$(inv "$full")"
 runners="$(printf '%s\n' "$got" | grep -o '"runner":"macos[^"]*"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')"
 if [ "$runners" = "macos-15 macos-15-intel " ]; then pass=$((pass + 1)); else
   fail=$((fail + 1))
   printf 'FAIL  %-58s %s\n' "the macOS lanes moved off their proven images" "[$runners]" >&2
-fi
-if [ -f "$rel" ]; then
-  strays=""
-  while IFS= read -r platform; do
-    [ -n "$platform" ] || continue
-    case " $runners" in *" $platform "*) ;; *) strays="${strays:+$strays }$platform" ;; esac
-  done <<EOF
-$(grep -v '^[[:space:]]*#' "$rel" | grep -oE 'platform: macos[a-z0-9.-]*' | sed 's/platform: //' | sort -u)
-EOF
-  if [ -z "$strays" ]; then pass=$((pass + 1)); else
-    fail=$((fail + 1))
-    printf 'FAIL  %-58s %s\n' "the release builds macOS on an image no gate tests" "$strays" >&2
-  fi
 fi
 # A row with a field missing must not become a lane with an empty runner or an
 # empty suffix — which would download nothing and launch it.
@@ -1268,8 +1270,8 @@ fi
 # DELIBERATELY 2 BELOW a full run: the GLIBC-patch branch legitimately costs
 # exactly 2 on a machine that cannot patch a version, so a floor at the full
 # count would red a legitimate skip. Do not "tidy" it up to match.
-if [ "$pass" -lt 181 ]; then
-  echo "::error::only $pass assertions ran; expected at least 181 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 180 ]; then
+  echo "::error::only $pass assertions ran; expected at least 180 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

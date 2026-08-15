@@ -118,17 +118,19 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          # macos-15, NOT macos-latest: that label moved to macOS 26, so the SDK
-          # this ships against would change with the image and no commit to point
-          # at — and the release gates that install and launch these builds run on
-          # macos-15 / macos-15-intel (scripts/smoke/release-inventory.sh pins
-          # them). Both targets on the arm64 image, as macos-latest was: the
-          # x86_64 leg cross-compiles.
-          - platform: macos-15
+          # macos-latest ON PURPOSE, and it is the one runner label in this repo
+          # that is meant to roll. The smoke's gates are pinned to macos-15 /
+          # macos-15-intel instead, so the artifact is BUILT on a newer macOS
+          # than it is installed and launched on — see release-smoke.yaml's
+          # header for why that gap is the useful direction and not a bug to
+          # close. Pinning these two legs changes what users install, so it is a
+          # decision of its own rather than something a test change carries in;
+          # test-oracle.sh fails on a pin here for exactly that reason.
+          - platform: macos-latest
             args: "--target aarch64-apple-darwin"
             arc_factor: default
             label: macos-arm64
-          - platform: macos-15
+          - platform: macos-latest
             args: "--target x86_64-apple-darwin"
             arc_factor: default
             label: macos-x64

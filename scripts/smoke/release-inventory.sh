@@ -25,10 +25,10 @@ MSI_SUFFIX="x64_windows.msi"
 # that exist. Each arch needs its own runner: a check runs the bundle it just
 # downloaded. Both phases use it.
 #
-# PINNED IMAGES, never macos-latest: that label moved to macOS 26, whose
-# screen-capture and redaction rules differ from the ones phase 1 is proven
-# against — an image rollover would otherwise change what a release gate tests
-# with no commit to point at.
+# PINNED IMAGES, never macos-latest: an image rollover would change what a
+# release gate tests with no commit to point at. The BUILD deliberately rides
+# macos-latest, so these lanes install on an older macOS than built the artifact
+# — release-smoke.yaml's header says why that gap is the useful one.
 MACOS_ROWS="macos-15	aarch64	aarch64_darwin.dmg
 macos-15-intel	x86_64	x64_darwin.dmg"
 

@@ -21,6 +21,18 @@ name: "release-smoke"
 # asks for it (see `static-checks-advisory`). A release run must not report
 # success when the app never opened.
 #
+# WE BUILD ON A NEWER macOS THAN WE TEST ON, DELIBERATELY. Every macOS lane here
+# runs on the pinned macos-15 / macos-15-intel of release-inventory.sh, while
+# release-tauri-app.yaml builds on macos-latest — macOS 26 today. That gap is the
+# useful direction: it asks whether the artifact runs on an OS OLDER than the one
+# that produced it, which is what most users have, and testing on the build image
+# would answer a question nobody is asking. It is also why the gate images are
+# pinned and the build label is not — a rolling gate would quietly change what
+# "proven" means (macOS 26's screen-capture rules differ from the ones phase 1 is
+# proven against), while a rolling build is simply the newest toolchain. Neither
+# half should be "fixed" to match the other without deciding that on purpose;
+# test-oracle.sh fails on a pinned build leg and on an unpinned gate.
+#
 # Locally, each script is its own entry point: run-smoke.sh <deb>,
 # check-macos.sh <dmg>, check-windows.ps1 <exe|msi> for phase 2, and
 # load-proving/prove-{linux.sh,macos.sh,windows.ps1} for phase 1.
