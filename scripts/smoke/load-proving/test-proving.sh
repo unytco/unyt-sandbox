@@ -3,7 +3,8 @@
 #
 #   test-proving.sh
 #
-# TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+# Every phase-1 lane of release-smoke.yaml runs this before it downloads
+# anything, and a phase-1 failure fails the release run.
 #
 # Drives the REAL prove_watch, prove_verdict, prove_control_check and
 # publish-verdict.sh against synthetic logs and synthetic frames, because the

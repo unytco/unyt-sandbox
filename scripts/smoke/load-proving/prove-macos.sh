@@ -3,7 +3,9 @@
 #
 #   prove-macos.sh <artifact.dmg> <shots-dir>
 #
-# TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+# The macOS half of release-smoke.yaml's phase 1 (`opens-macos`), one lane per
+# architecture. It runs on the pinned macos-15 / macos-15-intel images the
+# inventory names — the capture rules below are what that pinning protects.
 #
 # TWO MODES, AND THE LOG SAYS WHICH ONE THIS RUN CONCLUDED IN.
 #

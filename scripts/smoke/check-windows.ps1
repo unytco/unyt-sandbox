@@ -11,9 +11,21 @@
   A CI step is its own process, so -Only persists state under UNYT_SMOKE_STATE
   and a check whose prerequisite state is absent FAILS rather than skipping.
 
-  No UI automation: Windows Sandbox is unavailable on GitHub-hosted runners, so
-  there is no pristine-machine equivalent of the Linux containers. A WebDriver
-  test was built for this and deliberately discarded.
+  PHASE 2 OF THE RELEASE SMOKE: this installs the artifact, examines it and
+  uninstalls it. Whether the installed app then OPENS is phase 1's — the
+  `opens-windows` lanes in release-smoke.yaml launch both installers and
+  photograph the app's own window (scripts/smoke/load-proving/prove-windows.ps1).
+  Windows Sandbox is unavailable on GitHub-hosted runners, so neither phase gets
+  a pristine machine; both run on a build image.
+
+  NO UI AUTOMATION HERE OR IN PHASE 1 — phase 1 photographs the window, it does
+  not drive it. A WebDriver test was built and deliberately discarded, and what
+  would flip that: `tauri-driver` does support Windows (through msedgedriver), so
+  the obstacle is not the platform but the value — a driver asserts what the DOM
+  contains, which is the app's own test suite's job, while this suite exists to
+  ask what the SHIPPED INSTALLER does to a machine. Revisit it when a release
+  failure would have been caught by asserting on DOM content and by nothing
+  cheaper.
 
   The check carrying the most weight is the import table: every DLL the binaries
   load, minus what the installer ships, minus what Windows guarantees.
@@ -22,9 +34,12 @@
   windows_subsystem = "windows", so there is no console. Read the log under
   %LOCALAPPDATA%\co.unyt.unyt.sandbox\logs.
 
-  DOES NOT COVER whether the app launches on a never-built-on machine: WebView2
-  (loaded through COM, so no import check sees it), SmartScreen, and a runtime
-  the build machine had. Checked by hand — docs/windows-clean-machine-check.md.
+  STILL NOT COVERED, by either phase, because a runner is a build image and not a
+  user's PC: SmartScreen's "unknown publisher" block (our installers are
+  unsigned, and CI never meets it — it installs silently), a machine WITHOUT the
+  WebView2 runtime (Tauri loads it through COM, so no import check sees it, and
+  every runner already has it), and a redistributable the build machine had.
+  Those three are the hand check — docs/windows-clean-machine-check.md.
 
 .PARAMETER Artifact
   Path to the NSIS installer (a plain .exe, not -setup.exe) or the .msi.

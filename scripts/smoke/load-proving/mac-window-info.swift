@@ -1,6 +1,7 @@
 // What the macOS window server will tell us about one process's windows.
 //
-// TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+// prove-macos.sh's second way to answer, and what release-smoke.yaml's phase-1
+// macOS lane falls back to when it cannot photograph the app's own window.
 //
 // WHY THIS EXISTS INSTEAD OF A SCREENSHOT. Since Catalina, reading screen pixels
 // needs the TCC "Screen Recording" grant, which a GitHub-hosted runner has never

@@ -573,38 +573,296 @@ if [ -f "$wf" ]; then
   # says its artifact is absent, so a suffix that drifts from what the lane
   # downloads does not fail — it skips that lane forever, silently.
   # $here, not a relative path: run from any other directory the greps find nothing
-  # and this loop asserts nothing at all.
-  for suffix in $(grep -oE '^[A-Z]+_SUFFIX="[^"]+"' "$here/release-inventory.sh" | cut -d'"' -f2) \
-                $(grep -oE '"[a-z0-9_]+_darwin\.dmg"' "$here/release-inventory.sh" | tr -d '"' | sort -u); do
+  # and this loop asserts nothing at all. The DMG suffixes are deliberately not
+  # here: they reach their lanes through `matrix.asset` rather than as a literal
+  # in the workflow, and the row-count assertions below are what guard them.
+  suffixes="$(grep -oE '^[A-Z]+_SUFFIX="[^"]+"' "$here/release-inventory.sh" | cut -d'"' -f2)"
+  while IFS= read -r suffix; do
+    [ -n "$suffix" ] || continue
     if grep -qF -- "$suffix" "$wf"; then pass=$((pass + 1)); else
       fail=$((fail + 1))
       printf 'FAIL  %-58s %s\n' "inventory suffix no lane downloads" "$suffix" >&2
     fi
-  done
+  done <<EOF
+$suffixes
+EOF
 
   # The other direction — an id in the workflow that no script owns — is left to
   # runtime: it exits 2 there as an invocation error, which is a red step naming
   # the typo. Asserting it here would need the Windows registry too, and that
   # needs pwsh.
 
-  # A lane added without the flag silently restores the behaviour the input
-  # exists to remove. Paired per job, not counted — two totals can agree while
-  # being wrong about every job — and it NAMES the offender.
+  # ── the two phases, and which of them a switch may soften ──────────────────
+  # PHASE 1 MUST NOT BE SWALLOWABLE. `static-checks-advisory` exists so a red
+  # signing check does not fail a release run; a phase-1 lane going green by the
+  # same flag would restore exactly the hole this suite was built to close — a
+  # run reporting success when the app never opened. So the flag is asserted
+  # BOTH ways, per job, and the offender is named. Paired per job, not counted:
+  # two totals can agree while being wrong about every job.
+  #
   # Sliced from `jobs:` first (workflow_dispatch/workflow_call are 2-space keys
   # too), matched broadly (a `linux_images` job must not go unexamined), and a
   # trailing comment on the key is admitted — rejecting it would stop seeing the
   # job and attribute the next flag to the one before.
-  unflagged="$(printf '%s\n' "$(sed -n '/^jobs:/,$p' "$wf")" | awk '
+  #
+  # The job id is what declares the phase — `opens-` blocks, `static-` may be
+  # advisory — so an id this does not recognise FAILS rather than being assumed
+  # into either phase.
+  phases="$(printf '%s\n' "$(sed -n '/^jobs:/,$p' "$wf")" | awk '
+    function emit() { if (job != "") print job, flag }
     /^  [A-Za-z_][A-Za-z0-9_-]*:[ \t]*(#.*)?$/ {
-      if (job != "" && !seen) print job
-      job = $0; sub(/^  /, "", job); sub(/:.*$/, "", job); seen = 0; n++; next
+      emit(); job = $0; sub(/^  /, "", job); sub(/:.*$/, "", job); flag = 0; n++; next
     }
-    /^    continue-on-error: \$\{\{ inputs\.non-blocking == true \}\}[ \t]*$/ { seen = 1 }
-    END { if (job != "" && !seen) print job; if (n == 0) print "<no jobs found>" }')"
-  if [ -z "$unflagged" ]; then pass=$((pass + 1)); else
+    /^    continue-on-error: \$\{\{ inputs\.static-checks-advisory == true \}\}[ \t]*$/ { flag = 1; next }
+    # Any other continue-on-error is its own answer: a hand-written `true` would
+    # soften a lane in every run, dispatched ones included.
+    /^    continue-on-error:/ { flag = 2 }
+    END { emit(); if (n == 0) print "<no jobs found>", 0 }')"
+  bad=""
+  opens=0
+  statics=0
+  while read -r job flag; do
+    [ -n "$job" ] || continue
+    case "$job" in
+      opens-*) want=0; opens=$((opens + 1)) ;;
+      static-*) want=1; statics=$((statics + 1)) ;;
+      # Both phases need it, and the oracle it runs is what proves phase 1's
+      # wiring — an advisory setup job would make this very assertion toothless.
+      inventory) want=0 ;;
+      *) bad="${bad:+$bad }$job(is it phase 1 or phase 2? name it opens-* or static-*)"; continue ;;
+    esac
+    [ "$flag" = "$want" ] || bad="${bad:+$bad }$job(advisory=$flag, expected $want)"
+  done <<EOF
+$phases
+EOF
+  if [ -z "$bad" ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
-    printf 'FAIL  %-58s %s\n' "release-smoke.yaml job without non-blocking" \
-      "$(printf '%s' "$unflagged" | tr '\n' ' ')" >&2
+    printf 'FAIL  %-58s %s\n' "a release-smoke job is in the wrong phase" "$bad" >&2
+  fi
+  # Floors, because "every job is correctly flagged" is also true of a workflow
+  # with no phase-1 jobs left in it.
+  if [ "$opens" -ge 3 ] && [ "$statics" -ge 3 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a phase lost its lanes" \
+      "$opens phase-1 job(s) and $statics phase-2 job(s); expected at least 3 of each" >&2
+  fi
+
+  # ── and every OTHER way a phase-1 lane could stop answering ────────────────
+  # The flag is one of four, and it is the only one the block above can see. A
+  # lane that launches nothing, one softened a level down, one gated off, and one
+  # cut from its inventory rows are all green runs that proved nothing. Comment
+  # lines are stripped throughout: this asserts what RUNS.
+  job_body() { # <job id> — the job's lines, minus its own key line and comments
+    awk -v want="$1" '
+      /^  [A-Za-z_][A-Za-z0-9_-]*:[ \t]*(#.*)?$/ {
+        job = $0; sub(/^  /, "", job); sub(/:.*$/, "", job); inside = (job == want); next
+      }
+      inside && $0 !~ /^ *#/ { print }' "$wf"
+  }
+  # DISCOVERED, not listed: a fourth phase-1 lane whose only step is `echo` would
+  # satisfy a hardcoded three and prove nothing.
+  opens_ids="$(printf '%s\n' "$phases" | awk '$1 ~ /^opens-/ { print $1 }')"
+  while IFS= read -r job; do
+    [ -n "$job" ] || continue
+    body="$(job_body "$job")"
+    missing=""
+    # The prove script appears TWICE in the Windows lane — once as -SelfTest,
+    # once as the launch — and the self-test alone would satisfy a plain match
+    # while the lane launched nothing. It did, before this line excluded it.
+    launch="$(printf '%s\n' "$body" | grep -F -- "load-proving/prove-" |
+      grep -cv -- '-SelfTest' || true)"
+    [ "$launch" -ne 0 ] || missing="a load-proving/prove-* launch (only its self-test runs)"
+    verdict="$(printf '%s\n' "$body" | grep -cF -- "load-proving/publish-verdict.sh" || true)"
+    [ "$verdict" -ne 0 ] || missing="${missing:+$missing }load-proving/publish-verdict.sh"
+    # THE SECOND WAY TO SOFTEN A LANE. The phase check above reads the JOB key,
+    # four spaces in; a step-level `continue-on-error: true` sits at eight and
+    # turns one lane green just as completely. Comments are already stripped, so
+    # the phase header explaining why there is no flag cannot satisfy this.
+    soft="$(printf '%s\n' "$body" | grep -c 'continue-on-error' || true)"
+    [ "$soft" -eq 0 ] || missing="${missing:+$missing }$soft continue-on-error in the job"
+    # A SKIPPED JOB IS GREEN — GitHub concludes a run on what ran — so an `if:`
+    # is the third way, and the one no flag check can see. `!cancelled()` must be
+    # there (a red oracle must not delete the lane it guards), and nothing that
+    # makes the lane conditional on how the run was started or on how the caller
+    # asked: gating phase 1 on `github.event_name == 'workflow_dispatch'` would
+    # leave a hand-run smoke looking perfect and every release proving nothing.
+    gate="$(printf '%s\n' "$body" | awk '
+      /^    if:/ { inif = 1; print; next }
+      inif && /^      / { print; next }
+      inif { inif = 0 }')"
+    printf '%s\n' "$gate" | grep -qF -- '!cancelled()' ||
+      missing="${missing:+$missing }an if: gate containing !cancelled()"
+    for banned in 'inputs\.' 'github\.event' '\.result'; do
+      printf '%s\n' "$gate" | grep -qE -- "$banned" &&
+        missing="${missing:+$missing }an if: gate reading $banned"
+    done
+    # Without `needs:` the outputs it gates on are empty forever, so the lane
+    # never runs again and nothing goes red to say so.
+    printf '%s\n' "$body" | grep -qE '^    needs: inventory$' ||
+      missing="${missing:+$missing }needs: inventory"
+    # AND THE GATE AND THE MATRIX MUST NAME THE SAME OUTPUT. Both names are
+    # declared and printed, so the correspondence check below is satisfied while
+    # a lane gated on the Windows rows builds itself from the Linux ones — it
+    # then runs on some releases and not others, for no visible reason.
+    gate_ref="$(printf '%s\n' "$gate" |
+      grep -oE 'needs\.inventory\.outputs\.[a-z_]+' | cut -d. -f4 | sort -u | tr '\n' ' ')"
+    rows_ref="$(printf '%s\n' "$body" |
+      grep -oE 'fromJSON\(needs\.inventory\.outputs\.[a-z_]+' | cut -d. -f4 | sort -u | tr '\n' ' ')"
+    [ "$gate_ref" = "$rows_ref" ] ||
+      missing="${missing:+$missing }gates on [$gate_ref] but builds its matrix from [$rows_ref]"
+    # The verdict on its own step, always: a launch step that never ran leaves no
+    # verdict file and no PROVE_RC, and only a step that runs anyway can say so.
+    printf '%s\n' "$body" | grep -qE '^      - name: The verdict$' ||
+      missing="${missing:+$missing }a 'The verdict' step of its own"
+    # The frames are what the lane produces; `ignore` would publish an empty
+    # artifact as a complete one. macOS is `warn` on purpose — see the lane.
+    printf '%s\n' "$body" | grep -q 'if-no-files-found: ignore' &&
+      missing="${missing:+$missing }if-no-files-found: ignore"
+    if [ -z "$missing" ]; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "$job cannot be trusted to answer" "$missing" >&2
+    fi
+  done <<EOF
+$opens_ids
+EOF
+
+  # Each platform's lane must be the one that launches THAT platform's artifact
+  # AGAINST THE DOWNLOAD: three lanes all running prove-linux.sh would pass every
+  # check above, and on Windows the same path appears twice — once as -SelfTest,
+  # which is why the artifact flag rather than the path is what is asserted.
+  while IFS='|' read -r job script arg; do
+    [ -n "$job" ] || continue
+    body="$(job_body "$job")"
+    if printf '%s\n' "$body" | grep -qF -- "load-proving/$script" &&
+       printf '%s\n' "$body" | grep -qF -- "$arg"; then pass=$((pass + 1)); else
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "$job does not launch its own platform's artifact" \
+        "$script with $arg" >&2
+    fi
+  done <<'PHASE1'
+opens-linux|prove-linux.sh|"$ARTIFACT"
+opens-macos|prove-macos.sh|"$DMG"
+opens-windows|prove-windows.ps1|-Artifact $env:INSTALLER
+PHASE1
+
+  # The setup job is blocking for phase 1's sake, which is worth nothing if the
+  # oracle step is softened or deleted — this file cannot notice that it was
+  # never called, so it asserts the call site instead.
+  inv_body="$(job_body inventory)"
+  if printf '%s\n' "$inv_body" | grep -qF 'bash scripts/smoke/test-oracle.sh' &&
+     [ "$(printf '%s\n' "$inv_body" | grep -c 'continue-on-error' || true)" -eq 0 ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the setup job stopped running this file, or softened it" \
+      "an advisory oracle makes every assertion here decoration" >&2
+  fi
+
+  # THE STEP AS IT RUNS, not the strings in it. `|| true` on the verdict call, a
+  # redirect that eats its status, a shell that stops at the wrong line: all of
+  # them leave both greps above satisfied and turn a NOT PROVEN lane green. So
+  # the step is extracted verbatim and driven against a stub prover and the REAL
+  # publish-verdict.sh, under the shell options GitHub gives a `run:` block.
+  step_run() { # <job id> <step-name substring> — the run: body, dedented
+    job_body "$1" | awk -v want="$2" '
+      $0 ~ "^      - name: .*" want { instep = 1; next }
+      /^      - name: / { instep = 0 }
+      instep && /^        run: \|/ { inrun = 1; next }
+      inrun && /^          / { sub(/^          /, ""); print; next }
+      inrun { inrun = 0 }'
+  }
+  # A matrix value is not available to a shell here; what it stands for does not
+  # matter, only that the lane label reaches the verdict as one word.
+  dematrix() { sed 's/\${{ *matrix\.[a-z]* *}}/deb/g'; }
+  launch_step="$(step_run opens-linux 'Launch it and photograph' | dematrix)"
+  verdict_step="$(step_run opens-linux 'The verdict' | dematrix)"
+  if [ -n "$launch_step" ] && [ -n "$verdict_step" ]; then
+    # BOTH STEPS, in order, with $GITHUB_ENV carried between them exactly as the
+    # runner carries it — that handoff is how the launch's exit code reaches the
+    # verdict, and it is the one part of the Windows lane's shape this can drive.
+    # The job's colour is red if EITHER step is red, which is what is returned.
+    run_lane() { # <stub exit> <stub stdout> <run the launch step at all?>
+      local dir rc=0 line
+      dir="$(mktemp -d)"
+      mkdir -p "$dir/scripts/smoke/load-proving"
+      cp "$here/load-proving/publish-verdict.sh" "$dir/scripts/smoke/load-proving/"
+      {
+        echo '#!/usr/bin/env bash'
+        [ -z "$2" ] || printf 'printf "%%s\\n" %s\n' "$(printf '%q' "$2")"
+        echo "exit $1"
+      } >"$dir/scripts/smoke/load-proving/prove-linux.sh"
+      : >"$dir/env"
+      if [ "$3" = launched ]; then
+        ( cd "$dir" && ARTIFACT=x RUNNER_TEMP="$dir" GITHUB_ENV="$dir/env" \
+            GITHUB_STEP_SUMMARY="$dir/summary.md" \
+            bash -eo pipefail -c "$launch_step" >/dev/null 2>&1 ) || rc=1
+      fi
+      # `if: always()`, so the verdict step runs whatever the launch did.
+      while IFS= read -r line; do export "${line?}"; done <"$dir/env"
+      ( cd "$dir" && RUNNER_TEMP="$dir" GITHUB_STEP_SUMMARY="$dir/summary.md" \
+          bash -eo pipefail -c "$verdict_step" >/dev/null 2>&1 ) || rc=1
+      unset PROVE_RC
+      rm -rf "$dir"
+      echo "$rc"
+    }
+    # The answers that must reach the job. The last is the one the split exists
+    # for: a launch step that never ran leaves no verdict and no PROVE_RC.
+    while IFS='|' read -r code verdict ran want desc; do
+      [ -n "$desc" ] || continue
+      got="$(run_lane "$code" "$verdict" "$ran")"
+      if { [ "$want" = red ] && [ "$got" -ne 0 ]; } ||
+         { [ "$want" = green ] && [ "$got" -eq 0 ]; }; then pass=$((pass + 1)); else
+        fail=$((fail + 1))
+        printf 'FAIL  %-58s wanted %s, the lane came out %s\n' "$desc" "$want" "$got" >&2
+      fi
+    done <<'LAUNCHES'
+0|VERDICT linux deb: PROVEN — 1847 distinct, 50.0% dominant|launched|green|a proven lane reaches the job green
+1|VERDICT linux deb: NOT PROVEN — the window was blank|launched|red|a blank window must fail the job
+1||launched|red|a prover that says nothing must fail the job
+2|VERDICT linux deb: CANNOT PROVE — no capture path|launched|red|a lane that could not look must fail the job
+0|VERDICT linux deb: PROVEN — 1847 distinct, 50.0% dominant|skipped|red|a launch step that never ran must fail the job
+LAUNCHES
+  else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the phase-1 launch or verdict step could not be extracted" \
+      "a step name or its run: block moved" >&2
+  fi
+
+  # A lane gates on `needs.inventory.outputs.<x>`; an <x> the job never declares,
+  # or one release-inventory.sh never prints, is EMPTY at runtime — the gate
+  # reads false, the lane skips, and nothing says why. Both directions, because
+  # the two ways to lose a lane forever are a typo here and a rename there.
+  printed="$(UNYT_SMOKE_ASSETS='a_linux.deb
+a_linux.AppImage
+a_aarch64_darwin.dmg
+a_x64_darwin.dmg
+a_x64_windows.exe
+a_x64_windows.msi' bash "$here/release-inventory.sh" 000 2>/dev/null |
+    grep -oE '^[a-z_]+=' | tr -d '=')"
+  declared="$(sed -n '/^    outputs:/,/^    steps:/p' "$wf" | grep -oE '^      [a-z_]+:' | tr -d ' :')"
+  missing=""
+  refs="$(grep -oE 'needs\.inventory\.outputs\.[a-z_]+' "$wf" | cut -d. -f4 | sort -u)"
+  # NO REFERENCES IS NOT A CLEAN RESULT. The loop below would iterate zero times,
+  # leave `missing` empty and count a pass — at the exact moment the gates
+  # changed shape, which is the moment this block exists for. Six is what a
+  # workflow with both phases wired reads; the floor, not the count, because a
+  # new lane legitimately adds one.
+  refcount="$(printf '%s\n' "$refs" | grep -c . || true)"
+  [ "$refcount" -ge 6 ] || missing="only $refcount gate(s) read an inventory output"
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    printf '%s\n' "$declared" | grep -qx -- "$ref" ||
+      missing="${missing:+$missing }$ref(no such job output)"
+    # `images` is the workflow's own step output; everything else comes from the
+    # script, and a matrix built from an unprinted name is an empty matrix.
+    [ "$ref" = images ] && continue
+    printf '%s\n' "$printed" | grep -qx -- "$ref" ||
+      missing="${missing:+$missing }$ref(release-inventory.sh prints no such line)"
+  done <<EOF
+$refs
+EOF
+  if [ -z "$missing" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a lane gates on an output nothing produces" "$missing" >&2
   fi
 
   # THE STEP RUN, not the shape of its source. Asserting that some line containing
@@ -613,7 +871,7 @@ if [ -f "$wf" ]; then
   # yaml and driven against a stub summariser, with $GITHUB_STEP_SUMMARY caught in a
   # file — the summary is the artifact, and a lane absent from it reads as a verdict.
   # shellcheck disable=SC2016  # sed scripts and the stub below are literals, not expansions
-  win="$(sed -n '/^  windows:/,$p' "$wf" | sed -n '/^          rc=0$/,/^          exit "\$rc"$/p' | sed 's/^          //')"
+  win="$(sed -n '/^  static-windows:/,/^  [a-z]/p' "$wf" | sed -n '/^          rc=0$/,/^          exit "\$rc"$/p' | sed 's/^          //')"
   if [ -n "$win" ]; then
     win_dir="$(mktemp -d)"
     mkdir -p "$win_dir/scripts/smoke"
@@ -624,7 +882,7 @@ STUB
     win_run() { # <EXPECT_EXE> <EXPECT_MSI> — the step's own shell options
       ( cd "$win_dir" && rm -f published.md &&
         RUNNER_TEMP="$win_dir" GITHUB_STEP_SUMMARY="$win_dir/published.md" \
-          LABEL=L RELEASE=r BLOCKING_NOTE="" EXE=e MSI=m \
+          LABEL=L RELEASE=r STATIC_NOTE="" EXE=e MSI=m \
           EXPECT_EXE="$1" EXPECT_MSI="$2" bash -eo pipefail -c "$win" >/dev/null 2>&1
         echo "rc=$?"; cat published.md )
     }
@@ -654,13 +912,39 @@ STUB
   fi
 
   # The flag is only safe because a hand-run smoke cannot be handed a green run
-  # for a red one. Nothing else asserts this.
-  if sed -n '/^  workflow_dispatch:/,/^  workflow_call:/p' "$wf" |
-      grep -q 'non-blocking'; then
+  # for a red one. AN ALLOWLIST, not a ban on the two names we happen to have
+  # used: a dispatch input called anything at all, wired into a phase-1 gate,
+  # softens the one run that is supposed to answer red for everything.
+  dispatch_inputs="$(sed -n '/^  workflow_dispatch:/,/^  workflow_call:/p' "$wf" |
+    grep -oE '^      [a-z-]+:' | tr -d ' :' | sort -u | tr '\n' ' ')"
+  if [ "$dispatch_inputs" = "release " ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
-    printf 'FAIL  %-58s %s\n' "non-blocking offered on workflow_dispatch" \
-      "a hand-dispatched smoke must be able to conclude failure" >&2
+    printf 'FAIL  %-58s %s\n' "workflow_dispatch takes more than a release id" \
+      "[$dispatch_inputs] — a hand-dispatched smoke must answer red for both phases" >&2
+  fi
+
+  # The input that covered the WHOLE workflow must not come back under its old
+  # name: `non-blocking: true` would read as harmless and silence phase 1 again.
+  if [ "$(grep -c 'non-blocking' "$wf" || true)" -ne 0 ]; then
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "release-smoke.yaml still knows the workflow-wide switch" \
+      "non-blocking softened every phase; static-checks-advisory replaced it" >&2
   else pass=$((pass + 1)); fi
+
+  # THE NOTE THE STEP SUMMARY CARRIES has to agree with the wiring: inverting its
+  # condition tells the reader of a hand-dispatched run that a failure blocks
+  # nothing, which is the one thing a hand dispatch is not.
+  note="$(sed -n '/^  STATIC_NOTE:/,/^jobs:/p' "$wf")"
+  wrong=""
+  for want in 'inputs.static-checks-advisory == true' \
+              'Phase 1 (does it open) is not advisory' \
+              'it does fail THIS run'; do
+    printf '%s\n' "$note" | grep -qF -- "$want" || wrong="${wrong:+$wrong; }$want"
+  done
+  if [ -z "$wrong" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s missing: %s\n' "the advisory note no longer says what is true" "$wrong" >&2
+  fi
 else
   echo "SKIP  workflow/registry correspondence (no release-smoke.yaml)" >&2
 fi
@@ -730,6 +1014,62 @@ if [ -f "$rel" ]; then
     printf 'FAIL  %-58s %s\n' "a release tag channel msi-version.sh cannot derive" \
       "${unknown:-no tag patterns found at all}" >&2
   fi
+
+  # ── what a release run is allowed to soften ────────────────────────────────
+  # The release calls the smoke with the static phase advisory. Two ways that
+  # goes wrong and neither is visible in a green run: the call stops asking (and
+  # a red signing check starts blocking a release it never blocked), or it starts
+  # softening phase 1 as well (and a release run goes green with the app never
+  # having opened). The second is the one this file exists for.
+  # Bounded at the next job key, not run to EOF: smoke-test is last today, and a
+  # job added after it would fold in and be judged as part of the call.
+  stage3="$(sed -n '/^  smoke-test:/,/^  [a-z]/p' "$rel")"
+  if [ -n "$stage3" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the smoke-test job slice came out empty" "the job key was renamed" >&2
+  fi
+  in_stage "$stage3" '      static-checks-advisory: true' \
+    "a release run must ask for an advisory static phase"
+  if [ "$(printf '%s\n' "$stage3" | grep -cE '^ *(non-blocking|continue-on-error):' || true)" -ne 0 ]; then
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the release softens the whole smoke" \
+      "phase 1 would go green with the app never having opened" >&2
+  else pass=$((pass + 1)); fi
+  # AND THE CALL ITSELF MUST NOT BE CONDITIONAL ON HOW THE RUN STARTED. A
+  # skipped job is green, so `if: github.event_name == 'workflow_dispatch'` here
+  # would leave every release calling no smoke at all, with nothing red anywhere.
+  stage3_if="$(printf '%s\n' "$stage3" | grep -m1 '^    if:')"
+  if printf '%s\n' "$stage3_if" | grep -qF -- '!cancelled()' &&
+     [ "$(printf '%s\n' "$stage3_if" | grep -cE 'github\.event|inputs\.' || true)" -eq 0 ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the release can stop calling the smoke" \
+      "${stage3_if:-<no if: found>}" >&2
+  fi
+  in_stage "$stage3" '    uses: ./.github/workflows/release-smoke.yaml' \
+    "the release must call the smoke workflow"
+
+  # macos-latest moved to macOS 26, whose screen-capture rules differ from the
+  # ones phase 1 is proven against — and an unpinned BUILD ships an artifact the
+  # gates never tested. windows-latest/ubuntu-latest are not the same risk: the
+  # Windows lanes name both images explicitly and the Linux static lane runs in
+  # containers, so the host image is not what either asserts.
+  # Full-line comments stripped, because the label is named in the comments that
+  # explain the pinning; a trailing comment is left in place, since a line that
+  # still RUNS on it is exactly what this looks for.
+  #
+  # COUNTED, never `| grep -q`: under `pipefail` the -q exits on the first match
+  # and the upstream grep dies of SIGPIPE, so the pipeline reports 141 and the
+  # `if` reads it as "no match" — this assertion passed a mutation before it was
+  # written this way.
+  for f in "$wf" "$rel"; do
+    [ -f "$f" ] || continue
+    if [ "$(grep -v '^[[:space:]]*#' "$f" | grep -c 'macos-latest' || true)" -ne 0 ]; then
+      fail=$((fail + 1))
+      printf 'FAIL  %-58s %s\n' "$(basename "$f") rides the rolling macOS image" \
+        "pin macos-15 / macos-15-intel — the images phase 1 is proven on" >&2
+    else pass=$((pass + 1)); fi
+  done
 else
   echo "SKIP  release-tauri-app stage-1 checks (no release-tauri-app.yaml)" >&2
 fi
@@ -755,6 +1095,113 @@ for want in 'deb=true' 'appimage=true' 'exe=true' 'msi=true'; do
 done
 if [ "$(printf '%s\n' "$got" | grep -o '"arch"' | grep -c .)" = 2 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "full release should yield both macOS matrix rows" >&2; fi
+
+# ── phase 1's matrices ──────────────────────────────────────────────────────
+# Every installer the release carries gets a lane, and the row COUNT is the
+# assertion: a row quietly dropped from LINUX_PROVE_ROWS or WINDOWS_PROVE_ROWS is
+# an installer nobody ever launches again, and no lane goes red to say so.
+# Rows are counted by their kind key, which every row of both matrices carries.
+rows_of() { # <inventory output> <output name>
+  printf '%s\n' "$1" | grep "^$2=" | grep -o '"kind"' | grep -c . || true
+}
+if [ "$(rows_of "$got" prove_linux)" = 2 ] && [ "$(rows_of "$got" prove_windows)" = 3 ]; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a full release should launch every installer" \
+    "$(printf '%s\n' "$got" | grep '^prove_')" >&2
+fi
+# The .msi is the row that exists on ONE image while the .exe runs on two, so a
+# release without it must lose exactly that row and keep both NSIS lanes.
+got="$(inv "$(printf '%s\n' "$full" | grep -v -- x64_windows.msi)")"
+if [ "$(rows_of "$got" prove_windows)" = 2 ] &&
+   ! printf '%s\n' "$got" | grep '^prove_windows=' | grep -q '"msi"'; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a release with no .msi should lose one Windows lane" \
+    "$(printf '%s\n' "$got" | grep '^prove_windows=')" >&2
+fi
+got="$(inv "$(printf '%s\n' "$full" | grep -v -- linux.AppImage)")"
+if [ "$(rows_of "$got" prove_linux)" = 1 ] &&
+   printf '%s\n' "$got" | grep '^prove_linux=' | grep -q '"deb"'; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a release with no AppImage should keep the .deb lane" \
+    "$(printf '%s\n' "$got" | grep '^prove_linux=')" >&2
+fi
+# The .exe is the one asset TWO rows depend on, so it is the case where dropping
+# one artifact must remove more than one lane and still leave the .msi's.
+got="$(inv "$(printf '%s\n' "$full" | grep -v -- x64_windows.exe)")"
+if [ "$(rows_of "$got" prove_windows)" = 1 ] &&
+   printf '%s\n' "$got" | grep '^prove_windows=' | grep -q '"msi"'; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a release with no .exe should lose both NSIS lanes" \
+    "$(printf '%s\n' "$got" | grep '^prove_windows=')" >&2
+fi
+# AN INSTALLER NO SUFFIX CLAIMS. The all-four-absent guard cannot see a single
+# renamed artifact, and the lane for it would stop existing in silence.
+if inv_rc "$(printf '%s\n' "$full" | sed 's/aarch64_darwin/arm64_darwin/')"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a renamed installer read as a clean inventory" \
+    "its lane would silently stop running" >&2
+else pass=$((pass + 1)); fi
+# And the assets a release legitimately carries alongside them must not trip it:
+# the happ, the DNA, and the updater bundles with their signatures.
+if inv_rc "$full
+unyt.happ
+alliance.dna
+x_x64_linux.AppImage.tar.gz
+x_x64_linux.AppImage.tar.gz.sig
+x_x64_windows.nsis.zip
+x_x64_windows.msi.zip
+x_aarch64_darwin.app.tar.gz"; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a normal release tripped the unclaimed-installer guard" \
+    "$(inv "$full
+x_x64_windows.msi.zip" 2>&1 | tail -1)" >&2
+fi
+
+# ── the macOS images are pinned, not merely not-latest ──────────────────────
+# `macos-15` → `macos-26` is neither `-latest` nor proven: it would move the
+# gates to an image phase 1 has never answered on, and — in the build matrix —
+# ship an artifact against an SDK no gate ever tested. So the set is closed.
+got="$(inv "$full")"
+runners="$(printf '%s\n' "$got" | grep -o '"runner":"macos[^"]*"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')"
+if [ "$runners" = "macos-15 macos-15-intel " ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "the macOS lanes moved off their proven images" "[$runners]" >&2
+fi
+if [ -f "$rel" ]; then
+  strays=""
+  while IFS= read -r platform; do
+    [ -n "$platform" ] || continue
+    case " $runners" in *" $platform "*) ;; *) strays="${strays:+$strays }$platform" ;; esac
+  done <<EOF
+$(grep -v '^[[:space:]]*#' "$rel" | grep -oE 'platform: macos[a-z0-9.-]*' | sed 's/platform: //' | sort -u)
+EOF
+  if [ -z "$strays" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the release builds macOS on an image no gate tests" "$strays" >&2
+  fi
+fi
+# A row with a field missing must not become a lane with an empty runner or an
+# empty suffix — which would download nothing and launch it.
+# awk, not `sed 's/\t/'`: BSD sed reads \t in a pattern as a literal `t`, so on
+# macOS the copy would come out unmutated and this would assert nothing.
+short="$(mktemp)"
+awk '{ sub(/^windows-2025\tmsi\t/, "msi\t"); print }' "$here/release-inventory.sh" >"$short"
+# shellcheck disable=SC2016  # the row holds the variable's NAME; expanding it here would assert the wrong file
+if ! grep -q '^msi	\$MSI_SUFFIX' "$short"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "the short-row fixture did not mutate" \
+    "the assertion below would pass on an unchanged file" >&2
+elif UNYT_SMOKE_ASSETS="$full" bash "$short" 000 >/dev/null 2>&1; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a matrix row that lost a field still built a lane" \
+    "the lane would run with an empty runner or suffix" >&2
+else pass=$((pass + 1)); fi
+rm -f "$short"
+got="$(inv "$full")"
 
 # Each artifact absent is reported absent, and its neighbours stay present.
 while IFS='|' read -r drop key; do
@@ -809,9 +1256,8 @@ done
 
 echo "oracle regression: $pass passed, $fail failed"
 
-# The FAIL lines go to stderr inside a collapsed step log, and the job is
-# continue-on-error on a release — so nothing sends you looking. The annotation
-# is the only thing that surfaces on its own.
+# The FAIL lines go to stderr inside a collapsed step log — so nothing sends you
+# looking. The annotation is the only thing that surfaces on its own.
 if [ "$fail" -ne 0 ]; then
   echo "::error title=Smoke oracle regressed::$fail assertion(s) failed — the checks' own guarantees are not holding; see this step's log for which"
 fi
@@ -822,8 +1268,8 @@ fi
 # DELIBERATELY 2 BELOW a full run: the GLIBC-patch branch legitimately costs
 # exactly 2 on a machine that cannot patch a version, so a floor at the full
 # count would red a legitimate skip. Do not "tidy" it up to match.
-if [ "$pass" -lt 149 ]; then
-  echo "::error::only $pass assertions ran; expected at least 149 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 181 ]; then
+  echo "::error::only $pass assertions ran; expected at least 181 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

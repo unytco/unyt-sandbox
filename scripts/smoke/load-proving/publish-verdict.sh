@@ -3,11 +3,12 @@
 #
 #   publish-verdict.sh <verdict-file> <lane> <lane-exit-code>
 #
-# TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+# What colours a phase-1 job in release-smoke.yaml, and a phase-1 failure fails
+# the release run.
 #
-# One home for the mapping, so all six jobs conclude the same way. A LANE THAT
-# PRINTED NO VERDICT IS RED: this whole exercise exists because steps were going
-# green without answering, and a silent lane is exactly that failure.
+# One home for the mapping, so every phase-1 lane concludes the same way. A LANE
+# THAT PRINTED NO VERDICT IS RED: this whole exercise exists because steps were
+# going green without answering, and a silent lane is exactly that failure.
 #
 # A verdict line is `VERDICT <lane>: <WORD> — <why>`. Only the WORD decides, and
 # it is read as a FIELD, never matched as text: `state_note` and `screen_note`

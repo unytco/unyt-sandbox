@@ -3,7 +3,7 @@
 #
 #   x-largest-window.sh [pid]
 #
-# TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+# What prove-linux.sh aims release-smoke.yaml's phase-1 capture at.
 #
 # Prints one id (hex or decimal — ImageMagick's -window takes either) and exits
 # 0, or prints nothing and exits 1 when the display has no window worth aiming

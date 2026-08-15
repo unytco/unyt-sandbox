@@ -26,7 +26,8 @@ the colour variance this looks for.
 Pure standard library (zlib is in it), so no runner needs a package installed
 before it can answer.
 
-TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+The threshold every phase-1 lane of release-smoke.yaml judges its frame by, and
+a phase-1 failure fails the release run — so --self-test runs first in each lane.
 """
 
 import collections

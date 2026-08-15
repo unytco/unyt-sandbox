@@ -6,7 +6,8 @@
   prove-windows.ps1 -Artifact <installer.exe|installer.msi> -Shots <dir>
   prove-windows.ps1 -SelfTest
 
-  TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+  The Windows half of release-smoke.yaml's phase 1 (`opens-windows`), and a
+  failed lane fails the release run.
 
   BOTH INSTALLERS, ONE LANE. The release ships an NSIS .exe and an .msi, and they
   install to different places under different registry hives — so proving one

@@ -3,7 +3,8 @@
 #
 #   prove-linux.sh <artifact.deb|artifact.AppImage> <shots-dir>
 #
-# TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
+# The Linux half of release-smoke.yaml's phase 1 — one lane per installer
+# (`opens-linux`), and a failed lane fails the release run.
 #
 # NOT a pristine container, unlike run-smoke.sh: the question here is whether the
 # app paints, not whether it declares its dependencies, and the container adds an

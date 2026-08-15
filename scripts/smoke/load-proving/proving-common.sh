@@ -2,8 +2,10 @@
 # The negative control, the watch loop and the verdict, shared by prove-linux.sh
 # and prove-macos.sh. Sourced, never run.
 #
-# TEMPORARY — scaffolding for .github/workflows/zz-TEMPORARY-load-proving.yaml.
-# Deleting that workflow and this directory leaves the repo as it was.
+# PHASE 1 of release-smoke.yaml — "does it open", the half of the release smoke
+# that installs a shipped artifact, launches it and photographs the result. A
+# failed phase-1 lane fails the release run. Phase 2, the static checks, lives in
+# the scripts one directory up.
 #
 # THE VERDICT IS TWO INDEPENDENT FACTS, and PROVEN needs both:
 #   A. the app got as far as a screen — its log reaches LairAwaitingPassword or a

@@ -118,11 +118,17 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - platform: macos-latest
+          # macos-15, NOT macos-latest: that label moved to macOS 26, so the SDK
+          # this ships against would change with the image and no commit to point
+          # at — and the release gates that install and launch these builds run on
+          # macos-15 / macos-15-intel (scripts/smoke/release-inventory.sh pins
+          # them). Both targets on the arm64 image, as macos-latest was: the
+          # x86_64 leg cross-compiles.
+          - platform: macos-15
             args: "--target aarch64-apple-darwin"
             arc_factor: default
             label: macos-arm64
-          - platform: macos-latest
+          - platform: macos-15
             args: "--target x86_64-apple-darwin"
             arc_factor: default
             label: macos-x64
@@ -269,10 +275,15 @@ jobs:
         if: always() && matrix.config.platform == 'ubuntu-22.04'
         run: df -h /
 
-  # Nothing needs this; non-blocking keeps a red check out of the run's
-  # conclusion. Not `workflow_run` — that only fires on the default branch.
+  # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
+  # human publishes it, so the run's colour is what tells them, and it must not
+  # read green when the app never opened. Phase 2 keeps the advisory behaviour it
+  # has always had here — the two phases are release-smoke.yaml's header.
+  #
+  # Nothing `needs` this job either way. Not `workflow_run` — that only fires on
+  # the default branch.
   smoke-test:
-    name: Stage 3 - smoke the artifacts
+    name: Stage 3 - does it open, and the static checks
     needs: [publish-happ, release-tauri-app]
     # Not gated on the build job — one failed row would suppress every lane.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
@@ -280,8 +291,9 @@ jobs:
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}
-      # Only here: a hand-dispatched release-smoke must answer red.
-      non-blocking: true
+      # Only here, and only over phase 2: a hand-dispatched release-smoke must
+      # answer red for everything, and no switch may soften phase 1.
+      static-checks-advisory: true
     # Explicit, not inherit: the caller holds Apple signing credentials.
     secrets:
       GIT_PAT: ${{ secrets.GIT_PAT }}
