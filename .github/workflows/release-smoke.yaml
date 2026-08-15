@@ -81,7 +81,7 @@ jobs:
   # below can still come out red, phase 1's blocking wiring included, so an
   # advisory oracle would make phase 1's guarantee unenforceable.
   inventory:
-    name: "setup for both phases (release inventory + distro list + oracle)"
+    name: "setup test"
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -159,7 +159,7 @@ jobs:
   # test-oracle.sh asserts all three, and that each lane still reaches a prove
   # script and a verdict.
   opens-linux:
-    name: "Phase 1 · does it open — linux (${{ matrix.kind }})"
+    name: "test opens app — linux (${{ matrix.kind }})"
     needs: inventory
     # As phase 2: gated on the OUTPUT, not on `needs.*.result`, and `!cancelled()`
     # so a lane is not deleted by a red sibling. No rows means the release ships
@@ -240,7 +240,7 @@ jobs:
   # off a frame of the app's own screen, or WINDOW-ONLY off the window list —
   # green, and explicit that paint is unverified. prove-macos.sh carries why.
   opens-macos:
-    name: "Phase 1 · does it open — macos (${{ matrix.arch }})"
+    name: "test opens app — macos (${{ matrix.arch }})"
     needs: inventory
     if: >-
       ${{ !cancelled()
@@ -309,7 +309,7 @@ jobs:
   # Three lanes for two installers, and the asymmetry is the inventory's —
   # WINDOWS_PROVE_ROWS carries the reasoning.
   opens-windows:
-    name: "Phase 1 · does it open — windows (${{ matrix.kind }} on ${{ matrix.runner }})"
+    name: "test opens app — windows (${{ matrix.kind }} on ${{ matrix.runner }})"
     needs: inventory
     if: >-
       ${{ !cancelled()
@@ -400,7 +400,7 @@ jobs:
   # phase never has to launch anything to answer, and phase 1 above is what
   # launches. Advisory when the caller asks — see `static-checks-advisory`.
   static-linux:
-    name: "Phase 2 · static checks — linux install (${{ matrix.image }})"
+    name: "test static checks — linux install (${{ matrix.image }})"
     needs: inventory
     # !cancelled() is load-bearing: a job `if` without a status function means
     # `success() && <expr>`, which would skip this lane on a red setup job — and
@@ -574,7 +574,7 @@ jobs:
   # Arch must match the runner; rows come from the inventory, which pins the
   # image (see MACOS_ROWS — never macos-latest).
   static-macos:
-    name: "Phase 2 · static checks — macos (${{ matrix.arch }})"
+    name: "test static checks — macos (${{ matrix.arch }})"
     needs: inventory
     if: >-
       ${{ !cancelled()
@@ -706,7 +706,7 @@ jobs:
             head -50 "$table"
             echo '```'
             echo ""
-            echo "What the artifact is — signing, notarization, architecture, deployment target. Whether it opens is phase 1's \`does it open — macos\` lane. $STATIC_NOTE"
+            echo "What the artifact is — signing, notarization, architecture, deployment target. Whether it opens is phase 1's \`test opens app — macos\` lane. $STATIC_NOTE"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
             echo "::error title=macOS release smoke failed::see the step list for which check failed"
@@ -731,7 +731,7 @@ jobs:
   # NSIS .exe and an MSI land in different places. This lane installs, examines
   # and uninstalls; launching the result is phase 1's opens-windows.
   static-windows:
-    name: "Phase 2 · static checks — windows install (${{ matrix.runner }})"
+    name: "test static checks — windows install (${{ matrix.runner }})"
     needs: inventory
     if: >-
       ${{ !cancelled()
@@ -954,7 +954,7 @@ jobs:
             head -100 "$table"
             echo '```'
             echo ""
-            echo "An install/uninstall cycle plus static checks — see \`scripts/smoke/check-windows.ps1\`. Whether the installed app opens is phase 1's \`does it open — windows\` lanes. $STATIC_NOTE"
+            echo "An install/uninstall cycle plus static checks — see \`scripts/smoke/check-windows.ps1\`. Whether the installed app opens is phase 1's \`test opens app — windows\` lanes. $STATIC_NOTE"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
             echo "::error title=Windows release smoke failed::see the step list for which check failed"

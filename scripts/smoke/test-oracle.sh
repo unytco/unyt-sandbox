@@ -968,6 +968,205 @@ opens-macos|prove-macos.sh|"$DMG"
 opens-windows|prove-windows.ps1|-Artifact $env:INSTALLER
 PHASE1
 
+  # ── and the name each lane goes under in the Checks list ───────────────────
+  # THE ID DECLARES THE PHASE TO THIS FILE; THE NAME DECLARES IT TO A HUMAN, and
+  # the Checks list is the only one of the two anybody triaging a red release
+  # ever sees. A blocking lane under a name that reads like the advisory phase —
+  # or the reverse — sends that reader to the wrong lane, and every assertion
+  # above is satisfied by it, because every one of them reads the id.
+  #
+  # A PREFIX, not the whole name: the per-target suffix is the lane's to write.
+  #
+  # `^    name:` is only ever the job's: a step's is `      - name:`, six in.
+  # Either quote style, or none — the yaml admits all three, and a name this
+  # could not read would red a workflow that is correct.
+  job_name() { # <job id> — its display name, unquoted
+    job_body "$1" | sed -n 's/^    name: *//p' | head -1 | sed "s/^['\"]//; s/['\"]\$//"
+  }
+  misnamed=""
+  while read -r job _; do
+    [ -n "$job" ] || continue
+    case "$job" in
+      opens-*) want="test opens app — " ;;
+      static-*) want="test static checks — " ;;
+      inventory) want="setup test" ;;
+      # An id in neither phase already failed the block above; failing it twice
+      # would just name the same job under a second heading.
+      *) continue ;;
+    esac
+    got="$(job_name "$job")"
+    case "$got" in
+      "$want"*) ;;
+      *) misnamed="${misnamed:+$misnamed }$job(reads '${got:-<unnamed>}', not '$want…')" ;;
+    esac
+  done <<EOF
+$phases
+EOF
+  if [ -z "$misnamed" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a lane's name and its id disagree about the phase" "$misnamed" >&2
+  fi
+
+  # ── and every ROW of a matrixed lane must render a DIFFERENT name ──────────
+  # `${{ matrix.x }}` BEING IN THE NAME IS NOT THE PROPERTY. opens-windows runs
+  # three rows over {runner, kind}: a name interpolating only `kind` still holds
+  # the substring, and renders windows-2022/nsis and windows-2025/nsis
+  # identically — a red Checks list in which the failing installer cannot be
+  # told from the passing one. So the rows are RESOLVED and the rendered names
+  # compared, which is the thing actually being claimed.
+  full_assets='a_linux.deb
+a_linux.AppImage
+a_aarch64_darwin.dmg
+a_x64_darwin.dmg
+a_x64_windows.exe
+a_x64_windows.msi'
+  inv_out="$(UNYT_SMOKE_ASSETS="$full_assets" bash "$here/release-inventory.sh" 000 2>/dev/null)"
+  # <json array> → one row per line, as `key=value;key=value;`
+  #
+  # SPLIT ON `}` WITH A TRAILING NEWLINE GUARANTEED, not `sed 's/},{/}\n{/'`:
+  # sed leaves the last row without a newline, `read` discards a final partial
+  # line, and the closing row of every lane vanishes — this parser did exactly
+  # that, and the collision check silently examined 2 of the 3 Windows rows.
+  json_rows() {
+    printf '%s\n' "$1" | tr '}' '\n' | while IFS= read -r row; do
+      # First colon only, so a value like `ubuntu:22.04` survives intact.
+      pairs="$(printf '%s\n' "$row" | grep -oE '"[a-z_]+":"[^"]*"' |
+        sed 's/"//g; s/:/=/' | tr '\n' ';')"
+      [ -n "$pairs" ] || continue
+      printf '%s\n' "$pairs"
+    done
+  }
+  render_row() { # <name template> <key=value;…> — the name as GitHub renders it
+    # NO MATRIX VALUE EVER REACHES sed. Interpolated into `s|…|$v|`, a value
+    # holding `|` or `\1` aborts the command and renders the row EMPTY, and an
+    # empty row is counted by neither total below — so it leaves both tallies
+    # agreeing and takes the collision it was supposed to expose with it. An `&`
+    # is worse: it silently puts the placeholder back. So the placeholder is
+    # normalised by a sed carrying no data, and bash does the substituting.
+    local out rest="$2" kv k v
+    out="$(printf '%s' "$1" | sed 's/\${{ *matrix\.\([a-z_]*\) *}}/${{matrix.\1}}/g')"
+    # Every row ends in `;`, so this consumes the whole string. No IFS splitting
+    # and no `$2` left unquoted: a value is data, never a glob.
+    while [ -n "$rest" ]; do
+      kv="${rest%%;*}"; rest="${rest#*;}"
+      [ -n "$kv" ] || continue
+      k="${kv%%=*}"; v="${kv#*=}"
+      out="${out//"\${{matrix.$k}}"/$v}"
+    done
+    printf '%s\n' "$out"
+  }
+  literal_rows() { # <job body> — rows of a matrix written literally in the yaml
+    local decls
+    decls="$(printf '%s\n' "$1" | sed -n 's/^        \([a-z_]*\): \[\(.*\)\]$/\1|\2/p')"
+    # ONE KEY ONLY. Two would be a cross product, and emitting each key's values
+    # as rows of their own would assert against a matrix GitHub does not run.
+    [ "$(printf '%s\n' "$decls" | grep -c . || true)" -eq 1 ] || return 1
+    printf '%s\n' "$decls" | while IFS='|' read -r key vals; do
+      printf '%s\n' "$vals" | tr -d ' ' | tr ',' '\n' |
+        while IFS= read -r v; do [ -n "$v" ] || continue; printf '%s=%s;\n' "$key" "$v"; done
+    done
+  }
+  rows_for() { # <job id> — its matrix rows; non-zero for a lane this cannot resolve
+    # THE SOURCE THE JOB ITSELF NAMES, never a table keyed on the job id. A
+    # second home for "which rows does this lane run" is resolved confidently
+    # against rows GitHub will not run the moment a lane is re-sourced — and
+    # both halves move together, so the gate/matrix correspondence check above
+    # stays green while this one compares the wrong names.
+    local body src keys
+    body="$(job_body "$1")"
+    src="$(printf '%s\n' "$body" |
+      grep -oE 'fromJSON\(needs\.inventory\.outputs\.[a-z_]+' | cut -d. -f4 | head -1)"
+    case "$src" in
+      prove_linux | prove_windows | dmgs)
+        json_rows "$(printf '%s\n' "$inv_out" | sed -n "s/^$src=//p")" ;;
+      # This one the setup job builds in a shell step of its own rather than
+      # taking from the inventory, so the rows are the distro list, slugged the
+      # way that step slugs it — and the keys are read back off the step, since
+      # renaming one there would leave this resolving a matrix that is gone.
+      # </dev/null: this runs inside a loop reading the job list on stdin, and a
+      # callee that read it would silently end that loop early.
+      images)
+        keys="$(job_body inventory | grep -oE '\\"[a-z_]+\\":' |
+          tr -d '\\":' | sort -u | tr '\n' ' ')"
+        [ "$keys" = "image slug " ] || return 1
+        bash "$here/run-smoke.sh" --print-images </dev/null | while IFS= read -r i; do
+          [ -n "$i" ] || continue
+          printf 'image=%s;slug=%s;\n' "$i" "$(printf '%s' "$i" | tr ':/' '--')"
+        done ;;
+      # No fromJSON anywhere in the job: the matrix is written out in the yaml.
+      '') literal_rows "$body" ;;
+      *) return 1 ;;
+    esac
+  }
+  collided=""
+  unwired=""
+  all_names=""
+  matrixed=0
+  resolved=0
+  while read -r job _; do
+    [ -n "$job" ] || continue
+    case "$job" in opens-* | static-*) ;; *) continue ;; esac
+    printf '%s\n' "$(job_body "$job")" | grep -qE '^      matrix:' || continue
+    matrixed=$((matrixed + 1))
+    name="$(job_name "$job")"
+    rows="$(rows_for "$job")" || { unwired="${unwired:+$unwired }$job"; continue; }
+    rendered="$(while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      render_row "$name" "$r"
+    done <<ROWS
+$rows
+ROWS
+)"
+    n="$(printf '%s\n' "$rendered" | grep -c . || true)"
+    u="$(printf '%s\n' "$rendered" | sort -u | grep -c . || true)"
+    resolved=$((resolved + n))
+    all_names="$all_names$rendered
+"
+    { [ "$n" -gt 0 ] && [ "$n" = "$u" ]; } ||
+      collided="${collided:+$collided }$job($n row(s) render $u distinct name(s))"
+  done <<EOF
+$phases
+EOF
+  if [ -z "$collided" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "two rows of a lane render the same check name" "$collided" >&2
+  fi
+  # A LANE THIS CANNOT RESOLVE IS A FAILURE, not a lane to skip: quietly passing
+  # over the one matrix it does not recognise is how the check above stops
+  # checking the next lane somebody adds.
+  if [ -z "$unwired" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a matrixed lane whose rows nothing here resolves" "$unwired" >&2
+  fi
+  # AND A FLOOR ON HOW MANY IT EXAMINED. The `matrix:` detector above is anchored
+  # at six spaces, and a miss skips the lane rather than failing it — so without
+  # this, reindenting the yaml would exempt every lane and still read green.
+  if [ "$matrixed" -ge 6 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the matrixed-lane check examined too few lanes" \
+      "$matrixed of the 6 matrixed lanes; the rest were skipped, not checked" >&2
+  fi
+  # AND A FLOOR ON THE ROWS, because the lane count says nothing about how many
+  # rows of each were read. A parser that drops the last row of every lane still
+  # examines all six and still finds no collision among what is left of them —
+  # which is precisely the bug json_rows shipped with. 15 is the full set today
+  # (2 linux + 2 macos + 3 windows launches, 4 images + 2 macos + 2 windows
+  # static); a floor, not the count, because a new distro row legitimately adds.
+  if [ "$resolved" -ge 15 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the name check resolved fewer rows than exist" \
+      "$resolved row(s) across $matrixed lane(s); expected at least 15" >&2
+  fi
+  # AND ACROSS LANES, not only within one. Two lanes rendering the same name is
+  # the same unreadable Checks list, and neither lane's own comparison can see
+  # it — every check above is satisfied by two lanes that agree.
+  utot="$(printf '%s' "$all_names" | sort -u | grep -c . || true)"
+  if [ "$resolved" -gt 0 ] && [ "$resolved" = "$utot" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "two lanes render the same check name" \
+      "$resolved row(s) across every lane render $utot distinct name(s)" >&2
+  fi
+
   # The setup job is blocking for phase 1's sake, which is worth nothing if the
   # oracle step is softened or deleted — this file cannot notice that it was
   # never called, so it asserts the call site instead.
@@ -1054,13 +1253,7 @@ LAUNCHES
   # or one release-inventory.sh never prints, is EMPTY at runtime — the gate
   # reads false, the lane skips, and nothing says why. Both directions, because
   # the two ways to lose a lane forever are a typo here and a rename there.
-  printed="$(UNYT_SMOKE_ASSETS='a_linux.deb
-a_linux.AppImage
-a_aarch64_darwin.dmg
-a_x64_darwin.dmg
-a_x64_windows.exe
-a_x64_windows.msi' bash "$here/release-inventory.sh" 000 2>/dev/null |
-    grep -oE '^[a-z_]+=' | tr -d '=')"
+  printed="$(printf '%s\n' "$inv_out" | grep -oE '^[a-z_]+=' | tr -d '=')"
   declared="$(sed -n '/^    outputs:/,/^    steps:/p' "$wf" | grep -oE '^      [a-z_]+:' | tr -d ' :')"
   missing=""
   refs="$(grep -oE 'needs\.inventory\.outputs\.[a-z_]+' "$wf" | cut -d. -f4 | sort -u)"
@@ -1253,6 +1446,12 @@ if [ -f "$rel" ]; then
   fi
   in_stage "$stage3" '      static-checks-advisory: true' \
     "a release run must ask for an advisory static phase"
+  # THIS NAME IS PAID FOR SIXTEEN TIMES. GitHub prefixes every called job with
+  # it, so a description here is a description on every line of the Checks list,
+  # pushing the part that differs off the end. What each lane does is
+  # release-smoke.yaml's to say, and the assertions there hold it to it.
+  in_stage "$stage3" '    name: Stage 3' \
+    "the stage-3 name prefixes all 16 smoke lanes, so it stays the stage"
   if [ "$(printf '%s\n' "$stage3" | grep -cE '^ *(non-blocking|continue-on-error):' || true)" -ne 0 ]; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the release softens the whole smoke" \
@@ -1490,12 +1689,12 @@ fi
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
 # container-never-ran bug one level up. Raise it when adding assertions.
-# DELIBERATELY 3 BELOW a full run of 228: the GLIBC-patch branch legitimately
+# DELIBERATELY 3 BELOW a full run of 235: the GLIBC-patch branch legitimately
 # costs exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated. A floor at the full
 # count would red both legitimate skips. Do not "tidy" it up to match.
-if [ "$pass" -lt 225 ]; then
-  echo "::error::only $pass assertions ran; expected at least 225 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 232 ]; then
+  echo "::error::only $pass assertions ran; expected at least 232 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

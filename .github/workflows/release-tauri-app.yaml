@@ -285,7 +285,10 @@ jobs:
   # Nothing `needs` this job either way. Not `workflow_run` — that only fires on
   # the default branch.
   smoke-test:
-    name: Stage 3 - does it open, and the static checks
+    # JUST THE STAGE. GitHub prefixes every called job with this one, so anything
+    # said here is said again on all 16 lines of the Checks list — and what each
+    # lane does is the called job's to say. release-smoke.yaml names them.
+    name: Stage 3
     needs: [publish-happ, release-tauri-app]
     # Not gated on the build job — one failed row would suppress every lane.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
