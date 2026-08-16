@@ -260,7 +260,9 @@ class Lane:
         self.saw_window = False
         self.reached = None
         self.failed_state = None
-        self.evidence = None
+        # Whether the app is on screen by this platform's own measure. A flag,
+        # not a description: what it was decided FROM is the platform's to keep.
+        self.on_screen = False
         self.control_status = {}
         self.handles = []
         self.re_ready = re.compile(shell_value("UNYT_RE_BACKEND_READY"))
@@ -404,10 +406,9 @@ class Lane:
     def seek_evidence(self, slug, force=False):
         """What counts as the app being on screen — the one thing a platform
         overrides. A photograph of its window is the default."""
-        taken = self.seek_frame(slug, force)
-        if not taken:
+        if not self.seek_frame(slug, force):
             return False
-        self.evidence = "frame " + taken
+        self.on_screen = True
         return True
 
     def seek_paint(self, prefix, budget):
@@ -455,10 +456,10 @@ class Lane:
 
             # Forced once the state is reached: the frames from the window in
             # which the prompt is actually on screen are worth the budget.
-            if not self.evidence:
+            if not self.on_screen:
                 self.seek_evidence("t%ds" % elapsed, bool(self.reached))
 
-            if self.reached and self.evidence:
+            if self.reached and self.on_screen:
                 return
             if self.reached and time.monotonic() - reached_at >= self.post_seconds:
                 note(
@@ -798,14 +799,12 @@ class LinuxLane(Lane):
         # because this display is private to this run.
         found = []
         search = run(["xdotool", "search", "--onlyvisible", "--pid", str(self.app_pid)])
-        # Exit 1 is "no window", which is an answer about the app. Anything else
-        # is the probe failing, and reading that as "the app mapped no window"
-        # would blame the artifact for our tooling.
-        if search.returncode > 1:
-            note(
-                "::warning::xdotool search exited %d: %s"
-                % (search.returncode, search.stderr.strip())
-            )
+        # xdotool exits 1 both for "no window" and for "no display", so the code
+        # says nothing; only its stderr tells the probe failing apart from the
+        # app owning nothing, and reading the first as the second would blame
+        # the artifact for our tooling.
+        if search.stderr.strip():
+            note("::warning::xdotool search: %s" % search.stderr.strip())
         for window in search.stdout.split():
             shell = run(["xdotool", "getwindowgeometry", "--shell", window]).stdout
             size = dict(
@@ -1161,7 +1160,7 @@ class MacosLane(Lane):
         note("OK: the app owns an on-screen window — " + line)
         self.saw_window = True
         self.window_line = line
-        self.evidence = line
+        self.on_screen = True
         return True
 
     def after_watch(self):
@@ -1200,9 +1199,9 @@ class MacosLane(Lane):
         self.capture = self.capture_window
         painted = self.seek_paint("pixel", budget)
         if painted:
-            # The slug seek_frame returned, never self.evidence: that still
-            # holds the window-list line the watch put there, and PROVEN may
-            # only ever cite a photograph.
+            # The slug seek_frame returned, and nothing else: PROVEN may only
+            # ever cite a photograph, and the watch's own answer was a window
+            # list.
             self.painted_frame = "frame " + painted
             note(
                 "OK: a window-scoped capture is the app's own screen (%s)"
@@ -1491,18 +1490,16 @@ class WindowsLane(Lane):
                 "there is no file at '%s', so nothing was installed and nothing could have been"
                 % self.artifact,
             )
+        size = os.path.getsize(self.artifact)
         self.artifact = to_windows_path(os.path.abspath(self.artifact))
-        note(
-            "artifact: %s (%s, %d bytes)"
-            % (self.artifact, self.kind, os.path.getsize(self.artifact))
-        )
+        note("artifact: %s (%s, %d bytes)" % (self.artifact, self.kind, size))
         # A runner whose agent sits on a non-interactive window station has no
         # visible desktop, and every frame would be black for a reason that has
         # nothing to do with the artifact.
         station = ""
         for line in self.helper():
             if line.startswith("STATION "):
-                station = line.split(None, 1)[1]
+                station = line.partition(" ")[2].strip()
         # No station line at all is the helper failing, not a station named "".
         if not station:
             raise Answer(

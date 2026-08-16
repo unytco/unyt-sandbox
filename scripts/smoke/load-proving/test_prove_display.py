@@ -27,18 +27,27 @@ import frames
 import prove
 import test_frames as build
 
-# `display` is the stand-in app, and it is ImageMagick 6's: 7 ships `magick`
-# and no `display`, so it is checked for by name rather than assumed with the
-# rest of the toolkit.
-TOOLS = ("Xvfb", "xdotool", "xwininfo", "display")
+TOOLS = ("Xvfb", "xdotool", "xwininfo")
 WINDOW = 800
 AWAITING = "Status update: Starting -> LairAwaitingPassword { is_initial_setup: true }"
+
+
+def viewer():
+    """The stand-in app: something that maps a window with our pixels in it.
+    ImageMagick 6 ships `display`; 7 ships it as a subcommand of `magick`."""
+    if shutil.which("display"):
+        return ["display"]
+    if shutil.which("magick"):
+        return ["magick", "display"]
+    return None
 
 
 def absent_tools():
     missing = [tool for tool in TOOLS if not shutil.which(tool)]
     if not (shutil.which("import") or shutil.which("magick")):
         missing.append("import")
+    if not viewer():
+        missing.append("display")
     return missing
 
 
@@ -64,16 +73,18 @@ class ARealDisplay(unittest.TestCase):
         image = Image.new("RGB", (WINDOW, WINDOW))
         image.putdata(pixels)
         image.save(window)
+        show = viewer()
         app = Path(self.dir) / "app.sh"
         app.write_text(
-            "#!/bin/sh\necho '%s'\nexec display -immutable %s\n" % (log, window)
+            "#!/bin/sh\necho '%s'\nexec %s -immutable %s\n"
+            % (log, " ".join(show), window)
         )
         app.chmod(0o755)
 
         class Standin(prove.LinuxLane):
             def install(self):
                 self.launch_argv = [str(app)]
-                self.proc_name = "display"
+                self.proc_name = show[0]
 
         # The file only has to exist: this stand-in never installs it.
         artifact = Path(self.dir) / "artifact.deb"

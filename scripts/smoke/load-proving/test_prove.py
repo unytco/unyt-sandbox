@@ -19,6 +19,7 @@ import io
 import re
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -99,7 +100,8 @@ class Quiet(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        self.stderr = contextlib.redirect_stderr(io.StringIO())
+        self.noise = io.StringIO()
+        self.stderr = contextlib.redirect_stderr(self.noise)
         self.stderr.__enter__()
         self.addCleanup(self.stderr.__exit__, None, None, None)
 
@@ -170,11 +172,56 @@ class Verdicts(Quiet):
         self.assertEqual("CANNOT PROVE", word)
 
     def test_a_backend_that_failed_after_reaching_its_state(self):
-        # The realistic shape of a conductor that crashed behind the prompt: the
-        # failure is looked for first on every poll, so it wins.
-        word, why = self.conclude(log=AWAITING + "\n" + FAILED)
+        # A conductor that crashed BEHIND the prompt: the state was reached, the
+        # window painted, and the run is still not a pass. Both halves have to
+        # be true at once for this to be the case it names, so the failure
+        # arrives on a later poll than the state does.
+        polls = []
+
+        def log():
+            polls.append(1)
+            return AWAITING if len(polls) < 3 else AWAITING + "\n" + FAILED
+
+        lane = self.fake(log=log, frame="flat")
+        lane.timeout_seconds = 30
+        lane.post_seconds = 30
+        lane.max_shots = 99
+        lane.watch()
+        self.assertTrue(lane.reached and lane.failed_state)
+        word, why = lane.verdict()
         self.assertEqual("NOT PROVEN", word)
         self.assertIn("failure state", why)
+
+    def test_and_a_painted_window_does_not_rescue_it(self):
+        # EVERY OTHER CONDITION FOR PROVEN IS SATISFIED HERE: the state was
+        # reached, and the frame the failure poll takes is the app's own screen.
+        # A painted screen with a failed backend behind it is a different bug,
+        # not a pass, and this is the only shape that says so.
+        polls = []
+
+        def log():
+            polls.append(1)
+            return AWAITING if len(polls) < 3 else AWAITING + "\n" + FAILED
+
+        lane = self.fake(log=log, frame="flat")
+        lane.timeout_seconds = 30
+        lane.post_seconds = 30
+        lane.max_shots = 99
+
+        def capture(slug):
+            lane.saw_window = True
+            fixture = "app" if len(polls) >= 3 else "flat"
+            shutil.copy(FIXTURES[fixture], lane.verdict_dir / (slug + ".png"))
+            return True
+
+        lane.capture = capture
+        lane.watch()
+        self.assertTrue(lane.reached and lane.failed_state)
+        results = frames.report(sorted(lane.verdict_dir.glob("*.png")), io.StringIO())
+        self.assertEqual(
+            0, frames.exit_code(results), "no frame painted, so this proves nothing"
+        )
+        self.assertEqual("NOT PROVEN", lane.verdict()[0])
 
     def test_the_watch_keeps_looking_until_the_state_arrives(self):
         polls = []
@@ -201,7 +248,8 @@ class EvidenceThatIsNotAPhotograph(Quiet):
         def seek_evidence(slug, force=False):
             if not found:
                 return False
-            lane.evidence = 'WINDOW 7 0 0 800 800 0 "Unyt Sandbox"'
+            lane.window_line = 'WINDOW 7 0 0 800 800 0 "Unyt Sandbox"'
+            lane.on_screen = True
             return True
 
         lane.seek_evidence = seek_evidence
@@ -210,20 +258,21 @@ class EvidenceThatIsNotAPhotograph(Quiet):
     def test_a_window_list_is_evidence_the_watch_accepts(self):
         lane = self.lane(AWAITING, True)
         lane.watch()
-        self.assertIn("WINDOW 7", lane.evidence)
+        self.assertIn("WINDOW 7", lane.window_line)
+        self.assertTrue(lane.on_screen)
 
     def test_no_window_means_the_watch_is_not_satisfied(self):
         lane = self.lane(AWAITING, False)
         lane.watch()
-        self.assertIsNone(lane.evidence)
+        self.assertFalse(lane.on_screen)
 
     def test_a_window_with_no_state_is_still_not_enough(self):
         # Both halves or nothing: the window is there and the log never said the
         # app got anywhere, which is half an answer.
         lane = self.lane("", True)
         lane.watch()
-        self.assertTrue(lane.evidence)
-        self.assertFalse(lane.reached and lane.evidence)
+        self.assertIsNone(lane.reached)
+        self.assertNotIn(lane.verdict()[0], ("PROVEN", "WINDOW-ONLY"))
 
 
 class SeekPaint(Quiet):
@@ -248,19 +297,16 @@ class SeekPaint(Quiet):
 
         lane.capture = capture
         lane.attempts = attempts
-        # Seeded the way macOS arrives here — its watch has already put the
-        # window list in evidence — so a loop that stopped setting it would be
-        # caught holding a stale answer rather than an empty one.
-        lane.evidence = 'WINDOW 7 0 0 800 800 0 "Unyt Sandbox"'
+        # Seeded the way macOS arrives here: its watch has already answered
+        # "on screen" off the window list.
+        lane.on_screen = True
         return lane
 
     def test_a_window_that_is_the_apps_screen_at_once(self):
         lane = self.lane(1)
-        # A pass has to NAME THE FRAME, and must not touch the evidence the
-        # watch already recorded: macOS quotes one of them in a PROVEN line and
-        # the other in a WINDOW-ONLY one, and they are different claims.
+        # A pass has to NAME THE FRAME: macOS cites it in a PROVEN line, and
+        # what the watch already answered is a different claim.
         self.assertRegex(lane.seek_paint("pixel", 1) or "", r"^\d+-pixel-t\d+s$")
-        self.assertEqual('WINDOW 7 0 0 800 800 0 "Unyt Sandbox"', lane.evidence)
 
     def test_a_window_that_paints_on_the_third_attempt(self):
         lane = self.lane(3)
@@ -481,7 +527,9 @@ class TheMacLanesPixelPhase(Quiet):
 
     def test_a_window_that_is_not_the_splashs_size_says_so(self):
         lane = self.lane("app")
-        lane.window_line = 'WINDOW 7 0 0 300 250 0 "Unyt Sandbox"'
+        # A size largest_window() can actually return: the main window replaces
+        # the splash mid-run and is a different shape.
+        lane.window_line = 'WINDOW 7 0 0 1200 900 0 "Unyt Sandbox"'
         word, why = lane.verdict()
         self.assertEqual("WINDOW-ONLY", word)
         self.assertIn("not the 800x800 the splash declares", why)
@@ -496,8 +544,8 @@ class TheMacLanesPixelPhase(Quiet):
             "KEYS   total=3 pid=3 bounds=3 layer=3 name=1\n"
             "GRANT  screen-recording=granted\n"
             'WINDOW 3 0 0 300 200 0 "Unyt Sandbox" \n'
-            'WINDOW 7 0 0 800 800 0 "Unyt Sandbox" Unyt\n'
             'WINDOW 9 0 0 640 480 0 "Unyt Sandbox" \n'
+            'WINDOW 7 0 0 800 800 0 "Unyt Sandbox" Unyt\n'
         )
         lane.window_info = lambda pid=0: subprocess.CompletedProcess(
             [], 0, stdout=dump, stderr=""
@@ -556,20 +604,53 @@ class TheWindowsLanesDecisions(Quiet):
         self.assertEqual(lane.DECLARED, asked[1]["RectW"])
 
     def test_the_helper_tokens_this_lane_reads_are_the_ones_it_prints(self):
-        # Nothing else joins them: rename one in the PowerShell and the lane
-        # falls through to the CopyFromScreen frame, which CAN be the desktop.
+        # NOTHING ELSE JOINS THEM. Rename one on either side and the lane stops
+        # seeing a frame it was handed: a control that silently never wrote, or
+        # a CopyFromScreen frame — which CAN be the desktop — promoted to the
+        # evidence PrintWindow was supposed to give.
         helper = (prove.HERE / "window-capture.ps1").read_text()
-        for token in (
-            "WROTE $What",
-            "'print'",
-            "'copy'",
-            "'desktop'",
-            "'rect'",
-            '"STATION ',
-            '"WINDOW ',
+        self.assertEqual(
+            {"desktop", "rect", "print", "copy"},
+            set(re.findall(r"Report '(\w+)'", helper)),
+        )
+        for line in ("WROTE $What", '"STATION ', '"WINDOW '):
+            with self.subTest(line=line):
+                self.assertIn(line, helper)
+
+    def test_and_a_frame_reported_under_any_other_tag_is_not_this_lanes(self):
+        lane = self.lane()
+        for slug, tag in (
+            ("00-control-desktop", "desktop"),
+            ("00-control-splash-rect", "rect"),
         ):
-            with self.subTest(token=token):
-                self.assertIn(token, helper)
+            path = lane.context_dir / (slug + ".png")
+            path.write_bytes(b"")
+            lane.helper = lambda tag=tag, **arguments: ["WROTE %s x" % tag]
+            self.assertTrue(lane.control_capture(slug, path), slug)
+            lane.helper = lambda **arguments: ["WROTE somethingelse x"]
+            self.assertFalse(lane.control_capture(slug, path), slug)
+
+    def test_a_helper_that_named_no_station_is_the_helper_failing(self):
+        # Not a station named "": that is the diagnosis this lane would give for
+        # a helper that died before it printed anything.
+        for lines in ([], ["WROTE desktop x"], ["STATION "]):
+            with self.subTest(lines=lines):
+                # A lane each: preflight resolves the artifact path as it goes.
+                lane = self.lane()
+                Path(lane.artifact).write_bytes(b"")
+                lane.helper = lambda **arguments: lines
+                with self.assertRaises(prove.Answer) as raised:
+                    lane.preflight()
+                self.assertEqual("CANNOT PROVE", raised.exception.word)
+                self.assertIn("no window station", raised.exception.why)
+
+    def test_and_a_station_that_is_not_the_interactive_one_is_the_runner(self):
+        lane = self.lane()
+        Path(lane.artifact).write_bytes(b"")
+        lane.helper = lambda **arguments: ["STATION Service-0x0-3e7$"]
+        with self.assertRaises(prove.Answer) as raised:
+            lane.preflight()
+        self.assertIn("interactive window station", raised.exception.why)
 
     def test_a_frame_is_the_print_when_there_is_one_and_the_copy_otherwise(self):
         lane = self.lane()
@@ -598,6 +679,91 @@ class TheWindowsLanesDecisions(Quiet):
         self.assertIn(
             "02-t2s-screen.png", [p.name for p in lane.verdict_dir.glob("*.png")]
         )
+
+
+class WhatTheMacLaneLeavesBehind(Quiet):
+    def lane(self):
+        lane = prove.MacosLane(str(Path(self.dir) / "unyt.dmg"), self.dir)
+        lane.prepare()
+        return lane
+
+    def test_a_copy_that_failed_is_a_runner_fault_not_a_broken_bundle(self):
+        # Otherwise it surfaces two checks later as "the bundle has no
+        # executable in it", which sends a release investigation at the build.
+        lane = self.lane()
+        (lane.work / "mnt" / "Unyt.app").mkdir(parents=True)
+        mounted = subprocess.CompletedProcess([], 0, "", "")
+        failed = subprocess.CompletedProcess([], 1, "", "")
+        with (
+            mock.patch.object(prove.subprocess, "run", return_value=mounted),
+            mock.patch.object(prove, "run_loud", return_value=failed),
+            mock.patch.object(prove.shutil, "rmtree") as removed,
+        ):
+            with self.assertRaises(prove.Answer) as raised:
+                lane.install()
+        self.assertEqual("CANNOT PROVE", raised.exception.word)
+        self.assertIn("ditto", raised.exception.why)
+        # And it is /Applications it would have copied into: bundle identity and
+        # signature evaluation both depend on the path it runs from.
+        self.assertEqual(Path("/Applications/Unyt.app"), removed.call_args[0][0])
+
+    def test_a_detach_that_failed_keeps_the_handle(self):
+        # A volume this lane has forgotten is one nothing will unmount again.
+        lane = self.lane()
+        lane.mount = lane.work / "mnt"
+        with mock.patch.object(
+            prove, "run", return_value=subprocess.CompletedProcess([], 1, "", "busy")
+        ):
+            lane.detach()
+        self.assertIsNotNone(lane.mount)
+
+    def test_and_one_that_worked_lets_it_go(self):
+        lane = self.lane()
+        lane.mount = lane.work / "mnt"
+        with mock.patch.object(
+            prove, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
+        ):
+            lane.detach()
+        self.assertIsNone(lane.mount)
+
+
+class EndingTheAppsProcessGroup(unittest.TestCase):
+    """An AppImage's launcher exits into its inner binary, and every poll of the
+    watch reaps the launcher — so the group has to come from whichever pid is
+    still there, or the app outlives the lane."""
+
+    def signals_for(self, *pids, alive=()):
+        sent = []
+
+        def getpgid(pid):
+            if pid not in alive:
+                raise ProcessLookupError(pid)
+            return 77
+
+        with (
+            mock.patch.object(prove.os, "getpgid", getpgid),
+            mock.patch.object(
+                prove.os, "killpg", lambda group, sig: sent.append((group, sig))
+            ),
+            mock.patch.object(prove.time, "sleep", lambda seconds: None),
+        ):
+            prove.end_process_group(*pids)
+        return sent
+
+    def test_the_reaped_launcher_is_skipped_for_the_pid_still_running(self):
+        self.assertEqual(
+            [(77, signal.SIGTERM), (77, signal.SIGKILL)],
+            self.signals_for(1, 2, alive=(2,)),
+        )
+
+    def test_the_launcher_answers_when_it_is_the_one_still_there(self):
+        self.assertEqual(2, len(self.signals_for(1, 2, alive=(1,))))
+
+    def test_and_nothing_is_signalled_when_nothing_is_left(self):
+        self.assertEqual([], self.signals_for(1, 2))
+
+    def test_a_pid_that_was_never_recorded_is_not_a_crash(self):
+        self.assertEqual([], self.signals_for(None, None))
 
 
 class WhenPixelsMayDecide(unittest.TestCase):
@@ -924,11 +1090,30 @@ class TheLinuxWindowSearch(Quiet):
         tree = (
             "xwininfo: Window id: 0x1 (the root window) (has no name)\n"
             "\n  2 children:\n"
-            '     0x400001 "Unyt": ("unyt" "Unyt")  800x800+-10+-20  +-10+-20\n'
+            '     0x400001 "Unyt": ("unyt" "Unyt")  800x800-10-20  -10-20\n'
             '     0x400002 "tip": ()  40x20+0+0  +0+0\n'
         )
         with self.answering({"xwininfo": tree}):
             self.assertEqual("0x400001", self.lane().window())
+
+    def test_a_probe_that_could_not_open_the_display_is_said_out_loud(self):
+        # xdotool exits 1 for "no window" and for "no display" alike, so the
+        # code says nothing and only its stderr tells them apart. Reading the
+        # first as the second blames the artifact for our tooling.
+        def failing(argv, **kwargs):
+            broken = "Error: Can't open display: :99"
+            if "xdotool search" in " ".join(str(word) for word in argv):
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr=broken)
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+
+        with mock.patch.object(prove, "run", failing):
+            self.lane().window()
+        self.assertIn("Can't open display", self.noise.getvalue())
+
+    def test_and_a_display_with_no_window_on_it_is_not(self):
+        with self.answering({"xdotool search": "", "xwininfo": ""}):
+            self.lane().window()
+        self.assertNotIn("xdotool search:", self.noise.getvalue())
 
     def test_and_a_display_with_nothing_on_it_is_no_window(self):
         with self.answering(
