@@ -11,21 +11,14 @@
   A CI step is its own process, so -Only persists state under UNYT_SMOKE_STATE
   and a check whose prerequisite state is absent FAILS rather than skipping.
 
-  PHASE 2 OF THE RELEASE SMOKE: this installs the artifact, examines it and
-  uninstalls it. Whether the installed app then OPENS is phase 1's — the
-  `opens-windows` lanes in release-smoke.yaml launch both installers and
-  photograph the app's own window (scripts/smoke/load-proving/prove-windows.ps1).
-  Windows Sandbox is unavailable on GitHub-hosted runners, so neither phase gets
-  a pristine machine; both run on a build image.
+  Phase 2 of the release smoke; the phases are release-smoke.yaml's header.
+  Windows Sandbox is unavailable on GitHub-hosted runners, so no phase gets a
+  pristine machine; both run on a build image.
 
-  NO UI AUTOMATION HERE OR IN PHASE 1 — phase 1 photographs the window, it does
-  not drive it. A WebDriver test was built and deliberately discarded, and what
-  would flip that: `tauri-driver` does support Windows (through msedgedriver), so
-  the obstacle is not the platform but the value — a driver asserts what the DOM
-  contains, which is the app's own test suite's job, while this suite exists to
-  ask what the SHIPPED INSTALLER does to a machine. Revisit it when a release
-  failure would have been caught by asserting on DOM content and by nothing
-  cheaper.
+  NO UI AUTOMATION, though `tauri-driver` would support Windows through
+  msedgedriver: a driver asserts what the DOM contains, which is the app's own
+  test suite's job, while this suite asks what the SHIPPED INSTALLER does to a
+  machine.
 
   The check carrying the most weight is the import table: every DLL the binaries
   load, minus what the installer ships, minus what Windows guarantees.
@@ -431,8 +424,8 @@ function Test-RemovalComplete {
     [AllowNull()][string]$InstallDir
   )
   # Neither half may be SKIPPED for want of an input: InstallDir is a file an
-  # earlier step writes, so it is absent whenever that step went red — and the
-  # leftover-files half used to fall through as "uninstalls cleanly: pass".
+  # earlier step writes, so it is absent whenever that step went red, and an
+  # absent input is a question this check could not answer rather than a pass.
   $problems = [System.Collections.Generic.List[string]]::new()
   if (-not $EntryKeyPath) {
     $problems.Add('no uninstall entry key was recorded, so whether the registration went away cannot be answered')

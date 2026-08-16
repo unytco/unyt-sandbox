@@ -6,9 +6,8 @@
 # No `Depends:` to diff — instead a bundle of libraries copied off the BUILD
 # machine, which is its own hazard (tauri-apps/tauri#15665).
 #
-# appimagelint was tried and dropped, do not retry: its own readelf needs
-# GLIBC_2.38 on our oldest target, and it fails FUSE-mounting on 24.04 even with
-# /dev/fuse and SYS_ADMIN.
+# appimagelint cannot run here: its readelf needs GLIBC_2.38, above our oldest
+# target, and it cannot FUSE-mount on 24.04 even with /dev/fuse and SYS_ADMIN.
 #
 # The gate is the glibc ceiling across the WHOLE BUNDLE: for v0.100.0 the inner
 # binary needs 2.34 while bundled libwebkit2gtk needs 2.35.

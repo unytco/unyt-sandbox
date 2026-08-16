@@ -10,23 +10,16 @@
 # EXIT: 0 pass, 1 the check FAILED, 2 the INVOCATION was wrong — so a mistyped
 # id can never read as a failing artifact.
 #
-# PHASE 2 OF THE RELEASE SMOKE — what the artifact IS, never what it does once a
-# user opens it. That second question is phase 1's: `opens-macos` in
-# release-smoke.yaml launches this same DMG and photographs the app's own window
-# (scripts/smoke/load-proving/prove-macos.sh). What no runner offers either way
-# is a PRISTINE Mac — Apple's licence caps VMs at two per host, so there is no
-# equivalent of the Linux containers, and these checks examine the artifact
-# rather than a first-run machine's reaction to it.
+# Phase 2 of the release smoke; the phases are release-smoke.yaml's header.
+# No runner offers a PRISTINE Mac — Apple's licence caps VMs at two per host, so
+# there is no equivalent of the Linux containers, and these checks examine the
+# artifact rather than a first-run machine's reaction to it.
 #
-# A WEBDRIVER TEST WAS BUILT FOR THIS AND DISCARDED, and here is what would have
-# to change for that to be worth revisiting. Apple ships no WebDriver for
-# WKWebView, so `tauri-driver` covers Windows and Linux only; macOS is drivable
-# in 2026 solely by EMBEDDING a server in the app (tauri-plugin-wdio-webdriver,
-# or CrabNebula's fork behind a paid key). A binary carrying that plugin is not
-# the binary users install, and the installed binary is the whole subject of this
-# suite. So: retry it if a driver can attach to an UNMODIFIED signed .app, or if
-# we decide a second instrumented build is worth maintaining next to the shipped
-# one.
+# NO WEBDRIVER, and it is not available to add: Apple ships none for WKWebView,
+# so `tauri-driver` covers Windows and Linux only, and macOS is drivable solely
+# by EMBEDDING a server in the app (tauri-plugin-wdio-webdriver, or CrabNebula's
+# fork behind a paid key). A binary carrying that plugin is not the binary users
+# install, and the installed binary is the whole subject of this suite.
 #
 # A CI step is a separate process, so check 1's extracted bundle lives in
 # UNYT_SMOKE_STATE and a check that cannot find it FAILS — "did not run" and

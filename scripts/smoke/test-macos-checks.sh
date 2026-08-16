@@ -7,16 +7,13 @@
 # breaks one thing and requires that check — and only it — to go red. The repo
 # has no Mac, so this is the only place these checks are observed to fail at all.
 #
-# ASSERT WHICH DIAGNOSIS FIRED, never just that the row went red. Four guards
-# were deleted during mutation testing with every colour-only assertion still
-# passing, because each left the row red for a different reason. `expect_err` is
-# the fix — do not simplify an assertion back to the row alone.
+# ASSERT WHICH DIAGNOSIS FIRED, never just that the row went red: a check can go
+# red for a reason that has nothing to do with what a scenario broke, and a
+# colour-only assertion passes on every one of them. That is what `expect_err` is
+# for — never simplify an assertion back to the row alone.
 #
-# ASSERT THROUGH THE CALL SITE'S SHAPE. The Windows harness drove the real
-# functions and still shipped a defect, because it called them bare where
-# production wrapped them in `@(...)`.
-#
-# A mutant proves nothing until you have watched it fail for the intended reason.
+# ASSERT THROUGH THE CALL SITE'S SHAPE. A function driven bare, where production
+# wraps it in `@(...)`, is a different function.
 #
 # Both paths are driven: one process, and `--only` nine times over a shared state
 # directory — the split invents a failure the single-process path cannot have.
@@ -534,15 +531,14 @@ build_scenario() { # <name>
   SCEN_ENV=()
 }
 
-# THE ENVIRONMENT EVERY INVOCATION RUNS UNDER, in one place because the one bug
-# this harness shipped was a single invoker missing a variable: run_scenario
-# passed PATH and STUB_FIXTURE but not UNYT_SMOKE_STATE, so with that variable
-# set in the caller's environment — which is exactly what release-smoke.yaml does
-# — every scenario shared one mountpoint, and a scenario found the previous one's
-# extracted bundle. NOTHING THE SCRIPT OR ITS STUBS READ IS INHERITED: a scenario
-# reads and writes only its own directory, and breaks only what it says it
-# breaks. Call-site assignments are applied after these, so a scenario that needs
-# its own results file or its own breakage still gets it.
+# THE ENVIRONMENT EVERY INVOCATION RUNS UNDER, in one place: an invoker missing
+# one variable is enough to share a mountpoint between scenarios, and a scenario
+# that finds the previous one's extracted bundle passes checks nothing here set
+# up. release-smoke.yaml sets UNYT_SMOKE_STATE and UNYT_SMOKE_RESULTS in the
+# caller's environment, so NOTHING THE SCRIPT OR ITS STUBS READ IS INHERITED: a
+# scenario reads and writes only its own directory, and breaks only what it says
+# it breaks. Call-site assignments are applied after these, so a scenario that
+# needs its own results file or its own breakage still gets it.
 scen_env() { # <results file>
   SCEN_ENV=(
     PATH="$SCEN_DIR/bin:$PATH"
