@@ -1422,6 +1422,77 @@ else
   echo "SKIP  release-tauri-app stage-1 checks (no release-tauri-app.yaml)" >&2
 fi
 
+# ── what the workflows hand to code we do not own ────────────────────────────
+# EVERY workflow, by glob and outside the block above: the next one added is
+# guarded without anyone remembering to add it here, and renaming a workflow
+# takes no other file's check down with it.
+#
+# Comments and quotes stripped first, because neither is a setting: a commented
+# `persist-credentials: false` explaining why the flag is absent would otherwise
+# satisfy the very check it is apologising to.
+wf_seen=0
+leaky=""
+movable=""
+pinned=0
+for f in "$here"/../../.github/workflows/*.y*ml; do
+  [ -f "$f" ] || continue
+  wf_seen=$((wf_seen + 1))
+  while read -r kind where; do
+    case "$kind" in
+      checkout) leaky="${leaky:+$leaky }$where" ;;
+      movable) movable="${movable:+$movable }$where" ;;
+      pinned) pinned=$((pinned + 1)) ;;
+    esac
+  done < <(awk -v file="$(basename "$f")" -v sq="'" '
+    # THE PAT MUST NOT OUTLIVE THE CHECKOUT: actions/checkout writes the token it
+    # is handed into .git/config and leaves it readable there for every later
+    # step of the job. Steps, not lines — a file-wide grep would pair the
+    # `token:` of one step with the `persist-credentials:` of another.
+    function flush() {
+      if (checkout &&
+          buf !~ /(^|\n)[[:space:]]*persist-credentials:[[:space:]]*false[[:space:]]*(\n|$)/)
+        printf "checkout %s:%d\n", file, start
+      buf = ""; checkout = 0
+    }
+    { line = $0; sub(/#.*$/, "", line); gsub(/"/, "", line); gsub(sq, "", line) }
+    line ~ /^[[:space:]]*- / { flush(); start = NR }
+    { buf = buf line "\n" }
+    line ~ /uses:[[:space:]]*actions\/checkout@/ { checkout = 1 }
+    # AND THE COMPILER FOR WHAT USERS INSTALL COMES FROM A COMMIT: a ref that
+    # moves changes which compiler builds the binaries we sign and ship, on a
+    # run nobody re-reads. Which toolchain it installs is set by the `with:`
+    # line, not by the ref — this is about the action, not the version.
+    # Length and charset, never a {40} interval — mawk 1.3.3 has no intervals.
+    line ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/ {
+      ref = line
+      sub(/.*rust-toolchain@/, "", ref)
+      sub(/[[:space:]].*$/, "", ref)
+      if (length(ref) == 40 && ref !~ /[^0-9a-f]/) printf "pinned %s:%d\n", file, NR
+      else printf "movable %s:%d (%s)\n", file, NR, ref
+    }
+    END { flush() }
+  ' "$f")
+done
+
+if [ "$wf_seen" -gt 0 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "no workflow files to examine" \
+    "the two checks below would pass on nothing" >&2
+fi
+
+if [ -z "$leaky" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a checkout leaves its credentials behind" \
+    "no persist-credentials: false in the step at $leaky" >&2
+fi
+
+# Both directions: an unpinned ref anywhere, and the pinned step having gone.
+if [ -z "$movable" ] && [ "$pinned" -gt 0 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "the rust toolchain rides a ref that can move" \
+    "${movable:-no dtolnay/rust-toolchain step is pinned to a commit any more}" >&2
+fi
+
 # ── the inventory decides which lanes run, so it must not be able to lie ─────
 # A lane skips when its artifact is absent — right for a build that failed, wrong
 # for an inventory that reports nothing by accident.
@@ -1595,11 +1666,11 @@ fi
 
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding cases.
-# DELIBERATELY 3 BELOW a full run of 235: the GLIBC-patch branch costs exactly 2
+# DELIBERATELY 3 BELOW a full run of 238: the GLIBC-patch branch costs exactly 2
 # on a machine that cannot patch a version, and the tie-break's en_US.UTF-8 leg
 # costs 1 where that locale is not generated. Do not "tidy" it up to match.
-if [ "$pass" -lt 232 ]; then
-  echo "::error::only $pass assertions ran; expected at least 232 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 235 ]; then
+  echo "::error::only $pass assertions ran; expected at least 235 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]
