@@ -87,6 +87,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           fetch-depth: 1
 
       # What every check below claims, held against what it does: an assertion
@@ -164,6 +165,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           fetch-depth: 1
 
       - uses: actions/setup-python@v5
@@ -243,6 +245,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           fetch-depth: 1
 
       - uses: actions/setup-python@v5
@@ -313,6 +316,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           fetch-depth: 1
 
       - uses: actions/setup-python@v5
@@ -403,6 +407,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           fetch-depth: 1
 
       # Not the job's `env:`: `runner` is unavailable there and the workflow
@@ -562,6 +567,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           fetch-depth: 1
 
       # Not the job's `env:`: `runner` is unavailable there and the workflow
@@ -719,6 +725,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           fetch-depth: 1
 
       # Not the job's `env:`: `runner` is unavailable there and the workflow
