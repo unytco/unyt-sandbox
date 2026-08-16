@@ -2,9 +2,9 @@
 # Echo the `bundle.windows.wix.version` a pre-release build needs, or nothing when tauri derives
 # its own.
 #
-# tauri's msi bundler parses the WHOLE pre-release identifier as one number (`convert_version`), so
-# `0.101.0-dev.0` bails and takes the entire Windows job — .exe included — with it.
-# `bundle.windows.wix.version` is the documented override.
+# tauri's msi bundler parses the WHOLE pre-release identifier as one number
+# (`convert_version`), so `0.101.0-dev.0` bails and takes the entire Windows job —
+# .exe included — with it. `bundle.windows.wix.version` is the documented override.
 #
 # NEVER COMMIT WHAT THIS PRINTS: a wix.version in tauri.conf.json outlives the release that set it
 # and would version every later MSI. The caller writes the key at build time.
@@ -23,9 +23,9 @@ bound() {
 }
 
 derive() {
-  # `-dev.N` is the shape the release pipeline supports; the tag trigger is a glob and admits any
-  # `-dev.*`, so this is where a tag it cannot carry has to be turned away. No leading zeros: the
-  # msi would keep them in its product version.
+  # The tag trigger is a glob and admits any `-dev.*`, so this is where a tag the
+  # pipeline cannot carry is turned away. No leading zeros: the msi would keep
+  # them in its product version.
   local n='(0|[1-9][0-9]*)'
   [[ "$1" =~ ^$n\.$n\.$n(-dev\.$n)?$ ]] ||
     fail "'$1' is not MAJOR.MINOR.PATCH with an optional -dev.N suffix"
@@ -55,7 +55,7 @@ self_test() {
   no() { # no <version> — must be rejected, AND print nothing. Checking only the exit status lets
          # the echo move above the bounds and still report fourteen green cases while stdout
          # carries a version the msi cannot take. Subshell: `fail` exits, and an unguarded call
-         # would take the whole self-test with it instead of failing one case.
+         # would take the whole self-test with it.
     local got rc=0
     got="$( derive "$1" 2>/dev/null )" || rc=$?
     if [ "$rc" -eq 0 ]; then
@@ -79,10 +79,10 @@ self_test() {
   no 0.101.0-dev
   no 0.101.0-dev.x
   no 0.101.0-dev.08           # a leading zero would reach the msi's product version verbatim
-  no 0.101.0-dev.65536        # past the msi ceiling
+  no 0.101.0-dev.65536
   no 0.101.70000-dev.0        # tauri bounds the patch field too
-  no 256.0.0-dev.0            # and the major
-  no 0.256.0-dev.0            # and the minor
+  no 256.0.0-dev.0
+  no 0.256.0-dev.0
   no 1.2.3-alpha.4            # -dev is the only pre-release channel
   no 0.101.0+build.4          # build metadata is tauri's other bail path
   no 0.101

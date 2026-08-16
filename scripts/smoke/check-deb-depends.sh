@@ -12,9 +12,8 @@
 # and the declared list is exactly what is wrong.
 #
 # It does append two bare entries of its own, `libwebkit2gtk-4.1-0` and
-# `libgtk-3-0`, so the shipped list is longer than the configured one and names
-# those two twice. That is harmless — Depends is an AND list — but it is why the
-# comparison must weigh every declared entry, not the first (see common.sh).
+# `libgtk-3-0`, naming those two twice. Harmless — Depends is an AND list — but
+# it is why the comparison weighs every declared entry, not the first.
 #
 # The usual consequence is a missing FLOOR, not a failed install: without
 # `libc6 (>= 2.34)` it installs on an older glibc and dies at exec.
@@ -39,8 +38,8 @@ image_id="$( . /etc/os-release && printf '%s-%s' "${ID:-unknown}" "${VERSION_ID:
 EXPECTED="$here/expected-deb-depends.$image_id.txt"
 
 # `dpkg` is in this list because every version comparison below runs through it
-# with stderr discarded: a dpkg that cannot run reports as BADVERSION on each
-# correctly-declared floor, which sends the reader to fix declarations that are fine.
+# with stderr discarded: a dpkg that cannot run reports BADVERSION on each
+# correctly-declared floor.
 for tool in dpkg-shlibdeps dpkg-deb dpkg; do
   command -v "$tool" >/dev/null || { echo "::error::$tool not found (apt-get install dpkg-dev)" >&2; exit 1; }
 done
@@ -84,7 +83,7 @@ if grep -qE 'no dependency information found|couldn.t find library|cannot find l
   exit 1
 fi
 
-# `--print` is how expected-deb-depends.txt gets regenerated.
+# How expected-deb-depends.txt gets regenerated; run-smoke.sh sets it.
 if [ "${UNYT_SMOKE_PRINT_COMPUTED:-}" = "1" ]; then
   printf '%s\n' "$computed"
   exit 0
@@ -104,8 +103,7 @@ status=0
 # A. drift against the committed expectation for THIS image
 if [ ! -f "$EXPECTED" ]; then
   # FAIL rather than warn: the matrix named this image, so an absent expectation
-  # means check A silently does not run there — a gate that skips itself on the
-  # image you just added is the failure mode this whole file exists to avoid.
+  # means check A silently does not run there.
   echo "::error::no expectation recorded for $image_id ($(basename "$EXPECTED")) — check A cannot run" >&2
   echo "  Capture it with: scripts/smoke/run-smoke.sh --print-computed-depends <artifact.deb> $image_id" >&2
   status=1

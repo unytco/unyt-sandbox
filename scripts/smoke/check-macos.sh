@@ -10,16 +10,13 @@
 # EXIT: 0 pass, 1 the check FAILED, 2 the INVOCATION was wrong — so a mistyped
 # id can never read as a failing artifact.
 #
-# Phase 2 of the release smoke; the phases are release-smoke.yaml's header.
-# No runner offers a PRISTINE Mac — Apple's licence caps VMs at two per host, so
-# there is no equivalent of the Linux containers, and these checks examine the
-# artifact rather than a first-run machine's reaction to it.
+# No runner offers a PRISTINE Mac — Apple's licence caps VMs at two per host — so
+# these checks examine the artifact rather than a first-run machine's reaction to
+# it.
 #
 # NO WEBDRIVER, and it is not available to add: Apple ships none for WKWebView,
-# so `tauri-driver` covers Windows and Linux only, and macOS is drivable solely
-# by EMBEDDING a server in the app (tauri-plugin-wdio-webdriver, or CrabNebula's
-# fork behind a paid key). A binary carrying that plugin is not the binary users
-# install, and the installed binary is the whole subject of this suite.
+# so macOS is drivable solely by EMBEDDING a server in the app, and a binary
+# carrying that plugin is not the binary users install.
 #
 # A CI step is a separate process, so check 1's extracted bundle lives in
 # UNYT_SMOKE_STATE and a check that cannot find it FAILS — "did not run" and
@@ -61,35 +58,32 @@ case "${1:-}" in
     DMG="${1:?usage: check-macos.sh <artifact.dmg>}"
     ;;
 esac
-# The modes that assess an artifact need one; --print-checks and --cleanup take
-# none, which is what lets the workflow read the check list before it has
-# downloaded anything.
+# --print-checks and --cleanup take no artifact, which is what lets the workflow
+# read the check list before it has downloaded anything.
 if [ -n "$DMG" ]; then
   [ -f "$DMG" ] || { echo "::error::artifact not found: $DMG" >&2; exit 1; }
 fi
 
-# ── the support floor ─────────────────────────────────────────────────────────
 # A shipped binary may not require more than the oldest OS we promise to run on.
 # Must match MACOSX_DEPLOYMENT_TARGET and Info.plist's LSMinimumSystemVersion.
 UNYT_OLDEST_MACOS="10.13"
 
 # arm64 macOS postdates Big Sur, so every arm64 binary reports >= 11.0 and the
 # 10.13 floor is unreachable there. The effective floor is the HIGHER of the two,
-# per arch — keeps the check sharp on arm64 rather than disabling it.
+# per arch.
 UNYT_ARM64_MIN_MACOS="11.0"
 
 # Prefixes that exist on a developer's Mac and on no user's. Homebrew's two
 # prefixes (Intel /usr/local, Apple-silicon /opt/homebrew) plus MacPorts.
 UNYT_BUILD_MACHINE_PREFIXES='/usr/local/ /opt/homebrew/ /opt/local/'
 
-# Not a secret, just not recorded here. EMPTY DOES NOT DISABLE THE CHECK: every
-# Mach-O must still name a Developer ID authority and agree on one team. Setting
-# it turns "signed by a real team" into "signed by OUR team".
+# EMPTY DOES NOT DISABLE THE CHECK: every Mach-O must still name a Developer ID
+# authority and agree on one team. Setting it turns "signed by a real team" into
+# "signed by OUR team".
 UNYT_EXPECTED_TEAM_ID="${UNYT_EXPECTED_TEAM_ID:-}"
 
-# How long `hdiutil attach` may take before it is treated as stuck. Generous for
-# a 50MB image on a busy runner, and far below any job timeout, so a stall is
-# diagnosed here rather than as an unexplained six-hour hang.
+# Generous for a 50MB image on a busy runner, and far below any job timeout, so a
+# stalled `hdiutil attach` is diagnosed here rather than as a six-hour hang.
 UNYT_HDIUTIL_TIMEOUT="${UNYT_HDIUTIL_TIMEOUT:-120}"
 
 results=()
@@ -103,9 +97,8 @@ run_check() {
   record "$name" "$LAST_RESULT"
 }
 
-# One summary, printed from BOTH exit paths. An early abort that printed rows in
-# some other shape would be invisible to whatever reads the log — and an aborted
-# run is exactly when the reader needs to see the rows.
+# One summary, printed from BOTH exit paths: an aborted run is exactly when the
+# reader needs the rows.
 print_summary_and_exit() {
   local row name result overall=0 label
   label="macos-$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)/$(uname -m)"
@@ -123,10 +116,9 @@ print_summary_and_exit() {
   exit "$overall"
 }
 
-# ── helpers ───────────────────────────────────────────────────────────────────
 
 # Highest of two dotted versions, `sort -V` being the same comparison
-# check-binary-compat.sh uses for glibc. 10.13 < 11.0 < 26.5 all sort correctly.
+# check-binary-compat.sh uses for glibc.
 version_max() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
 
 # PROVE this sort has -V first: BSD sort without it orders 9.0 above 10.13, and
@@ -150,20 +142,19 @@ is_macho() {
 
 # EVERY Mach-O, not just Contents/MacOS: `codesign --deep` has been observed to
 # miss an unsigned binary in Contents/Resources. Written to a file, not piped, so
-# callers cannot lose the loop's exit status.
+# a caller cannot lose the loop's exit status.
 MACHOS=""
 find_machos() {
   MACHOS="$WORK/machos.list"
   : >"$MACHOS"
-  # `IFS= read -r`, and every expansion quoted: the bundle is "Unyt Sandbox.app",
-  # so a path with a space is the normal case here, not an edge case.
+  # The bundle is "Unyt Sandbox.app", so a path with a space is the normal case.
   while IFS= read -r f; do
     is_macho "$f" && printf '%s\n' "$f" >>"$MACHOS"
   done < <(find "$APP" -type f -print)
   return 0
 }
 
-# The oldest macOS an ARCH can run at all — see UNYT_MACOS_FLOOR above.
+# The oldest macOS an ARCH can run at all.
 arch_floor() {
   case "$1" in
     arm64*) version_max "$UNYT_OLDEST_MACOS" "$UNYT_ARM64_MIN_MACOS" ;;
@@ -172,10 +163,9 @@ arch_floor() {
 }
 
 # TWO load commands: our aarch64 carries LC_BUILD_VERSION, its x86_64 twin the
-# older LC_VERSION_MIN_MACOSX. Reading only the modern one finds nothing on
-# x86_64, and "nothing found" must not read as "no requirement" — fails closed.
-# Per SLICE: an arm64 slice at 11.0 is correct, an x86_64 slice at 11.0 has
-# dropped every Intel Mac on 10.13-10.15.
+# older LC_VERSION_MIN_MACOSX, and "nothing found" must not read as "no
+# requirement". Per SLICE: an arm64 slice at 11.0 is correct, an x86_64 slice at
+# 11.0 has dropped every Intel Mac on 10.13-10.15.
 macho_min_os() { # <file> [arch]
   local f="$1" a="${2:-}"
   if [ -n "$a" ]; then set -- -arch "$a" -l "$f"; else set -- -l "$f"; fi
@@ -186,7 +176,6 @@ macho_min_os() { # <file> [arch]
   ' | sort -V | tail -1
 }
 
-# The libraries a Mach-O records as dependencies.
 macho_dep_paths() {
   local out
   # Skip otool -L's header (the file's own path, unindented) — only the
@@ -196,8 +185,7 @@ macho_dep_paths() {
   printf '%s\n' "$out"
 }
 
-# An rpath into /opt/homebrew is the same bug as a direct link. Legitimately
-# empty, unlike the dependencies above — most binaries carry no LC_RPATH.
+# Legitimately empty, unlike the dependencies above.
 macho_rpaths() {
   otool -l "$1" 2>/dev/null | awk '
     $1 == "cmd" && $2 == "LC_RPATH" { r = 1; next }
@@ -205,14 +193,13 @@ macho_rpaths() {
   '
 }
 
-# Both, for the report at the end. Callers that GATE use the two separately, so
-# they can tell "read nothing" from "found nothing".
+# Callers that GATE use the two separately, so they can tell "read nothing" from
+# "found nothing".
 macho_load_paths() {
   macho_dep_paths "$1" || true
   macho_rpaths "$1"
 }
 
-# ── the state directory ───────────────────────────────────────────────────────
 # UNYT_SMOKE_STATE outlives the process, which is what makes one-check-per-step
 # possible. Without it, a temp directory of our own and the old behaviour.
 WORK=""
@@ -252,14 +239,12 @@ remove_work() {
 # shellcheck disable=SC2317  # invoked through the EXIT trap
 cleanup() {
   detach_mount
-  # A caller's state directory has to survive this process — the next --only
-  # invocation reads the extracted bundle out of it — so only --cleanup removes
-  # that one. A temp directory of ours reaches nobody, so it goes here.
+  # A caller's state directory has to survive this process, so only --cleanup
+  # removes that one. A temp directory of ours reaches nobody.
   if [ -n "$STATE_OWNED" ]; then remove_work; fi
 }
 
-# %q and sourced back: the bundle is "Unyt Sandbox.app", so a path with a space
-# is the normal case. State no check reads is state that goes stale unnoticed.
+# %q and sourced back, because the bundle is "Unyt Sandbox.app".
 save_state() {
   {
     printf 'APP=%q\n' "$APP"
@@ -272,13 +257,13 @@ load_state() {
   # shellcheck source=/dev/null
   . "$STATE_FILE"
   if [ -n "$APP" ] && [ -d "$APP" ] && [ -n "$MAIN_BIN" ] && [ -f "$MAIN_BIN" ]; then
-    # Re-derived per invocation rather than persisted: enumerating a bundle is
-    # cheap, and a saved list could go stale against the directory it describes.
+    # Re-derived rather than persisted: a saved list could go stale against the
+    # directory it describes.
     find_machos
     return 0
   fi
-  # The file existing is not the state existing — a lost extracted copy would
-  # hand a check a path to nothing. Clear it so nobody acts on half.
+  # The file existing is not the state existing: a lost extracted copy would hand
+  # a check a path to nothing.
   APP=""; MAIN_BIN=""
   return 1
 }
@@ -292,20 +277,16 @@ require_state() {
   return 1
 }
 
-# ── 1. mount, extract, detach ─────────────────────────────────────────────────
-# Everything else runs against the COPY, so each step here is checked on its own.
 check_mount() {
   local mnt mount_ok attach_log hd_pid hd_deadline hd_rc app_count app_src
   mnt="$WORK/mnt"
   mkdir -p "$mnt"
-  # A failed mount must not leave an EARLIER run's state standing in a directory
-  # that outlives the process: the checks after it would then assess a bundle
-  # this invocation never produced, and report a verdict about the wrong thing.
+  # A failed mount must not leave an EARLIER run's state standing: the checks
+  # after it would assess a bundle this invocation never produced.
   rm -f "$STATE_FILE"
   mount_ok=1
-  # An explicit -mountpoint, rather than parsing hdiutil's tab-separated plist-ish
-  # output for where it landed: one less thing to misparse, and it keeps the mount
-  # inside the directory the trap already cleans up.
+  # An explicit -mountpoint rather than parsing hdiutil's output for where it
+  # landed, which also keeps the mount inside the directory the trap cleans up.
   attach_log="$WORK/hdiutil-attach.log"
   hdiutil attach -nobrowse -readonly -noverify -noautoopen \
     -mountpoint "$mnt" "$DMG" >"$attach_log" 2>&1 </dev/null &
@@ -332,8 +313,7 @@ check_mount() {
   else
     MOUNT="$mnt"
     # `head -1` over find output is directory order, so with two .app bundles this
-    # would assess an arbitrary one — the same coin flip that made the AppImage
-    # lane watch xdg-mime instead of the app. A release DMG carries exactly one.
+    # would assess an arbitrary one. A release DMG carries exactly one.
     app_count="$(find "$mnt" -maxdepth 1 -name '*.app' -print | grep -c .)"
     app_src="$(find "$mnt" -maxdepth 1 -name '*.app' -print | sort | head -1)"
     if [ "$app_count" -gt 1 ]; then
@@ -387,21 +367,18 @@ check_mount() {
   return 0
 }
 
-# ── 2. the .app inside is the version the filename claims ─────────────────────
 # The DMG is assembled from a separately built .app, so a stale bundle can be
 # packaged under a new release's name.
 check_version_matches_artifact() {
   local want got
-  # Release assets are named unyt_<version>_Unyt.Sandbox_<...>_<arch>_darwin.dmg.
   # The pre-release tail is PART of the version: stopping at the `-` reads nothing
-  # out of unyt_0.101.0-dev.0_… and reds the check on every -dev release. -E, not a
-  # BRE `\?`, which BSD sed on the macOS runner does not have.
+  # out of unyt_0.101.0-dev.0_… and reds the check on every -dev release. -E, not
+  # a BRE `\?`, which BSD sed on the macOS runner does not have.
   want="$(basename "$DMG" | sed -nE 's/^unyt_([0-9][0-9.]*(-[0-9A-Za-z.]+)?)_.*/\1/p')"
   got="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist" 2>/dev/null)"
   echo "  filename says '$want', Info.plist says '${got:-<none>}'" >&2
   if [ -z "$want" ]; then
-    # Not a release-named file (a locally built DMG, say). Unknown is not a pass:
-    # the check cannot answer its question, and a green row would claim it did.
+    # Unknown is not a pass: the check could not answer its question.
     echo "::error::cannot read a version out of '$(basename "$DMG")' — expected unyt_<version>_..." >&2
     return 1
   fi
@@ -417,10 +394,8 @@ check_version_matches_artifact() {
   return 0
 }
 
-# ── 3. the bundle's architecture matches this runner ──────────────────────────
 # Gatekeeper, dyld and codesign all refuse a foreign-arch binary, so a mispaired
-# runner reports failures that say nothing about the artifact. Read with lipo,
-# not trusted from the matrix.
+# runner reports failures that say nothing about the artifact.
 check_arch_matches_runner() {
   local archs runner
   archs="$(lipo -archs "$MAIN_BIN" 2>/dev/null)"
@@ -430,8 +405,7 @@ check_arch_matches_runner() {
     echo "::error::lipo could not read an architecture out of $MAIN_BIN" >&2
     return 1
   fi
-  # uname -m says arm64 on Apple silicon and x86_64 on Intel — the same spelling
-  # lipo uses, so no translation table is needed.
+  # uname -m spells both arches the way lipo does, so no translation is needed.
   case " $archs " in
     *" $runner "*) echo "OK: the bundle runs natively on this runner" >&2; return 0 ;;
   esac
@@ -439,7 +413,6 @@ check_arch_matches_runner() {
   return 1
 }
 
-# ── 4. nothing points at the build machine ────────────────────────────────────
 check_no_build_machine_paths() {
   local f p prefix deps dep_rc file_paths hits=0 total=0 paths=0
   while IFS= read -r f; do
@@ -463,8 +436,7 @@ check_no_build_machine_paths() {
     done < <(printf '%s\n' "$deps"; macho_rpaths "$f")
 
     # Guard the PATHS, not the files: with otool broken every file is iterated,
-    # no path examined, no violation found, and the row goes green having read
-    # nothing.
+    # no path examined, and the row goes green having read nothing.
     if [ "$file_paths" -eq 0 ]; then
       echo "::error::otool read no load paths from ${f#"$APP"/} (exit $dep_rc)." >&2
       echo "  Every Mach-O links at least libSystem, so this is a broken otool — a stale" >&2
@@ -474,9 +446,8 @@ check_no_build_machine_paths() {
     fi
   done <"$MACHOS"
   if [ "$total" -eq 0 ]; then
-    # No Mach-O at all means the scan proved nothing; an empty sweep must not
-    # report the same green row as a clean one. Distinct from the per-file guard
-    # above, which cannot fire when the loop never runs.
+    # An empty sweep must not report the same green row as a clean one. Distinct
+    # from the per-file guard above, which cannot fire when the loop never runs.
     echo "::error::no Mach-O files found in the bundle — nothing was scanned" >&2
     return 1
   fi
@@ -489,7 +460,6 @@ check_no_build_machine_paths() {
   return 0
 }
 
-# ── 5. every Mach-O is signed, and by whom ────────────────────────────────────
 # Per file, from our own list — NOT `codesign --deep --strict`, which has missed
 # an unsigned binary in Contents/Resources and is deprecated since Ventura.
 check_every_macho_signed() {
@@ -525,8 +495,7 @@ check_every_macho_signed() {
       continue
     fi
     # Pinned when the team is declared, and otherwise self-consistent: a bundle
-    # signed by two different teams is a mis-assembled one either way, and this
-    # needs no secret to assert.
+    # signed by two different teams is a mis-assembled one either way.
     if [ -n "$UNYT_EXPECTED_TEAM_ID" ] && [ "$team" != "$UNYT_EXPECTED_TEAM_ID" ]; then
       echo "::error::  ${f#"$APP"/} is signed by team $team, expected $UNYT_EXPECTED_TEAM_ID" >&2
       bad=$((bad + 1))
@@ -556,7 +525,6 @@ check_every_macho_signed() {
   return 0
 }
 
-# ── 6. Gatekeeper accepts it, as NOTARIZED software ───────────────────────────
 # `accepted` alone is not enough — an ad-hoc build is accepted on the machine
 # that made it. The source line is what says notarized. spctl reports on stderr.
 check_gatekeeper() {
@@ -582,7 +550,6 @@ check_gatekeeper() {
   return 0
 }
 
-# ── 7. the notarization ticket travels with the artifact ──────────────────────
 # Notarized but unstapled works only while Apple's service is reachable.
 check_stapled() {
   local out rc
@@ -597,11 +564,9 @@ check_stapled() {
   return 0
 }
 
-# ── 8. Apple's own pre-distribution assessment ────────────────────────────────
 # `distribution`, not `notary-submission`: the artifact is already notarized, so
 # the question is whether it passes on a user's Mac.
-# UNVERIFIED — this repo has no Mac. Fails CLOSED, and reports a usage error as
-# such so nobody debugs the artifact when the invocation is wrong.
+# UNVERIFIED — this repo has no Mac. Fails CLOSED.
 check_syspolicy() {
   local out rc scan
   if ! command -v syspolicy_check >/dev/null 2>&1; then
@@ -616,18 +581,16 @@ check_syspolicy() {
     echo "::error::syspolicy_check rejected the INVOCATION, not the app — fix the call, not the build" >&2
     return 1
   fi
-  # Apple documents no exit status, so the OUTPUT decides. The patterns are
+  # Apple documents no exit status, so the OUTPUT decides, and the patterns are
   # deliberately asymmetric: syspolicy_check reports per check, so a fatally
-  # unnotarized build still prints "Codesign check passed" — a broad pass token
-  # matched the wrong line and greened a build Apple calls undistributable.
-  # So FAIL is broad and wins; PASS is the one documented whole sentence. A
-  # wrong guess about wording is then a false RED, never a false green.
+  # unnotarized build still prints "Codesign check passed". FAIL is broad and
+  # wins; PASS is the one documented whole sentence, so a wrong guess about
+  # wording is a false RED rather than a false green.
   #
-  # Zero-count lines are dropped first, and ONLY when the line is nothing else:
-  # dropping any line CONTAINING one would discard
-  # `Notary Ticket Missing, 0 errors in codesign` — the filter eating the finding.
-  # Do not anchor the fail words: two of the three documented failures carry the
-  # significant word at the END.
+  # Zero-count lines are dropped ONLY when the line is nothing else: dropping any
+  # line CONTAINING one would discard `Notary Ticket Missing, 0 errors in
+  # codesign`. Do not anchor the fail words — two of the three documented
+  # failures carry the significant word at the END.
   scan="$(printf '%s' "$out" |
     grep -viE '^[[:space:]]*0 (errors?|warnings?|issues?|problems?)([[:space:],;]*(and )?0 (errors?|warnings?|issues?|problems?))*[[:space:].]*$')"
   if [ "$rc" -ne 0 ] ||
@@ -636,8 +599,7 @@ check_syspolicy() {
     return 1
   fi
   if ! printf '%s' "$out" | grep -qiF 'ready for distribution'; then
-    # Cannot tell is NOT a pass: unrecognised wording means the check could not
-    # do its job. Fails towards the operator, naming itself as the thing to fix.
+    # Cannot tell is NOT a pass, and it names itself as the thing to fix.
     echo "::error::syspolicy_check exited 0 but its output matched no known pass or fail wording," >&2
     echo "  so this check cannot say whether the build is distributable. Apple documents no exit" >&2
     echo "  status for this tool, so the output is the only signal — teach this check the real" >&2
@@ -648,7 +610,6 @@ check_syspolicy() {
   return 0
 }
 
-# ── 9. deployment target within the support floor ─────────────────────────────
 # Declared (LSMinimumSystemVersion) vs required (load commands). Both directions
 # are real: demanding more than claimed dies in dyld on the OS it advertises;
 # claiming more than our floor drops users we promised to serve.
@@ -668,9 +629,8 @@ check_deployment_target() {
       slices_seen=$((slices_seen + 1))
       v="$(macho_min_os "$f" "$a")"
       if [ -z "$v" ]; then
-        # A slice with neither load command tells us nothing about where it
-        # runs, and "told us nothing" must not read as "fine" — this is exactly
-        # how the x86_64 build slipped past a LC_BUILD_VERSION-only reader.
+        # A slice with neither load command says nothing about where it runs,
+        # which must not read as "fine".
         echo "::error::  ${f#"$APP"/} ($a) declares no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX" >&2
         return 1
       fi
@@ -711,9 +671,8 @@ check_deployment_target() {
   return "$status"
 }
 
-# ── report-only ───────────────────────────────────────────────────────────────
 # Not gated: the DMG's own stapling is Tauri's business, and the linkage list is
-# the bundle's implicit contract with the OS that nothing else records.
+# a contract with the OS that nothing else records.
 report_only() {
   echo "" >&2
   echo "===== report only =====" >&2
@@ -729,9 +688,8 @@ report_only() {
   fi
 }
 
-# ── the sequence ──────────────────────────────────────────────────────────────
-# id | display name | function. THE one definition of what runs and in what
-# order — the whole-run path, --only and --print-checks all read it.
+# id | display name | function. The whole-run path, --only and --print-checks
+# all read this one list.
 CHECKS=(
   "mount|mounts and yields a .app bundle|check_mount"
   "version|the bundled app is the version the artifact claims|check_version_matches_artifact"
@@ -773,9 +731,8 @@ run_all() {
     IFS='|' read -r id name fn <<<"$entry"
     run_check "$name" "$fn"
     if [ "$id" = mount ] && [ "$LAST_RESULT" != pass ]; then
-      # Everything downstream assesses the extracted copy; stop here rather than
-      # run nine checks against an empty directory and report their verdicts as
-      # facts.
+      # Everything downstream assesses the extracted copy, so stop rather than
+      # report nine verdicts about an empty directory.
       print_summary_and_exit
     fi
   done
@@ -783,8 +740,6 @@ run_all() {
   print_summary_and_exit
 }
 
-# The prerequisite gate, then the check itself — wrapped so that run_check still
-# invokes the same nine functions the whole-run path invokes, unaltered.
 only_run() { # <id> <function>
   case "$1" in
     mount) ;;
@@ -800,8 +755,7 @@ run_only() { # <id>
     [ "$id" = "$1" ] || continue
     run_check "$name" only_run "$id" "$fn"
     # Exactly one row on stdout, in the `name|result` shape record() builds the
-    # summary table from, so a step reports its verdict without anything having
-    # to parse the narration on stderr.
+    # summary table from, so nothing has to parse the narration on stderr.
     printf '%s\n' "${results[0]}"
     if [ -n "${UNYT_SMOKE_RESULTS:-}" ]; then
       printf '%s\n' "${results[0]}" >>"$UNYT_SMOKE_RESULTS"
@@ -810,18 +764,17 @@ run_only() { # <id>
     exit 1
   done
   # An id nobody runs is not a silent no-op: the workflow would show a green step
-  # for a check that never happened, which is the one thing this suite refuses to
-  # do. Exit 2 rather than 1, so a wrong invocation cannot read as a failed check.
+  # for a check that never happened. Exit 2 rather than 1, so a wrong invocation
+  # cannot read as a failed check.
   echo "::error::unknown check id '$1' — the ids are:" >&2
   print_checks | sed 's/^/  /' >&2
   exit 2
 }
 
-# ── dispatch ──────────────────────────────────────────────────────────────────
 case "$MODE" in
   print)
-    # No artifact, no state directory, no trap: this is the list itself, and
-    # whatever reads it must be able to do so before anything is downloaded.
+    # No artifact, no state directory, no trap: whatever reads this list must be
+    # able to do so before anything is downloaded.
     print_checks
     exit 0
     ;;

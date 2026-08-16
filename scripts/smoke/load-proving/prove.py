@@ -1,51 +1,25 @@
 #!/usr/bin/env python3
 """Does a shipped installer put the app's own first screen on a screen?
 
-  prove.py linux   <artifact.deb|artifact.AppImage> <shots-dir>
-  prove.py macos   <artifact.dmg>                   <shots-dir>
-  prove.py windows <installer.exe|installer.msi>    <shots-dir>
+The verdict is one `VERDICT <lane>: <WORD> — <why>` line on stdout, and nothing
+else is written there.
 
-Needs Pillow (`pip install pillow`); every other tool it reaches for is one the
-platform already has, and a missing one is answered rather than assumed.
-
-Installs the artifact the way a user would, launches it, and photographs the
-app's OWN WINDOW. The verdict is one `VERDICT <lane>: <WORD> — <why>` line on
-stdout and nothing else is; publish_verdict.py turns that line into the step's
-colour. This is release-smoke.yaml's phase 1, and a failed lane fails the
-release run.
-
-THE VERDICT IS TWO INDEPENDENT FACTS, and PROVEN needs both:
-  A. the app got as far as a screen — its log reaches LairAwaitingPassword or a
-     healthy backend state, and never a failure state;
-  B. a frame of the app's own window is the app's own screen, which frames.py
-     decides and this file never second-guesses.
-
-Before either, the capture path is tested against itself: a frame taken BEFORE
-the app is launched must not pass for the app. One that does would photograph
-the same thing after launch, so every verdict behind it would be void.
-
-WHAT THAT CONTROL CANNOT COVER, since a window-scoped capture has no window to
-aim at before launch: it photographs the SCREEN, while the verdict frames
-photograph the app's WINDOW. It answers "is this runner's screen mistakable for
-the app", not "is this window capture aimed properly". Windows narrows the gap
-with a second control at the splash's own footprint, and macOS with one of its
-own; nothing closes it before the app exists.
-
-The words, and what each is worth:
-  PROVEN       both facts.                                            exit 0
-  WINDOW-ONLY  macOS only: the app put a real window up and the pixels
-               could not be believed. Green, and says paint is unverified.  0
-  NOT PROVEN   the app ran and one of the two facts is missing.        exit 1
-  CANNOT PROVE we could not look — no display, no capture, no install.  exit 2
-  UNTRUSTED    we could look, but not at the app.                      exit 3
+  PROVEN       the app reached a state a user could see AND a frame of its own
+               window is the app's own screen.
+  WINDOW-ONLY  macOS only: a real on-screen window at a real size, paint
+               unverified. Green, and never the word a photographed lane gets.
+  NOT PROVEN   the app ran and one of those two is missing.
+  CANNOT PROVE we could not look — no display, no capture, no install.
+  UNTRUSTED    we could look, but not at the app.
 
 Nothing here ever skips: a runner that cannot answer says so and goes red.
 
-What is where: `Lane` holds the control, the watch and the verdict, and names
-what a platform has to supply; `LinuxLane`, `MacosLane` and `WindowsLane` supply
-it. frames.py decides what a frame is, window-capture.ps1 and
-mac-window-info.swift are the two things only a native tool can do, and
-publish_verdict.py turns the verdict line into a step's colour.
+WHAT THE PRE-LAUNCH CONTROL CANNOT COVER, since a window-scoped capture has no
+window to aim at before launch: it photographs the SCREEN, while the verdict
+frames photograph the app's WINDOW. It answers "is this runner's screen
+mistakable for the app", not "is this window capture aimed properly". Windows
+and macOS each narrow the gap with a second control; nothing closes it before
+the app exists.
 """
 
 import collections
@@ -76,8 +50,6 @@ EXIT_CODES = {
 
 
 class Answer(Exception):
-    """The lane's whole answer, raised from wherever it becomes known."""
-
     def __init__(self, word, why):
         super().__init__(why)
         self.word = word
@@ -89,13 +61,11 @@ def note(message):
 
 
 def shell_value(name, path=SMOKE_COMMON):
-    """A `NAME=<value>` assignment read out of a shell file, so the log oracle
-    has one home. Missing is fatal — a lane matching nothing would report every
-    healthy app as one that never reached a state."""
+    """Missing is fatal — a lane matching nothing would report every healthy app
+    as one that never reached a state."""
     match = re.search(
         r"^%s=(['\"]?)(.*)\1$" % re.escape(name),
-        # Explicit, because Python would otherwise decode this in the runner's
-        # locale, and a Windows runner's is not UTF-8.
+        # Our own files are always UTF-8; a Windows runner's locale is not.
         path.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
@@ -105,7 +75,7 @@ def shell_value(name, path=SMOKE_COMMON):
 
 
 def first_match(pattern, text):
-    """The match, through to the end of its line — that tail is what makes the
+    """The match through to the end of its line — that tail is what lets the
     verdict say WHICH state was reached."""
     hit = pattern.search(text)
     if not hit:
@@ -118,11 +88,10 @@ def run(argv, **kwargs):
     # Captured, never inherited: stdout is the verdict channel, and one stray
     # line on it is a lane that answered twice.
     #
-    # Decoded in the RUNNER'S locale, unlike the files this reads, which are
-    # ours and are read as UTF-8: a tool writes its own platform's encoding, and
-    # PowerShell's is the Windows console's. Every token any decision here rests
-    # on is ASCII, and `errors="replace"` keeps a window title in some other
-    # encoding from ending the lane.
+    # Decoded in the runner's locale, because a tool writes its own platform's
+    # encoding and PowerShell's is the Windows console's. Every token a decision
+    # rests on is ASCII, so `errors="replace"` costs nothing and keeps a window
+    # title in some other encoding from ending the lane.
     kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("stderr", subprocess.PIPE)
     kwargs.setdefault("text", True)
@@ -170,10 +139,10 @@ def tail(path, lines=40):
 
 
 def read_all(files, directories, pattern):
-    """Every log sink the app writes. Both kinds matter: the rolling file is
-    durable, the redirected streams catch a crash before the log dir exists. A
-    file that exists and will not open is said out loud, because that is why a
-    lane would otherwise report "the app never reached any state"."""
+    """Both kinds of sink, because the rolling file is durable and the
+    redirected streams catch a crash from before the log dir exists. A file that
+    will not open is said out loud — that is otherwise why a lane reports "the
+    app never reached any state"."""
     paths = [Path(path) for path in files]
     for directory in directories:
         paths += sorted(Path(directory).glob(pattern)) if directory else []
@@ -182,8 +151,6 @@ def read_all(files, directories, pattern):
         if not path.exists():
             continue
         try:
-            # The app writes UTF-8 whatever the runner's code page is, and a log
-            # decoded in the wrong one carries mojibake into the verdict line.
             parts.append(path.read_text(encoding="utf-8", errors="replace"))
         except OSError as exc:
             note("::warning::could not read %s — %s" % (path, exc))
@@ -204,10 +171,8 @@ def end_process(proc):
 
 def end_process_group(*pids):
     """The whole tree, on POSIX only — os.killpg and SIGKILL do not exist on
-    Windows. The Linux lane needs it because an AppImage runs an inner binary
-    and ending the launcher alone would leave the app on the runner. The
-    launcher is often reaped before this runs — every poll of the watch reaps
-    it — so the group is taken from whichever pid still resolves to one."""
+    Windows. The launcher is often reaped before this runs, so the group is
+    taken from whichever pid still resolves to one."""
     for pid in pids:
         if pid is None:
             continue
@@ -226,45 +191,30 @@ def end_process_group(*pids):
 
 def grant_of(text):
     """Whether this process may read screen pixels, as mac-window-info.swift
-    reports it. Matched loosely on purpose: a pattern that has to agree with the
-    Swift's spacing drifts silently, and an empty read looks exactly like a
-    runner that really has no grant."""
+    reports it."""
     hit = re.search(r"^GRANT\s+screen-recording=(\S+)\s*$", text, re.MULTILINE)
     return hit.group(1) if hit else None
 
 
 def pixels_may_decide(grant, statuses):
-    """MAY A FRAME FROM THIS RUNNER DECIDE ANYTHING? The grant is the platform's
-    answer to "would a capture return the app's own window at all"; the control
-    statuses are this run's answer to "would this runner's screen pass for the
-    app even if it did". A single no anywhere — including no control at all — is
-    a no."""
     if grant != "granted":
         return False
     return bool(statuses) and all(status == "usable" for status in statuses)
 
 
 class Lane:
-    """What every platform does the same way: the control, the watch, the
-    verdict. A platform supplies install, launch, logs, alive and capture, and
-    overrides what it genuinely answers differently."""
-
     # Polled, never slept: WebView2 and WebKitGTK cold-start times vary
     # several-fold between runs on one runner, so a fixed wait is a flake or a
-    # waste. Each frame is judged as it is taken and the loop stops at the first
-    # that is the app's.
+    # waste.
     poll_seconds = 2
     max_shots = 24
-    # A forced shot skips the budget above but not this one: the frames from the
-    # moment the state is reached are worth having, an endless run is not.
     hard_max_shots = 40
     timeout_seconds = 240
     # The webview paints a moment after Rust logs the state.
     post_seconds = 30
 
-    # (slug, advisory). Advisory suits a platform whose verdict does not rest on
-    # pixels: the control still reports, and still decides whether a frame may
-    # mean anything, but it cannot red a lane that never used one as evidence.
+    # (slug, advisory). An advisory control still decides whether a frame may
+    # mean anything, but cannot red a lane that never used one as evidence.
     controls = (("00-control-before-launch", False),)
 
     def __init__(self, platform, artifact, shots):
@@ -278,8 +228,6 @@ class Lane:
         self.saw_window = False
         self.reached = None
         self.failed_state = None
-        # Whether the app is on screen by this platform's own measure. A flag,
-        # not a description: what it was decided FROM is the platform's to keep.
         self.on_screen = False
         self.control_status = {}
         self.handles = []
@@ -288,7 +236,6 @@ class Lane:
         self.re_awaiting = re.compile(shell_value("UNYT_RE_AWAITING_PASSWORD"))
         self.bundle_id = shell_value("UNYT_BUNDLE_ID")
 
-    # ── what a platform provides ──────────────────────────────────────────────
     def preflight(self):
         """Refuse a runner that cannot answer, before anything is installed."""
 
@@ -314,14 +261,11 @@ class Lane:
         raise NotImplementedError
 
     def opened(self, path, mode="wb"):
-        """A file the lane writes for the life of the run, closed by stop()."""
         handle = open(path, mode)
         self.handles.append(handle)
         return handle
 
     def stop(self):
-        """Close what this lane opened. A platform overrides this to end what it
-        started as well, and says how far into the app's tree that reaches."""
         for handle in self.handles:
             handle.close()
 
@@ -332,12 +276,9 @@ class Lane:
         """A second phase, which may only ever upgrade the verdict the watch has
         already earned."""
 
-    # ── the negative control ──────────────────────────────────────────────────
     def check_controls(self):
-        """A control that passes for the app, or that cannot be read, ends a
-        gating lane on the spot. One that could not be CAPTURED ends it only
-        when no control could be: a platform takes several because they answer
-        different questions, and the ones that worked still answer theirs."""
+        """One that could not be CAPTURED ends the lane only when no control
+        could be: the ones that worked still answer their own question."""
         uncapturable = 0
         gating = 0
         for slug, advisory in self.controls:
@@ -392,11 +333,9 @@ class Lane:
         )
         return "usable", None, None
 
-    # ── frames ────────────────────────────────────────────────────────────────
     def shoot(self, slug, force=False):
-        """The slug written, or None. A failure is counted rather than fatal: a
-        run that missed frame 3 still has frames 1 and 2, and the count is
-        reported so a lane that managed none cannot read as blank."""
+        """A failed capture is counted rather than fatal, so a lane that managed
+        no frame at all cannot read as blank."""
         if self.shot_count >= self.hard_max_shots:
             return None
         if self.shot_count >= self.max_shots and not force:
@@ -410,10 +349,9 @@ class Lane:
 
     def seek_frame(self, slug, force=False):
         """The slug of a photograph of the app's own window that IS the app's
-        own screen, or None. NEVER OVERRIDDEN: this is the pixel question, and a
-        platform that can answer "on screen" some other way overrides
-        seek_evidence instead — so no override can hand this answer to something
-        that was never photographed."""
+        own screen, or None. NEVER OVERRIDDEN, so no platform can hand this
+        answer to something that was never photographed; one that can answer "on
+        screen" another way overrides seek_evidence instead."""
         taken = self.shoot(slug, force)
         if not taken:
             return None
@@ -423,8 +361,8 @@ class Lane:
         return taken
 
     def seek_evidence(self, slug, force=False):
-        """What counts as the app being on screen — the one thing a platform
-        overrides. A photograph of its window is the default."""
+        """What counts as the app being on screen. A photograph of its own
+        window is the default; a platform may override with less."""
         if not self.seek_frame(slug, force):
             return False
         self.on_screen = True
@@ -432,10 +370,9 @@ class Lane:
 
     def seek_paint(self, prefix, budget):
         """The slug of the first frame that is the app's own screen, or None.
-        Bounded by the clock AND by the frame ceiling: past the ceiling nothing
-        is captured at all, so a loop watching only the clock would poll out its
-        seconds taking no frames, and the caller would read those non-attempts
-        as frames it had judged."""
+        Bounded by the clock AND by the frame ceiling: past the ceiling shoot()
+        captures nothing, so a loop watching only the clock would poll out its
+        seconds and the caller would read those non-attempts as judged frames."""
         started = time.monotonic()
         while True:
             taken = self.shot_count
@@ -448,7 +385,6 @@ class Lane:
                 return None
             time.sleep(self.poll_seconds)
 
-    # ── the watch ─────────────────────────────────────────────────────────────
     def watch(self):
         started = time.monotonic()
         reached_at = None
@@ -474,7 +410,7 @@ class Lane:
                     note("OK: the app reached -> " + self.reached)
 
             # Forced once the state is reached: the frames from the window in
-            # which the prompt is actually on screen are worth the budget.
+            # which the prompt is actually up are worth the budget.
             if not self.on_screen:
                 self.seek_evidence("t%ds" % elapsed, bool(self.reached))
 
@@ -501,7 +437,6 @@ class Lane:
                 return
             time.sleep(self.poll_seconds)
 
-    # ── the verdict ───────────────────────────────────────────────────────────
     def state_note(self):
         if self.failed_state:
             return "the app reached a failure state (%s)" % self.failed_state
@@ -510,10 +445,8 @@ class Lane:
         return "the app never reached LairAwaitingPassword or a healthy state"
 
     def screen_note(self, results):
-        # Both halves of the verdict are always named: a screen painted over a
-        # failed backend and a clean boot behind a blank window are different
-        # bugs. FLAT names no cause — it also covers a strip of chrome on a blank
-        # window, and a greyscale capture, which cannot hold a render at all.
+        # FLAT names no cause: it covers a strip of chrome on a blank window and
+        # a greyscale capture, which cannot hold a render at all.
         for verdict, phrasing in (
             (frames.PAINTED, "a frame of its window is the app's own screen (%s)"),
             (
@@ -564,11 +497,10 @@ class Lane:
             return "PROVEN", both
         return "NOT PROVEN", both
 
-    # ── the run ───────────────────────────────────────────────────────────────
     def prepare(self):
         # Cleared, not just created: the verdict passes if ANY frame is the
         # app's, so a frame left by an earlier run would prove this artifact with
-        # the last one's screenshot. A GitHub runner is fresh; a laptop is not.
+        # the last one's screenshot.
         for directory in (self.verdict_dir, self.context_dir):
             shutil.rmtree(directory, ignore_errors=True)
             directory.mkdir(parents=True)
@@ -591,10 +523,7 @@ class Lane:
 class LinuxLane(Lane):
     """Not a pristine container, unlike run-smoke.sh: the question here is
     whether the app paints, not whether it declares its dependencies, and a
-    container puts an X server and a `docker cp` between us and the frame.
-
-    The root display is photographed as context only — it is mostly bare Xvfb
-    background, so a frame of it could only say "something is there"."""
+    container puts an X server and a `docker cp` between us and the frame."""
 
     def __init__(self, artifact, shots):
         super().__init__("linux", artifact, shots)
@@ -614,8 +543,7 @@ class LinuxLane(Lane):
             raise Answer("CANNOT PROVE", "no such artifact: %s" % self.artifact)
         for tool in ("Xvfb", "xdotool", "xwininfo"):
             need(tool, "there is no way to look at a screen")
-        # ImageMagick 6 ships `import`, 7 renames it under `magick`. Chosen once,
-        # so the capture path cannot differ between frames.
+        # ImageMagick 6 ships `import`, 7 renames it under `magick`.
         for candidate in (["import"], ["magick", "import"]):
             if shutil.which(candidate[0]):
                 self.grabber = candidate
@@ -628,11 +556,11 @@ class LinuxLane(Lane):
         self.start_display()
 
     def start_display(self):
-        """Xvfb picks the display and says which through -displayfd, so there is
-        no lock-file scan and no race. Explicit rather than xvfb-run, which picks
-        a display it never tells the caller — and the capture has to address the
-        same one the app was given. 1400x1050 leaves room around the 800x800
-        splash, so the window is never clipped."""
+        """-displayfd, so there is no lock-file scan and no race. Explicit
+        rather than xvfb-run, which picks a display it never tells the caller —
+        and the capture has to address the same one the app was given.
+        1400x1050 leaves room around the 800x800 splash, so it is never
+        clipped."""
         log = self.opened(self.work / "xvfb.log", "w")
         read_fd, write_fd = os.pipe()
         self.xvfb = subprocess.Popen(
@@ -705,7 +633,7 @@ class LinuxLane(Lane):
         shutil.copy(artifact, app)
         app.chmod(0o755)
         # FUSE is absent on the runners and libfuse2 is renamed on newer Ubuntu,
-        # so extraction is the portable path — as in container-checks-appimage.sh.
+        # so extraction is the portable path.
         os.environ["APPIMAGE_EXTRACT_AND_RUN"] = "1"
         if run_loud([str(app), "--appimage-extract"], cwd=self.work).returncode:
             raise Answer(
@@ -729,8 +657,8 @@ class LinuxLane(Lane):
                 "the AppImage's GTK baseline would not install on this runner",
             )
         self.launch_argv = [str(app)]
-        # The app runs as its INNER binary, so the process to watch is named by
-        # the bundle rather than guessed from the .AppImage filename.
+        # The app runs as its INNER binary, so the process to watch cannot be
+        # guessed from the .AppImage filename.
         for desktop in sorted((self.work / "squashfs-root").glob("*.desktop")):
             for line in desktop.read_text(errors="replace").splitlines():
                 if line.startswith("Exec="):
@@ -812,16 +740,14 @@ class LinuxLane(Lane):
         return True
 
     def windows(self):
-        # `xdotool search --pid` reads _NET_WM_PID, which a client need not set,
-        # so it cannot be relied on. The fallback asks the X server for the
-        # root's children, which needs nothing of the client — sound only
-        # because this display is private to this run.
+        # `xdotool search --pid` reads _NET_WM_PID, which a client need not set.
+        # The fallback asks the X server for the root's children, which needs
+        # nothing of the client — sound only because this display is private to
+        # this run.
         found = []
         search = run(["xdotool", "search", "--onlyvisible", "--pid", str(self.app_pid)])
-        # xdotool exits 1 both for "no window" and for "no display", so the code
-        # says nothing; only its stderr tells the probe failing apart from the
-        # app owning nothing, and reading the first as the second would blame
-        # the artifact for our tooling.
+        # xdotool exits 1 both for "no window" and for "no display", so only its
+        # stderr tells the probe failing apart from the app owning nothing.
         if search.stderr.strip():
             note("::warning::xdotool search: %s" % search.stderr.strip())
         for window in search.stdout.split():
@@ -838,9 +764,8 @@ class LinuxLane(Lane):
             if len(fields) < 2 or not fields[0].startswith("0x"):
                 continue
             # A title may contain spaces, so the `<w>x<h>[+-]<x>[+-]<y>` token is
-            # counted from the end. The offsets can be negative for a window
-            # placed partly off-screen, and skipping the app's window would read
-            # as "the app showed nothing".
+            # counted from the end. Its offsets are negative for a window placed
+            # partly off-screen, which is still a window the app put up.
             geometry = re.match(r"^(\d+)x(\d+)[-+]", fields[-2])
             if geometry:
                 found.append(
@@ -851,8 +776,8 @@ class LinuxLane(Lane):
     def window(self):
         """The largest, because a toolkit maps small utility windows next to the
         real one and a frame of one of those is a true picture of the wrong
-        thing. Re-asked every time: a full boot replaces the splash with the main
-        window, which is a different window."""
+        thing. Re-asked every time, since a full boot replaces the splash with
+        the main window."""
         best = sorted(self.windows(), key=lambda found: found[1] * found[2])
         return best[-1][0] if best else None
 
@@ -884,8 +809,9 @@ class LinuxLane(Lane):
             note(indent(run(["xwininfo", "-root", "-tree"]).stdout))
 
     def stop(self):
-        # The whole session, so the app's conductor and keystore go with it: the
-        # app was launched into one of its own for exactly this.
+        # The whole session, so the app's conductor and keystore go with it: an
+        # AppImage runs an inner binary, and ending the launcher alone would
+        # leave the app on the runner.
         if self.app:
             end_process_group(self.app.pid, self.app_pid)
             end_process(self.app)
@@ -895,28 +821,20 @@ class LinuxLane(Lane):
 
 
 class MacosLane(Lane):
-    """Two modes, and the verdict says which one the run concluded in.
+    """Two modes, because without the TCC "Screen Recording" grant
+    `screencapture` does not fail: it returns the desktop with every application
+    window omitted. So the lane measures whether it has the grant, tries, and
+    falls back to the window list — which is only partly redacted, since
+    kCGWindowName is withheld without the grant and the owner pid, the layer and
+    the bounds are not.
 
-      PROVEN       a window-scoped capture of the app's own window is the app's
-                   own screen, judged by the same analyser as the other lanes.
-      WINDOW-ONLY  anything else. The gate is then the window list, which is only
-                   partly redacted: kCGWindowName is withheld from a process
-                   without the TCC "Screen Recording" grant, the owner pid, the
-                   layer and the bounds are not. That proves the app launched and
-                   put a real on-screen window up at a real size — not that the
-                   webview painted anything into it.
+    It is never PROVEN off anything but a frame of the app's own window, and
+    never red for want of a photograph it could not take."""
 
-    Both, because without the grant `screencapture` does not fail: it returns
-    the desktop with every application window omitted, and a wallpaper is a rich
-    gradient. So the lane measures whether it has the grant, tries, and falls
-    back. It is never PROVEN off anything but a frame of the app's own window,
-    and never red for want of a photograph it could not take."""
-
-    # Advisory, because this lane's verdict does not rest on pixels. Two of them:
-    # the whole screen answers "is this runner's screen mistakable for the app",
-    # and the frame that would decide is one window's worth of it, which can
-    # clear a bar the whole screen does not. The rect sits at the top-left,
-    # where the menu bar is.
+    # Advisory, because this lane's verdict does not rest on pixels. The frame
+    # that would decide is one window's worth of the screen, which can clear a
+    # bar the whole screen does not — hence the second control, a rect at the
+    # top-left where the menu bar is.
     controls = (("00-control-screen", True), ("00-control-window-rect", True))
     # A whole-screen retina PNG per poll is tens of megabytes of artifact for
     # frames that decide nothing here.
@@ -949,9 +867,8 @@ class MacosLane(Lane):
     def preflight(self):
         if not os.path.isfile(self.artifact):
             raise Answer("CANNOT PROVE", "no such artifact: %s" % self.artifact)
-        # Asked first: a runner with no Aqua session cannot show a GUI app
-        # anything, and the window list would be empty for a reason that has
-        # nothing to do with the artifact.
+        # A runner with no Aqua session cannot show a GUI app anything, and its
+        # window list would be empty for a reason unrelated to the artifact.
         session = run(["launchctl", "managername"]).stdout.strip()
         note("launchctl managername: %s" % (session or "<none>"))
         if session != "Aqua":
@@ -964,9 +881,8 @@ class MacosLane(Lane):
                 "this runner has no Aqua (GUI) session, so nothing can put a window on a screen here",
             )
         need("swiftc", "the window probe could not be built")
-        # Compiled once rather than interpreted per poll, which would cost most
-        # of a minute across a run. main.swift because swiftc accepts top-level
-        # statements only in a file by that name.
+        # main.swift because swiftc accepts top-level statements only in a file
+        # by that name.
         shutil.copy(HERE / "mac-window-info.swift", self.work / "main.swift")
         if run_loud(
             ["swiftc", "-O", "-o", str(self.probe), str(self.work / "main.swift")]
@@ -975,9 +891,8 @@ class MacosLane(Lane):
                 "CANNOT PROVE",
                 "the window probe would not compile, so nothing could be asked of the window server",
             )
-        # Asked before anything is installed, because the whole macOS approach
-        # rests on the owner pid and the bounds surviving the redaction, and that
-        # is the least certain claim in it.
+        # Asked before anything is installed: the whole macOS approach rests on
+        # the owner pid and the bounds surviving the redaction.
         probed = self.window_info(0)
         note(probed.stdout)
         if probed.stderr.strip():
@@ -1065,8 +980,8 @@ class MacosLane(Lane):
         # covers.
         copied = run_loud(["ditto", str(bundles[0]), str(bundle)])
         if copied.returncode:
-            # CANNOT PROVE, not NOT PROVEN: a copy that failed on this runner
-            # would otherwise be reported as a bundle with no executable in it.
+            # About the runner, not the build: a failed copy would otherwise be
+            # reported as a bundle with no executable in it.
             raise Answer(
                 "CANNOT PROVE",
                 "ditto exited %d copying %s into /Applications, so nothing was installed to launch"
@@ -1114,7 +1029,7 @@ class MacosLane(Lane):
         note("launched %s (pid %d, HOME=%s)" % (self.binary, self.app.pid, self.home))
 
     def logs(self):
-        # Tauri's app_log_dir is ~/Library/Logs/<id>; Application Support is read
+        # Tauri's app_log_dir is ~/Library/Logs/<id>. Application Support is read
         # too, so a change in tauri's resolution shows up as a log we still find
         # rather than as a silent "no state reached".
         return read_all(
@@ -1161,8 +1076,6 @@ class MacosLane(Lane):
         path = self.verdict_dir / (slug + "-window.png")
         shot = run(["screencapture", "-x", "-o", "-l", line.split()[1], str(path)])
         if not (path.exists() and path.stat().st_size > 0):
-            # Its own words: "not one capture succeeded" is a finding about the
-            # runner, and this is the only thing that says which runner fault.
             if shot.stderr.strip():
                 note(indent(shot.stderr))
             return False
@@ -1172,8 +1085,6 @@ class MacosLane(Lane):
         return True
 
     def seek_evidence(self, slug, force=False):
-        # This lane's floor: the window list. The whole-screen frame is still
-        # taken alongside it, as context.
         self.shoot(slug, force)
         line = self.largest_window()
         if not line:
@@ -1185,11 +1096,9 @@ class MacosLane(Lane):
         return True
 
     def after_watch(self):
-        # The grant is re-read over a list that now contains the app's own
-        # window. What it measures is titles ANYWHERE in the list: the probe owns
-        # no windows, so every entry belongs to another process, and a desktop
-        # with nothing titled on it answers "not-granted" for want of anything to
-        # read.
+        # The grant is measured as titles ANYWHERE in the list, so a desktop with
+        # nothing titled on it answers "not-granted" for want of anything to read.
+        # Re-read here, over a list that now contains the app's own window.
         grant = grant_of(self.window_info(self.app.pid).stdout) or self.grant
         statuses = [self.control_status.get(slug) for slug, _ in self.controls]
         may = pixels_may_decide(grant, statuses)
@@ -1208,8 +1117,7 @@ class MacosLane(Lane):
         note("pixel mode: %s — %s" % ("ON" if may else "OFF", self.pixel_outcome))
         # The state half is a precondition, not something pixels could rescue: a
         # run that failed or never reached a state is NOT PROVEN whatever a frame
-        # shows, so photographing it would spend the budget on a warning about
-        # paint in a lane whose finding is the backend.
+        # shows.
         if not (may and self.window_line and self.reached and not self.failed_state):
             return
         budget = int(os.environ.get("UNYT_PROVE_PIXEL_SECONDS", "30"))
@@ -1221,20 +1129,16 @@ class MacosLane(Lane):
         painted = self.seek_paint("pixel", budget)
         if painted:
             # The slug seek_frame returned, and nothing else: PROVEN may only
-            # ever cite a photograph, and the watch's own answer was a window
-            # list.
+            # ever cite a photograph, and the watch's own answer was a list.
             self.painted_frame = "frame " + painted
             note(
                 "OK: a window-scoped capture is the app's own screen (%s)"
                 % self.painted_frame
             )
             return
-        # Which of the two it was, because they are opposite findings: frames
-        # that are not a screen say something about the build, and no frames at
-        # all say the capture path could not photograph a window that was
-        # demonstrably there. The first stops short of blaming the build: titles
-        # in the window list say this process has the grant, not that a window
-        # capture returns the window.
+        # Opposite findings, so they are never worded the same: frames that are
+        # not a screen say something about the build, and no frames at all say
+        # the capture path could not photograph a window demonstrably there.
         taken = len(list(self.verdict_dir.glob("*.png"))) - before
         if taken:
             self.pixel_outcome = (
@@ -1296,9 +1200,8 @@ class MacosLane(Lane):
                 self.DECLARED_H,
             )
         if self.failed_state or not self.reached:
-            # Ahead of the pixel result, exactly as the other lanes order it: a
-            # painted screen with a failed backend behind it is a different bug,
-            # not a pass.
+            # Ahead of the pixel result: a painted screen with a failed backend
+            # behind it is a different bug, not a pass.
             return "NOT PROVEN", "%s, though it did put a %s window on screen" % (
                 state,
                 size,
@@ -1309,9 +1212,6 @@ class MacosLane(Lane):
                 "%s, put a %s window on screen, and a window-scoped capture of it is the app's own screen (%s)"
                 % (state, size, self.painted_frame),
             )
-        # Never PROVEN: publish_verdict.py passes this green and says in the same
-        # breath that no pixel was checked. The two must not share a word — in
-        # the Checks list they would look identical.
         return (
             "WINDOW-ONLY",
             "%s and put a %s window on screen; no photograph of that window says it is a screen the app painted (%s), so what the webview drew into it is NOT verified here"
@@ -1334,17 +1234,14 @@ class MacosLane(Lane):
         self.mount = None
 
     def stop(self):
-        # THE APP, NOT ITS TREE. What it spawned — the conductor, the keystore —
-        # is left to the runner, which is thrown away at the end of the job.
-        # Named rather than implied: the Linux lane does end the tree, and the
-        # difference is a launch flag away if a leak ever costs anything.
+        # The app, not its tree: what it spawned is left to the runner, which is
+        # thrown away at the end of the job.
         end_process(self.app)
         self.detach()
         super().stop()
         shutil.rmtree(self.work, ignore_errors=True)
 
 
-# ── what Windows records about an install ─────────────────────────────────────
 Entry = collections.namedtuple("Entry", "key name location")
 
 UNINSTALL_ROOTS = (
@@ -1392,17 +1289,14 @@ def uninstall_entries():
 
 
 def installer_kind(path):
-    # The release names its assets in lower case, but an extension is not a
-    # promise: a case-sensitive match would read .MSI as unsupported.
     return {".exe": "nsis", ".msi": "msi"}.get(
         os.path.splitext(path)[1].lower(), "unsupported"
     )
 
 
 def install_argv(path, kind, log=None):
-    """The same commands check-windows.ps1 uses, and that agreement is the
-    point: the smoke and this lane must install to the same place under the same
-    product identity, or they are not talking about the same install.
+    """The same commands check-windows.ps1 uses, so both install to the same
+    place under the same product identity.
 
     NSIS takes an UPPERCASE /S — the switch is case-sensitive and /s runs the
     installer interactively, hanging the job on a dialog. msiexec takes /l*v
@@ -1418,9 +1312,9 @@ def install_argv(path, kind, log=None):
 def to_windows_path(path):
     """msiexec will not open a forward-slash path: it answers 1619,
     ERROR_INSTALL_PACKAGE_OPEN_FAILED, which reads as a corrupt package rather
-    than a mistyped one — and the path reaches this lane from a bash script
-    through $GITHUB_ENV, so it arrives with bash's separators. A forward slash is
-    never part of a Windows filename, so this cannot corrupt one."""
+    than a mistyped one — and the path reaches this lane from a bash script,
+    so it arrives with bash's separators. A forward slash is never part of a
+    Windows filename, so this cannot corrupt one."""
     return path.replace("/", "\\")
 
 
@@ -1433,17 +1327,14 @@ def install_succeeded(code):
 
 def install_location(raw):
     """NSIS writes it quoted, the MSI bare with a trailing separator; verbatim,
-    the quoted form fails every path test. The same normalisation as
-    check-windows.ps1's, so both agree where the app is."""
+    the quoted form fails every path test."""
     if not raw:
         return None
     return raw.strip().strip('"').rstrip("\\/") or None
 
 
 def select_install_entry(entries):
-    """Prefer the entry naming itself Unyt, and otherwise take the first rather
-    than giving up, since something did just install — the same rule as
-    check-windows.ps1."""
+    """The first entry rather than none, since something did just install."""
     named = [entry for entry in entries if entry.name and "unyt" in entry.name.lower()]
     for candidates in (named, entries):
         if candidates:
@@ -1452,18 +1343,16 @@ def select_install_entry(entries):
 
 
 class WindowsLane(Lane):
-    """Both installers, one lane: the release ships an NSIS .exe and an .msi,
-    they install to different places under different registry hives, and proving
-    one proves nothing about the other. Only the install command and where
-    Windows records it differ.
+    """Both installers, one lane: the NSIS .exe and the .msi install to
+    different places under different registry hives, so proving one proves
+    nothing about the other.
 
     The capture stays in PowerShell — window-capture.ps1 runs under Windows
     PowerShell 5.1 because System.Drawing is a .NET Framework assembly, and no
     cmdlet does window-scoped capture."""
 
-    # Two controls: the whole desktop answers "is this runner's screen mistakable
-    # for the app", but the fallback frame is an 800x800 sub-rect of that
-    # desktop, which can clear a bar the whole screen does not.
+    # A second control because the fallback frame is an 800x800 sub-rect of the
+    # desktop, which can clear a bar the whole desktop does not.
     controls = (("00-control-desktop", False), ("00-control-splash-rect", False))
     # The splash's own footprint, from unyt/src-tauri/tauri.conf.json.
     DECLARED = 800
@@ -1480,8 +1369,8 @@ class WindowsLane(Lane):
 
     def helper(self, **arguments):
         """One PowerShell invocation per frame, doing everything that frame
-        needs: it compiles its capture code on every start, so a call per check
-        would cost more than the poll interval."""
+        needs: window-capture.ps1 compiles its capture code on every start, so a
+        call per check would cost more than the poll interval."""
         argv = [
             "powershell",
             "-NoProfile",
@@ -1500,9 +1389,6 @@ class WindowsLane(Lane):
         return result.stdout.splitlines()
 
     def preflight(self):
-        # Asked before any of the runner is probed: an artifact this lane cannot
-        # install is a wrong invocation, and must not be reported as anything
-        # about a runner or a build.
         if self.kind == "unsupported":
             raise Answer(
                 "CANNOT PROVE",
@@ -1544,9 +1430,8 @@ class WindowsLane(Lane):
             )
         # The data root cannot be redirected: tauri resolves it through
         # SHGetKnownFolderPath, which reads the user's profile and ignores
-        # %LOCALAPPDATA%. The throwaway runner is the sandbox instead, so its
-        # cleanliness is measured rather than assumed — a warm start exercises a
-        # different path than a user's first install.
+        # %LOCALAPPDATA%. So the runner itself is the sandbox, and its
+        # cleanliness is measured rather than assumed.
         data_root = Path(os.environ["LOCALAPPDATA"]) / self.bundle_id
         if data_root.exists():
             note(
@@ -1569,15 +1454,12 @@ class WindowsLane(Lane):
 
     def install(self):
         before = {entry.key for entry in uninstall_entries()}
-        # The log goes into the shots directory, which is uploaded whatever the
-        # verdict — an installer log nobody can read afterwards is not evidence.
+        # Into the shots directory, which is uploaded whatever the verdict.
         argv = install_argv(
             self.artifact, self.kind, to_windows_path(str(self.shots / "msiexec.log"))
         )
         note("installing: " + subprocess.list2cmdline(argv))
         try:
-            # An argv list, so an artifact path with a space in it stays one
-            # argument: Windows quoting is subprocess's job, not a caller's.
             code = subprocess.run(
                 argv, timeout=300, check=False, stdout=sys.stderr, stderr=sys.stderr
             ).returncode
@@ -1587,18 +1469,15 @@ class WindowsLane(Lane):
                 "the %s installer never finished, so it was waiting for input"
                 % self.kind,
             ) from None
-        # The message must not say "nothing was installed": 3010 means it did.
         if not install_succeeded(code):
             raise Answer(
                 "NOT PROVEN",
                 "the %s installer exited %d, so this is not an install a user would be looking at (3010 would mean it installed and wants a reboot first)"
                 % (self.kind, code),
             )
-        # CANNOT PROVE, not NOT PROVEN: this is how THIS LANE finds the program,
-        # and an installer that registers no location has defeated the lookup
-        # rather than shown anything about whether the app opens.
-        # check-windows.ps1's 'registers' and 'executable' checks own the
-        # question of whether registering it is required.
+        # CANNOT PROVE, not NOT PROVEN: this is only how THIS LANE finds the
+        # program. Whether registering it is required at all is
+        # check-windows.ps1's 'registers' and 'executable' checks.
         entry = select_install_entry(
             [e for e in uninstall_entries() if e.key not in before]
         )
@@ -1616,10 +1495,9 @@ class WindowsLane(Lane):
                 % (self.kind, entry.name),
             )
         note("installed %s -> %s" % (entry.name, self.install_dir))
-        # Checked against the disk, not against the installer's own exit code: an
-        # installer that returns 0 and registers a directory it never created has
-        # installed nothing, and that must not surface later as a capture failure
-        # that sounds like the app.
+        # An installer that returns 0 and registers a directory it never created
+        # has installed nothing, and that must not surface later as a capture
+        # failure that sounds like the app.
         if not os.path.isdir(self.install_dir):
             raise Answer(
                 "NOT PROVEN",
@@ -1651,10 +1529,10 @@ class WindowsLane(Lane):
             # which the Linux lane needs only for the single-instance plugin.
             WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--disable-gpu --disable-gpu-compositing",
         )
-        # Captured even though the release build has no console: windows_subsystem
-        # = "windows" means nothing reaches a terminal, but a Rust panic before
-        # tracing is initialised still writes to stderr — the difference between
-        # a diagnosable crash and "the app never reached any state".
+        # Captured even though windows_subsystem = "windows" means nothing
+        # reaches a terminal: a Rust panic before tracing is initialised still
+        # writes to stderr, and that is the difference between a diagnosable
+        # crash and "the app never reached any state".
         try:
             self.app = subprocess.Popen(
                 [str(self.exe)],
@@ -1664,7 +1542,6 @@ class WindowsLane(Lane):
                 stderr=self.opened(self.stderr_log),
             )
         except OSError as exc:
-            # A program that will not start is a finding about the artifact.
             raise Answer(
                 "NOT PROVEN", "the installed program would not start: %s" % exc
             ) from None
@@ -1696,12 +1573,10 @@ class WindowsLane(Lane):
             if line.startswith("WINDOW "):
                 self.saw_window = True
         wrote = self.wrote(lines)
-        # PrintWindow asks the window to render itself, so what it returns is the
-        # app's own content whatever is in front of it — that makes it the
-        # evidence. CopyFromScreen reads the desktop at the window's coordinates,
-        # so it returns whatever is there: evidence only when PrintWindow gave us
-        # nothing, and context otherwise, because a frame that can be the desktop
-        # must not decide anything.
+        # PrintWindow asks the window to render itself, so it returns the app's
+        # own content whatever is in front of it. CopyFromScreen reads the
+        # desktop at the window's coordinates, so it returns whatever is there —
+        # evidence only when PrintWindow gave us nothing at all.
         if "print" in wrote:
             return True
         if "copy" in wrote:
@@ -1734,9 +1609,6 @@ class WindowsLane(Lane):
         note(indent("\n".join(self.logs().splitlines()[-40:])))
 
     def stop(self):
-        # The app, not its tree, as on macOS — and here there is no alternative:
-        # Windows has no process group to signal, and TerminateProcess reaches
-        # one pid.
         end_process(self.app)
         super().stop()
 
@@ -1765,9 +1637,9 @@ def main(argv):
     except Answer as answer:
         word, why = answer.word, answer.why
     except Exception as exc:
-        # Every way out of a lane says something. publish_verdict.py already reds
-        # a lane that printed nothing, but its summary could then only say
-        # "exited N without a verdict" — and the reason is the value of the run.
+        # Every way out of a lane says something. A lane that printed nothing is
+        # already red, but its summary could then only say "exited N without a
+        # verdict" — and the reason is the value of the run.
         traceback.print_exc()
         word, why = "CANNOT PROVE", "this lane died before it could answer: %r" % (exc,)
     print("VERDICT %s: %s — %s" % (label, word, why))

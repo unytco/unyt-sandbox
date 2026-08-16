@@ -1,26 +1,20 @@
 name: "ci"
 
 # Everything about the release smoke that can be proven wrong WITHOUT a release.
+# release-smoke.yaml runs only on a tag, so until this existed a renamed job or a
+# verdict step that stopped being read was discovered on the one run where being
+# wrong is most expensive.
 #
-# release-smoke.yaml runs only on a tag, so until this existed a renamed job, a
-# matrix that no longer expands or a verdict step that stopped being read merged
-# unchallenged and was discovered on the one run where being wrong is most
-# expensive. Every suite below needs nothing but an ubuntu runner: no artifact,
-# no Mac, no Windows, no release to point at.
-#
-# THE SUITES RUN WHERE THE LANES RUN. release-smoke.yaml runs the load-proving
-# suite on all three runners before each lane launches anything, so a POSIX-only
-# assumption in it reds a Windows release lane — and a Linux-only pull request
-# check cannot see that. Hence the windows job below.
+# THE SUITES RUN WHERE THE LANES RUN: a POSIX-only assumption in the load-proving
+# suite reds a Windows release lane, and a Linux-only pull request check cannot
+# see that. Hence the windows job below.
 #
 # WHAT IS STILL ONLY PROVEN BY A RELEASE RUN: the capture paths on macOS and
-# Windows, and everything downstream of installing a real artifact. The Linux
-# capture path is proven here, against a window this job puts on an Xvfb display
-# of its own.
+# Windows, and everything downstream of installing a real artifact.
 on:
   pull_request:
-  # The long-lived branches only. A push to a branch with a pull request open is
-  # already covered by the trigger above, and running both doubles every queue.
+  # The long-lived branches only: a push to a branch with a pull request open is
+  # already covered above, and running both doubles every queue.
   push:
     branches: [main, develop]
 
@@ -39,8 +33,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned, like actionlint below, and for the same reason.
-      #
       # -S warning: the info level is dominated by SC2329 on functions this
       # codebase dispatches by name and SC1091 on /etc/os-release, which is only
       # readable inside the containers these scripts run in.
@@ -56,10 +48,8 @@ jobs:
           docker run --rm -v "$PWD:/repo:ro" --workdir /repo \
             rhysd/actionlint:1.7.7 -color
 
-      # PARSE ONLY, and that is the whole of what a Linux runner can say about
-      # these: check-windows.ps1 needs the Windows registry and
-      # window-capture.ps1 needs .NET Framework, so neither can run here. A
-      # syntax error in one is otherwise a Windows runner's to find.
+      # PARSE ONLY, which is all a Linux runner can say: check-windows.ps1 needs
+      # the Windows registry and window-capture.ps1 needs .NET Framework.
       - name: powershell parses
         shell: pwsh
         run: |
@@ -106,19 +96,17 @@ jobs:
           sudo apt-get install -y -qq xvfb x11-utils xdotool imagemagick
           python3 -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
 
-      # Everything under load-proving/, including the lane driven against a real
-      # Xvfb display: the frame thresholds, the verdict, the step's colour and
-      # the Linux capture path.
+      # Including the lane driven against a real Xvfb display, which is what
+      # proves the Linux capture path.
       - name: "load proving"
         run: python3 -m unittest discover -v -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
       - name: "the smoke oracle"
         run: bash scripts/smoke/test-oracle.sh
 
-      # BOTH WAYS, and the second is the one that matters: the workflow sets
-      # UNYT_SMOKE_STATE and UNYT_SMOKE_RESULTS before this harness runs, and a
-      # bare run mints a temp directory per invocation — which is what hid a
-      # harness writing into the release's own state and results files.
+      # BOTH WAYS, and the second is the one that matters: a bare run mints a temp
+      # directory per invocation, which is what hid a harness writing into the
+      # release's own state and results files.
       # `shell: bash` for the pipefail it brings: the default shell would hand
       # this step tee's exit status, and a failing suite would read green.
       - name: "the macOS checks, as a bare run"
@@ -143,10 +131,9 @@ jobs:
               { echo "::error::$log has no tally — the suite did not run to completion"; exit 1; }
           done
 
-  # The same suite the Windows release lanes run before they launch anything.
-  # Only the Python: the bash harnesses never run there, and the capture needs a
-  # released artifact. macOS is not here because it is POSIX like the Linux job
-  # — Windows is the only runner whose stdlib and code page differ.
+  # Only the Python: the bash harnesses never run on Windows, and the capture
+  # needs a released artifact. macOS is absent because it is POSIX like the Linux
+  # job — Windows is the only runner whose stdlib and code page differ.
   windows:
     name: "the load-proving suite on windows"
     runs-on: windows-latest

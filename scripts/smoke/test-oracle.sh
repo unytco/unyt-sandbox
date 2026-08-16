@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Regression test for the health oracle. No Docker, no app — just fixture log
-# lines through the REAL matchers in common.sh.
-#
-#   scripts/smoke/test-oracle.sh
-#
-# Drives the REAL `smoke_match_*` / `smoke_count_*`, never a copy: all three
+# Regression test for the health oracle: fixture log lines through the REAL
+# `smoke_match_*` / `smoke_count_*` in common.sh, never a copy — all three
 # defects this exists for were in the INVOCATION, not the pattern, so a copy
 # would have passed while the call site stayed broken.
 set -uo pipefail
@@ -39,7 +35,6 @@ check_count() { # <description> <expected-count> <log>
 
 P='2026-08-12T20:00:00.000000Z  INFO unyt::runtime: Status update:'
 
-# ── every backend-ready state is detected ────────────────────────────────────
 check "HcAuthRequired" yes \
   "$P LairAwaitingPassword { is_initial_setup: true } -> HcAuthRequired { agent_key: \"uhCAkAAA\", joining_service_url: \"https://joining.unyt.dev\" }" smoke_match_backend_ready
 check "NetworkSetupRequired" yes \
@@ -59,7 +54,6 @@ check "HcAuthFailed (struct variant)"  yes "$P Starting -> HcAuthFailed { error:
 check "a Rust panic"                   yes \
   'thread '"'"'main'"'"' panicked at src/runtime/boot/lair.rs:79:5' smoke_match_failed
 
-# ── healthy must NOT swallow a failure, and vice versa ────────────────────────
 check "a failure line is not healthy"  no "$P Ready -> ConductorCrashed" smoke_match_backend_ready
 check "a healthy line is not a failure" no "$P LairReady -> Ready" smoke_match_failed
 
@@ -76,8 +70,8 @@ check "quiet boot log is neither" no \
   '2026-08-12T20:00:00.000000Z  INFO unyt: holochain_dir: Final path' smoke_match_backend_ready
 
 # ── bug 2: the pattern starts with '-', so an unguarded grep ate it as options ─
-# Before the fix these all returned "" (grep: invalid option) and the caller's
-# arithmetic silently produced 0, so a permanently flapping conductor passed.
+# Before the fix these returned "" (grep: invalid option) and the caller's
+# arithmetic produced 0, so a permanently flapping conductor passed.
 D="$P Ready -> ConductorDisconnected"
 check_count "no disconnects"  0 "$P LairReady -> Ready"
 check_count "one disconnect"  1 "$D"
@@ -88,17 +82,15 @@ $D
 $D"
 check "a disconnect is not a terminal failure" no "$D" smoke_match_failed
 
-# ── the reported line is the real one, not a truncation ──────────────────────
 got="$(printf '%s\n' "$P LairReady -> NetworkSetupRequired { agent_key: \"uhCAkAAA\", has_existing_key: false }" | smoke_first_backend_ready)"
 case "$got" in
   *NetworkSetupRequired*uhCAkAAA*) pass=$((pass + 1)) ;;
   *) fail=$((fail + 1)); printf 'FAIL  %-58s got: %s\n' "first-healthy reports the matched state" "$got" >&2 ;;
 esac
 
-# ── cold-install proof ───────────────────────────────────────────────────────
 # has_existing_key: true is CORRECT on an authenticated build's first install
-# (hc-auth mints a key at boot and resolve_agent_key reuses it), so it must not
-# be used as the freshness signal. Carried-forward identity is the real one.
+# (hc-auth mints a key at boot and resolve_agent_key reuses it), so it cannot be
+# the freshness signal.
 check "a carried-forward identity is detected" yes \
   '2026-08-12T20:00:00.000000Z  INFO unyt::runtime: identity: agent identity carried forward into the new version' smoke_match_carried
 check "a cold install shows no carry" no \
@@ -145,8 +137,7 @@ one_case() { # <declared> <expected-finding-prefix> <description>
   out="$(smoke_depends_gaps "$df" "$cf")"
   if [ -z "$2" ]; then
     # An empty expectation needs its own branch: `case "$out" in "$2"*)` becomes
-    # `*)`, which matches ANY output, so every "must not fire" case passed
-    # unconditionally.
+    # `*)`, which matches ANY output.
     if [ -z "$out" ]; then pass=$((pass + 1)); else
       fail=$((fail + 1)); printf 'FAIL  %-58s expected NO finding, got: %s\n' "$3" "$out" >&2; fi
   else
@@ -164,15 +155,14 @@ one_case 'libc6 (>= v2.34)'           BADVERSION "a malformed version dpkg accep
 one_case 'libc6 (>=1.0)'              TOOLOW     "a no-space constraint whose floor is too low"
 one_case 'libc6'                      UNCONSTRAINED "a bare declaration"
 one_case 'libfoo (>= 1)'              MISSING    "a wholly different package"
-# Must NOT fire: a correct declaration in each accepted shape.
 one_case 'libc6 (>= 2.34)'            ""         "an exact floor (must not fire)"
 one_case 'libc6 (>=2.34)'             ""         "a valid no-space floor (must not fire)"
 one_case 'libc6 (>> 2.40)'            ""         "a strict lower bound above the floor (must not fire)"
 one_case 'libc6:amd64 (>= 2.34)'      ""         "an arch-qualified name (must not fire)"
 
-# Provides resolution: a declared name the computed package PROVIDES must count
-# as declared, because that is what apt does — the t64 rename means the declared
-# list can only name one of the two, and the install is ground truth.
+# A declared name the computed package PROVIDES counts as declared, because that
+# is what apt does — the t64 rename means the declared list can only name one of
+# the two.
 prov_d="$(mktemp)"; prov_c="$(mktemp)"; prov_p="$(mktemp)"
 printf 'libgtk-3-0 (>= 3.21.5)\nlibglib2.0-0 (>= 2.66.0)\n' >"$prov_d"
 printf 'libgtk-3-0t64 (>= 3.21.5)\nlibglib2.0-0t64 (>= 2.66.0)\nlibabsent (>= 1)\n' >"$prov_c"
@@ -184,15 +174,12 @@ else pass=$((pass + 1)); fi
 if printf '%s\n' "$prov_out" | grep -q 'libglib2.0-0t64'; then
   fail=$((fail + 1)); echo "FAIL  a provided name should count as declared (libglib2.0-0t64)" >&2
 else pass=$((pass + 1)); fi
-# MUST still fire: Provides resolution must not become a blanket amnesty.
 if printf '%s\n' "$prov_out" | grep -q 'MISSING libabsent'; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  a genuinely absent dependency must still be MISSING" >&2; fi
-# MUST still fire: a provided name does not excuse a too-low floor.
 printf 'libgtk-3-0 (>= 1.0)\n' >"$prov_d"
 printf 'libgtk-3-0t64 (>= 3.21.5)\n' >"$prov_c"
 if smoke_depends_gaps "$prov_d" "$prov_c" "$prov_p" | grep -q '^TOOLOW '; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  a too-low floor must still fire through a provided name" >&2; fi
-# Without the map, behaviour is unchanged (so nothing silently depends on it).
 printf 'libgtk-3-0 (>= 3.21.5)\n' >"$prov_d"
 if smoke_depends_gaps "$prov_d" "$prov_c" | grep -q '^MISSING libgtk-3-0t64'; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  without a provides map the t64 name should read as MISSING" >&2; fi
@@ -203,15 +190,12 @@ rm -f "$dep_d" "$dep_c"
 # ── B: a duplicate declared entry must not read as a missing floor ───────────
 # tauri-bundler appends bare `libwebkit2gtk-4.1-0` and `libgtk-3-0` on top of the
 # floored list it copied from tauri.conf.json, and `sort -u` puts the bare entry
-# FIRST (a prefix sorts before its extension). Matching only the first declared
-# entry therefore reported a correctly-floored package as UNCONSTRAINED, red on
-# all four images in v0.101.0-dev.1.
+# FIRST (a prefix sorts before its extension).
 #
 # Debian `Depends` is a comma-separated AND list, so a duplicate ADDS a
-# requirement rather than replacing one. Verified empirically, not from the
-# policy text: on ubuntu:22.04 and debian:13, both apt and dpkg refuse to install
-# a package declaring `libgtk-3-0 (>= 99.0), libgtk-3-0` — in either order —
-# against libgtk-3-0 3.24, and accept it once the floor is satisfiable.
+# requirement rather than replacing one. Verified empirically rather than from
+# the policy text: on ubuntu:22.04 and debian:13, apt and dpkg both refuse
+# `libgtk-3-0 (>= 99.0), libgtk-3-0` — in either order — against libgtk-3-0 3.24.
 dup_case() { # <description> <computed> <expected-finding-or-empty> <declared...>
   local desc="$1" computed="$2" want="$3"; shift 3
   local df cf out
@@ -233,7 +217,6 @@ dup_case "bare THEN floored"                  "$GTK" "" 'libgtk-3-0' 'libgtk-3-0
 dup_case "two floors, adequate one first"     "$GTK" "" 'libgtk-3-0 (>= 3.21.5)' 'libgtk-3-0 (>= 1.0)'
 dup_case "two floors, adequate one last"      "$GTK" "" 'libgtk-3-0 (>= 1.0)' 'libgtk-3-0 (>= 3.21.5)'
 dup_case "an adequate floor behind two duds"  "$GTK" "" 'libgtk-3-0' 'libgtk-3-0 (<= 9)' 'libgtk-3-0 (>= 3.21.5)'
-# MUST still fire — the fix may not weaken the real check.
 dup_case "bare only is still unconstrained"   "$GTK" 'UNCONSTRAINED libgtk-3-0 (>= 3.21.5)' 'libgtk-3-0'
 # Both too low: still TOOLOW, and it names the HIGHEST declared floor, which is
 # the one actually in force once the entries are ANDed.
@@ -241,26 +224,21 @@ dup_case "two floors, both too low"           "$GTK" 'TOOLOW libgtk-3-0 (>= 3.21
   'libgtk-3-0 (>= 1.0)' 'libgtk-3-0 (>= 3.0)'
 dup_case "two floors, both too low, reversed" "$GTK" 'TOOLOW libgtk-3-0 (>= 3.21.5) declared (>= 3.0)' \
   'libgtk-3-0 (>= 3.0)' 'libgtk-3-0 (>= 1.0)'
-# A real-but-too-low floor is more useful to report than the bare duplicate.
 dup_case "a too-low floor outranks a bare dup" "$GTK" 'TOOLOW libgtk-3-0 (>= 3.21.5) declared (>= 1.0)' \
   'libgtk-3-0' 'libgtk-3-0 (>= 1.0)'
 dup_case "a non-floor outranks a bare dup"    "$GTK" 'NOFLOOR libgtk-3-0 (>= 3.21.5) declared (<= 9) — not a lower bound' \
   'libgtk-3-0' 'libgtk-3-0 (<= 9)'
-# MISSING is still MISSING when every entry names something else.
 dup_case "duplicates of the wrong package"    "$GTK" 'MISSING libgtk-3-0 (>= 3.21.5)' 'libfoo' 'libfoo (>= 1)'
-# Entries that tie on rank are broken apart WITHOUT reference to input order, so
-# the same declared set always names the same entry. The tie-break compares in
-# byte order rather than the caller's collation: en_US.UTF-8 and C disagree on
-# where `<` sorts against `=`, which would otherwise make this locale-dependent.
+# Ties are broken WITHOUT reference to input order, in byte order rather than the
+# caller's collation: en_US.UTF-8 and C disagree on where `<` sorts against `=`.
 NOFL='NOFLOOR libgtk-3-0 (>= 3.21.5) declared (<= 9) — not a lower bound'
 dup_case "two non-floors tie, first order"    "$GTK" "$NOFL" 'libgtk-3-0 (<= 9)' 'libgtk-3-0 (= 4)'
 dup_case "two non-floors tie, reversed"       "$GTK" "$NOFL" 'libgtk-3-0 (= 4)' 'libgtk-3-0 (<= 9)'
 EQFL='TOOLOW libgtk-3-0 (>= 3.21.5) declared (>= 1.0)'
 dup_case "equal too-low floors, first order"  "$GTK" "$EQFL" 'libgtk-3-0 (>= 1.0)' 'libgtk-3-0 (>> 1.0)'
 dup_case "equal too-low floors, reversed"     "$GTK" "$EQFL" 'libgtk-3-0 (>> 1.0)' 'libgtk-3-0 (>= 1.0)'
-# The verdict must not move with the locale either. en_US.UTF-8 is the leg that
-# bites: its collation ignores punctuation at the primary level, so `<= 9` and
-# `= 4` compare by their digits and swap round against C's byte order.
+# en_US.UTF-8 is the leg that bites: its collation ignores punctuation at the
+# primary level, so `<= 9` and `= 4` compare by their digits and swap round.
 tie_under_locale() { # <locale>
   LC_ALL="$1" LANG="$1" bash -c '
     . "'"$here"'/common.sh"
@@ -271,9 +249,8 @@ tie_under_locale() { # <locale>
 }
 for loc in C en_US.UTF-8; do
   # A locale the machine does not have silently falls back to C, which would make
-  # this assertion pass without testing anything. `locale -a` spells them without
-  # the dash and in lower case (`en_US.utf8`), so the dash is dropped from both
-  # sides and the match is case-insensitive — no name is special-cased.
+  # this pass without testing anything. `locale -a` spells them without the dash
+  # and in lower case (`en_US.utf8`), hence the normalising on both sides.
   loc_key="${loc//-/}"
   if ! locale -a 2>/dev/null | tr -d '-' | grep -qixF "$loc_key"; then
     echo "SKIP  tie-break under LC_ALL=$loc (locale not generated)" >&2
@@ -287,12 +264,10 @@ for loc in C en_US.UTF-8; do
 done
 
 # ── a declared ALTERNATION guarantees only what its weakest branch does ──────
-# `a | b` lets apt satisfy the dependency through EITHER package, so a floor on
-# one branch proves nothing. The constraint parser reads "the first (…) on the
-# line" and credits it to the line's first name, so an alternation used to hand
-# one package's floor to another; weighing every declared entry then removed the
-# accidental red that a bare duplicate had been providing. Every branch must
-# carry the floor for the line to count.
+# `a | b` lets apt satisfy the dependency through EITHER package, so every branch
+# has to carry the floor for the line to count. The parser reads "the first (…)
+# on the line" and credits it to the line's first name, so an alternation used to
+# hand one package's floor to another.
 WK='libwebkit2gtk-4.1-0 (>= 2.41.90)'
 UNWK='UNCONSTRAINED libwebkit2gtk-4.1-0 (>= 2.41.90)'
 dup_case "an alternation's floor is not the other branch's" "$WK" "$UNWK" \
@@ -309,7 +284,6 @@ dup_case "a bare branch after a floored one"                "$GTK" 'UNCONSTRAINE
   'libgtk-3-0 (>= 1.0) | libgtk-3-0'
 dup_case "a bare branch before a floored one"               "$GTK" 'UNCONSTRAINED libgtk-3-0 (>= 3.21.5)' \
   'libgtk-3-0 | libgtk-3-0 (>= 1.0)'
-# MUST NOT fire: an alternation whose every branch carries the floor is sound.
 dup_case "every branch floored"                             "$GTK" "" \
   'libgtk-3-0 (>= 3.21.5) | libgtk-3-0 (>= 3.21.5)'
 # A too-low branch is reported against the WHOLE line: quoting one branch's
@@ -334,8 +308,7 @@ dup_case "a computed entry whose constraint has no version" 'libgtk-3-0 (>=)' \
 
 # ── duplicates through the t64 PROVIDES alias — the path on 3 of the 4 images ─
 # debian:13, ubuntu:24.04 and ubuntu:26.04 all compute `libgtk-3-0t64`, which
-# resolves through the provides map to `libgtk-3-0` and then matches BOTH the
-# floored declaration and the bundler's bare one.
+# resolves to `libgtk-3-0` and then matches BOTH declarations.
 prov_case() { # <description> <computed> <expected> <provides-line> <declared...>
   local desc="$1" computed="$2" want="$3" provides="$4"; shift 4
   local df cf pf out
@@ -354,22 +327,19 @@ prov_case "t64: bare dup before the floored alias"  "$T64" "" "$PMAP" 'libgtk-3-
 prov_case "t64: bare dup after the floored alias"   "$T64" "" "$PMAP" 'libgtk-3-0 (>= 3.21.5)' 'libgtk-3-0'
 prov_case "t64: the bare dup uses the t64 name"     "$T64" "" "$PMAP" 'libgtk-3-0t64' 'libgtk-3-0 (>= 3.21.5)'
 prov_case "t64: the floor arrives on either name"   "$T64" "" "$PMAP" 'libgtk-3-0 (>= 1.0)' 'libgtk-3-0t64 (>= 3.21.5)'
-# MUST still fire, and name the strongest floor even across the two names.
 prov_case "t64: every floor too low, highest named" "$T64" \
   'TOOLOW libgtk-3-0t64 (>= 3.21.5) declared (>= 3.0)' "$PMAP" \
   'libgtk-3-0 (>= 1.0)' 'libgtk-3-0t64 (>= 3.0)'
 prov_case "t64: bare on both names is still a gap"  "$T64" \
   'UNCONSTRAINED libgtk-3-0t64 (>= 3.21.5)' "$PMAP" 'libgtk-3-0' 'libgtk-3-0t64'
 
-# The SAME defect through the sorted path the gate actually uses, so a change to
-# `smoke_normalize_depends` cannot silently reintroduce it. This is the verbatim
-# `Depends` field of the shipped v0.101.0-dev.1 .deb.
+# The same defect through the sorted path the gate actually uses. This is the
+# verbatim `Depends` field of the shipped v0.101.0-dev.1 .deb.
 real_depends='libc6 (>= 2.34), libcairo-gobject2 (>= 1.10.0), libcairo2 (>= 1.10.0), libgcc-s1 (>= 4.2), libgdk-pixbuf-2.0-0 (>= 2.36.9), libglib2.0-0 (>= 2.66.0), libgtk-3-0 (>= 3.21.5), libjavascriptcoregtk-4.1-0, libpango-1.0-0 (>= 1.14.0), libsoup-3.0-0 (>= 3.0.3), libwebkit2gtk-4.1-0 (>= 2.41.90), libwebkit2gtk-4.1-0, libgtk-3-0'
 sorted_d="$(mktemp)"; sorted_c="$(mktemp)"
 printf '%s\n' "$real_depends" | smoke_normalize_depends >"$sorted_d"
-# The premise: smoke_normalize_depends must carry BOTH entries through to the
-# comparison. If it ever de-duplicated by package name the gap check would be
-# judging a list the package does not have.
+# The premise: normalize must carry BOTH entries through. De-duplicating by name
+# would leave the gap check judging a list the package does not have.
 for dupname in libgtk-3-0 libwebkit2gtk-4.1-0; do
   if [ "$(grep -c "^$dupname\( \|$\)" "$sorted_d")" = 2 ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
@@ -377,10 +347,9 @@ for dupname in libgtk-3-0 libwebkit2gtk-4.1-0; do
       "$(grep -c "^$dupname\( \|$\)" "$sorted_d")" >&2
   fi
 done
-# The other half of the premise: the BARE entry has to sort AHEAD of the floored
-# one, because that ordering is the whole defect this block reproduces. If a
-# change to the sort reverses it, this block quietly stops testing anything —
-# so it fails here instead, and whoever made the change re-picks the fixture.
+# The other half of the premise: the BARE entry sorts AHEAD of the floored one,
+# which is the whole defect. A sort that reverses it would leave this block
+# testing nothing, so it fails here instead and the fixture gets re-picked.
 for dupname in libgtk-3-0 libwebkit2gtk-4.1-0; do
   if [ "$(grep "^$dupname\( \|$\)" "$sorted_d" | head -1)" = "$dupname" ]; then
     pass=$((pass + 1)); else
@@ -389,8 +358,8 @@ for dupname in libgtk-3-0 libwebkit2gtk-4.1-0; do
       "$(grep "^$dupname\( \|$\)" "$sorted_d" | head -1)" >&2
   fi
 done
-# The whole computed list, not a subset: `libjavascriptcoregtk-4.1-0` is the one
-# entry with no floor, and it is what exercises the presence-only path here.
+# The whole computed list: `libjavascriptcoregtk-4.1-0` is the one entry with no
+# floor, and it is what exercises the presence-only path.
 printf 'libc6 (>= 2.34)\nlibgtk-3-0 (>= 3.21.5)\nlibjavascriptcoregtk-4.1-0\nlibwebkit2gtk-4.1-0 (>= 2.41.90)\n' >"$sorted_c"
 sorted_out="$(smoke_depends_gaps "$sorted_d" "$sorted_c")"
 if [ -z "$sorted_out" ]; then pass=$((pass + 1)); else
@@ -412,8 +381,7 @@ if bash -n "$here/check-deb-depends.sh" 2>/dev/null; then pass=$((pass + 1)); el
 fi
 
 # Every image the smoke runs on needs an expectation file, or check A silently
-# does not run there. check-deb-depends.sh fails loudly at release time; this
-# says so at desk time instead, which is the lesson of the snapshots going stale.
+# does not run there — said at desk time rather than at release time.
 while read -r smoke_image; do
   [ -n "$smoke_image" ] || continue
   if [ -f "$here/expected-deb-depends.${smoke_image/:/-}.txt" ]; then pass=$((pass + 1)); else
@@ -482,11 +450,8 @@ else
   echo "SKIP  N1 bundle-scan regression (no objdump)" >&2
 fi
 
-# ── the check runner: one check per invocation ───────────────────────────────
-# What one-check-per-invocation has to get right is entirely BETWEEN invocations,
-# and every way of getting it wrong looks like a pass: a check running out of
-# order after tooling is installed, a check reporting on an install that never
-# happened, a stale state file. Driven as a CHILD PROCESS through a fake driver,
+# Everything one-check-per-invocation has to get right is BETWEEN invocations,
+# and every way of getting it wrong looks like a pass. Driven as a CHILD PROCESS,
 # because in-process would test a shape production never uses.
 runner_dir="$(mktemp -d)"
 cat >"$runner_dir/driver.sh" <<'DRIVER'
@@ -543,27 +508,23 @@ expect_runner_err() { # <substring> <description>
   printf 'FAIL  %-58s no "%s" in the diagnosis\n' "$2" "$1" >&2
 }
 
-# The list every other piece reads: the workflow's step ids, and the guard's
-# expectation of what should have reported.
+# The workflow's step ids, and the guard's expectation of what should report.
 drive "$runner_dir/s0" --print-checks
 expect_rows "$(printf 'one\tcheck one\ntwo\tcheck two\nthree\tcheck three')" \
   "--print-checks is <id><TAB><name> in run order"
 expect_runner_rc 0 "--print-checks exits 0"
 
-# The whole run, unchanged: every check, in order, one row each.
 drive "$runner_dir/s1"
 expect_rows "$(printf 'check one|pass\ncheck two|pass\ncheck three|pass')" "the whole run reports every check"
 expect_runner_rc 0 "a clean whole run exits 0"
 
-# A FAILING CHECK MUST NOT SILENCE THE NEXT ONE. Both are independent, and CI
-# needs both rows — the whole point of a step per check.
 FAKE_BREAK=two drive "$runner_dir/s2"
 expect_rows "$(printf 'check one|pass\ncheck two|FAIL\ncheck three|pass')" \
   "a failed check still lets the next one report"
 expect_runner_rc 1 "a whole run with a failure exits 1"
 
-# One check per invocation, sharing a state directory — the CI shape. `check two`
-# reads MARK, which only exists if the state file carried it across processes.
+# The CI shape. `check two` reads MARK, which exists only if the state file
+# carried it across processes.
 drive "$runner_dir/s3" --only one
 expect_rows "check one|pass" "--only prints exactly one row"
 expect_runner_rc 0 "a passing --only exits 0"
@@ -571,8 +532,8 @@ drive "$runner_dir/s3" --only two
 expect_rows "check two|pass" "state crosses the process boundary"
 expect_runner_rc 0 "the second --only exits 0"
 
-# THE ORDER GUARD. Running a later check first is how the split could quietly
-# stop honouring the sequence that makes the closure check mean anything.
+# THE ORDER GUARD: running a later check first is how the split could stop
+# honouring the sequence that makes the closure check mean anything.
 drive "$runner_dir/s4" --only two
 expect_rows "check two|FAIL" "a check whose predecessor never ran FAILS"
 expect_runner_rc 1 "and exits non-zero"
@@ -583,8 +544,6 @@ drive "$runner_dir/s5" --only three
 expect_rows "check three|FAIL" "one skipped predecessor is still refused"
 expect_runner_err "has to run after: check two" "and the skipped one is named"
 
-# THE GATE. With the first check failed there is no install to look at, and the
-# rest must say so rather than reporting on nothing.
 FAKE_BREAK=one drive "$runner_dir/s6" --only one
 expect_rows "check one|FAIL" "a failing gate check reports FAIL"
 drive "$runner_dir/s6" --only two
@@ -599,8 +558,7 @@ expect_rows "check two|FAIL" "a previous run's GATE_OK does not survive into thi
 expect_runner_err "'check one' check did not pass" "and the gate is what refuses it"
 
 # Sourcing cannot REMOVE a variable no longer in the file, so a stale GATE_OK
-# stays in scope for the whole run and every check reports on the install before
-# it. Only the single-process path can show this.
+# stays in scope and every check reports on the install before it.
 mkdir -p "$runner_dir/s11"
 printf 'GATE_OK=1\nMARK=hello\n' >"$runner_dir/s11/state.env"
 FAKE_BREAK=one drive "$runner_dir/s11"
@@ -608,10 +566,9 @@ expect_rows "$(printf 'check one|FAIL\ncheck two|FAIL\ncheck three|FAIL')" \
   "a stale state file does not carry a previous run's install into this one"
 expect_runner_err "'check one' check did not pass" "the gate refuses them, not a stale GATE_OK"
 
-# THE STATE FILE IS THE ONLY SOURCE OF STATE, and that includes whatever the
-# caller happens to have in its environment. A RAN_* or a GATE_OK inherited from
-# the shell would otherwise satisfy the order guard for checks that never ran —
-# the same leak as a stale file, arriving by the other door.
+# THE STATE FILE IS THE ONLY SOURCE OF STATE, the caller's environment included:
+# an inherited RAN_* or GATE_OK would satisfy the order guard for checks that
+# never ran.
 RUNNER_ERR="$runner_dir/stderr.log"
 RUNNER_OUT="$(SMOKE_HERE="$here" UNYT_SMOKE_STATE="$runner_dir/s12" \
   RAN_ONE=1 RAN_TWO=1 GATE_OK=1 bash "$runner_dir/driver.sh" --only three 2>"$RUNNER_ERR")"
@@ -625,9 +582,8 @@ drive "$runner_dir/s8" --only nosuch
 expect_runner_rc 2 "an unknown check id exits 2, not 1"
 expect_runner_err "no such check: nosuch" "and names the id"
 
-# UNYT_SMOKE_RESULTS accumulates across invocations: that file is what the
-# summary reads, and on Linux it is read back out of a container that may since
-# have died.
+# UNYT_SMOKE_RESULTS accumulates across invocations: on Linux the summary reads
+# it back out of a container that may since have died.
 res="$runner_dir/results"
 : >"$res"
 UNYT_SMOKE_RESULTS="$res" drive "$runner_dir/s9" --only one
@@ -647,9 +603,8 @@ else pass=$((pass + 1)); fi
 rm -rf "$runner_dir"
 
 # ── the did-it-run guard ─────────────────────────────────────────────────────
-# summarise-checks.sh is what turns "one step per check" from a reporting change
-# into a safe one: with the checks spread across steps, a check can stop
-# happening, and a shorter table is exactly as green as a clean one.
+# With the checks spread across steps a check can stop happening, and a shorter
+# table is exactly as green as a clean one.
 sum_dir="$(mktemp -d)"
 sum_case() { # <rows> <expected-rc> <description> [expected-substring] [line-ending]
   local rows="$1" want="$2" desc="$3" want_text="${4:-}" eol="${5:-}" out rc list
@@ -672,8 +627,6 @@ sum_case 'one|pass
 two|pass
 three|pass
 ' 0 "every check reported and passed"
-# The one that matters: a check that never reported is not a pass, and the table
-# says so in the column people actually read.
 sum_case 'one|pass
 three|pass
 ' 1 "a check that never reported" "DID NOT RUN"
@@ -692,8 +645,7 @@ sum_case 'one|pass
 two|warn
 three|pass
 ' 0 "a declared warn does not fail the job" "warn"
-# FAILS CLOSED when it cannot read what to expect — with no list, nothing can be
-# found missing and every table reads clean.
+# FAILS CLOSED: with no list, nothing can be found missing.
 bash "$here/summarise-checks.sh" --label L --results "$sum_dir/results" -- false >/dev/null 2>&1
 if [ $? -eq 2 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  an unreadable check list must be an invocation error" >&2; fi
@@ -702,19 +654,18 @@ if [ $? -eq 2 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  an empty check list must be an invocation error" >&2; fi
 # pwsh and bash both emit CRLF on Windows and the summary compares them from
 # git-bash: unstripped, a flawless run reports twelve checks as DID NOT RUN.
-# Invisible elsewhere because Linux pwsh emits LF.
 sum_case 'one|pass
 two|warn
 three|pass
 ' 0 "CRLF from PowerShell still matches its rows" "warn" crlf
 # The table reads a row's SECOND field and stops, so an extra field rides along
-# unseen and the check reports the pass it did not earn.
+# unseen.
 sum_case 'one|pass
 two|pass|and something else
 three|pass
 ' 1 "a row carrying more than a verdict" "malformed result row"
-# The other half of the same contract: a row nobody looks up. A renamed check
-# reports under its old name forever and the table never mentions it.
+# The other half: a row nobody looks up. A renamed check reports under its old
+# name forever and the table never mentions it.
 sum_case 'one|pass
 two|pass
 three|pass
@@ -724,9 +675,8 @@ sum_case 'one|pass
 two|probably
 three|pass
 ' 1 "a verdict outside pass/warn/FAIL" "reported the verdict"
-# THE RESULT COLUMN, not the annotation. That column is what reaches
-# $GITHUB_STEP_SUMMARY; a row vetted away and still printing its claimed verdict is
-# the green a reader believes, whatever an annotation above it says.
+# THE RESULT COLUMN, not the annotation: that column is what reaches
+# $GITHUB_STEP_SUMMARY, and it is the green a reader believes.
 sum_out() { # <rows> — the summary's own stdout and stderr
   printf '%s' "$1" >"$sum_dir/results"
   bash "$here/summarise-checks.sh" --label L --results "$sum_dir/results" \
@@ -741,8 +691,8 @@ sum_cell 'one|pass
 two|pass|and something else
 three|pass
 ' MALFORMED "a row carrying more than a verdict must not print as one"
-# The third field UNSET rather than junk: read gives it the empty string, so testing
-# it for emptiness admitted the row and the table printed the pass it claimed.
+# The third field UNSET rather than junk: read gives it the empty string, so an
+# emptiness test admitted the row.
 sum_case 'one|pass
 two|pass|
 three|pass
@@ -759,8 +709,7 @@ sum_cell 'one|pass
 two|
 three|pass
 ' MALFORMED "an empty verdict is malformed, not a check that never reported"
-# One defect, one annotation. Pre-fix an empty verdict produced two — malformed AND
-# never reported — for a single broken row.
+# One defect, one annotation: an empty verdict used to produce two.
 out="$(sum_out 'one|pass
 two|
 three|pass
@@ -768,8 +717,7 @@ three|pass
 n="$(printf '%s\n' "$out" | grep -c '::error::' || true)"
 if [ "$n" = 1 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %-58s %s annotations\n%s\n' "an empty verdict is one defect" "$n" "$out" >&2; fi
-# read drops an unterminated final line; the table's awk does not. The last row is
-# the last check on the lane.
+# read drops an unterminated final line; the table's awk does not.
 sum_case 'one|pass
 three|pass
 two|pass|junk' 1 "a malformed row with no trailing newline" "malformed result row"
@@ -792,13 +740,10 @@ if [ -f "$wf" ]; then
       printf 'FAIL  %-58s no CI step runs: %s\n' "$spec declares a check nobody wired up" "$missing" >&2
     fi
   done
-  # THE SUFFIXES MUST MATCH THE DOWNLOADERS. Each lane skips when the inventory
-  # says its artifact is absent, so a suffix that drifts from what the lane
-  # downloads does not fail — it skips that lane forever, silently.
-  # $here, not a relative path: run from any other directory the greps find nothing
-  # and this loop asserts nothing at all. The DMG suffixes are deliberately not
-  # here: they reach their lanes through `matrix.asset` rather than as a literal
-  # in the workflow, and the row-count assertions below are what guard them.
+  # THE SUFFIXES MUST MATCH THE DOWNLOADERS. A lane skips when the inventory says
+  # its artifact is absent, so a drifted suffix does not fail — it skips that lane
+  # forever, silently. The DMG suffixes are deliberately absent: they reach their
+  # lanes through `matrix.asset`, and the row-count assertions below guard them.
   suffixes="$(grep -oE '^[A-Z]+_SUFFIX="[^"]+"' "$here/release-inventory.sh" | cut -d'"' -f2)"
   while IFS= read -r suffix; do
     [ -n "$suffix" ] || continue
@@ -811,26 +756,21 @@ $suffixes
 EOF
 
   # The other direction — an id in the workflow that no script owns — is left to
-  # runtime: it exits 2 there as an invocation error, which is a red step naming
-  # the typo. Asserting it here would need the Windows registry too, and that
-  # needs pwsh.
+  # runtime, where it exits 2 as an invocation error. Asserting it here would need
+  # the Windows registry, and that needs pwsh.
 
-  # ── the two phases, and which of them a switch may soften ──────────────────
   # PHASE 1 MUST NOT BE SWALLOWABLE. `static-checks-advisory` exists so a red
   # signing check does not fail a release run; a phase-1 lane going green by the
-  # same flag would restore exactly the hole this suite was built to close — a
-  # run reporting success when the app never opened. So the flag is asserted
-  # BOTH ways, per job, and the offender is named. Paired per job, not counted:
-  # two totals can agree while being wrong about every job.
+  # same flag would restore the hole this suite was built to close. Asserted BOTH
+  # ways and paired PER JOB, since two totals can agree while being wrong about
+  # every job.
   #
   # Sliced from `jobs:` first (workflow_dispatch/workflow_call are 2-space keys
-  # too), matched broadly (a `linux_images` job must not go unexamined), and a
-  # trailing comment on the key is admitted — rejecting it would stop seeing the
-  # job and attribute the next flag to the one before.
+  # too), matched broadly, and a trailing comment on the key is admitted —
+  # rejecting it would attribute the next flag to the job before.
   #
-  # The job id is what declares the phase — `opens-` blocks, `static-` may be
-  # advisory — so an id this does not recognise FAILS rather than being assumed
-  # into either phase.
+  # The job id declares the phase, so an id this does not recognise FAILS rather
+  # than being assumed into either one.
   phases="$(printf '%s\n' "$(sed -n '/^jobs:/,$p' "$wf")" | awk '
     function emit() { if (job != "") print job, flag }
     /^  [A-Za-z_][A-Za-z0-9_-]*:[ \t]*(#.*)?$/ {
@@ -849,8 +789,7 @@ EOF
     case "$job" in
       opens-*) want=0; opens=$((opens + 1)) ;;
       static-*) want=1; statics=$((statics + 1)) ;;
-      # Both phases need it, and the oracle it runs is what proves phase 1's
-      # wiring — an advisory setup job would make this very assertion toothless.
+      # An advisory setup job would make this very assertion toothless.
       inventory) want=0 ;;
       *) bad="${bad:+$bad }$job(is it phase 1 or phase 2? name it opens-* or static-*)"; continue ;;
     esac
@@ -871,8 +810,8 @@ EOF
   fi
 
   # ── and every OTHER way a phase-1 lane could stop answering ────────────────
-  # The flag is one of four, and it is the only one the block above can see. A
-  # lane that launches nothing, one softened a level down, one gated off, and one
+  # The flag is one of four ways, and the only one the block above can see. A
+  # lane that launches nothing, one softened a level down, one gated off and one
   # cut from its inventory rows are all green runs that proved nothing. Comment
   # lines are stripped throughout: this asserts what RUNS.
   job_body() { # <job id> — the job's lines, minus its own key line and comments
@@ -893,9 +832,8 @@ EOF
     [ "$launch" -ne 0 ] || missing="a load-proving/prove.py launch"
     verdict="$(printf '%s\n' "$body" | grep -cF -- "load-proving/publish_verdict.py" || true)"
     [ "$verdict" -ne 0 ] || missing="${missing:+$missing }load-proving/publish_verdict.py"
-    # AND ITS OWN SUITE, BEFORE THE DOWNLOAD. A lane that launches an artifact
-    # without first showing that its thresholds and its verdict can still come
-    # out red is a lane whose green says nothing.
+    # AND ITS OWN SUITE, BEFORE THE DOWNLOAD: a lane that never showed its
+    # thresholds can still come out red is a lane whose green says nothing.
     harness="$(printf '%s\n' "$body" | grep -n -- 'unittest discover' | head -1 | cut -d: -f1)"
     download="$(printf '%s\n' "$body" | grep -n -- 'download-release-asset.sh' | head -1 | cut -d: -f1)"
     if [ -z "$harness" ]; then
@@ -905,16 +843,14 @@ EOF
     fi
     # THE SECOND WAY TO SOFTEN A LANE. The phase check above reads the JOB key,
     # four spaces in; a step-level `continue-on-error: true` sits at eight and
-    # turns one lane green just as completely. Comments are already stripped, so
-    # the phase header explaining why there is no flag cannot satisfy this.
+    # turns one lane green just as completely.
     soft="$(printf '%s\n' "$body" | grep -c 'continue-on-error' || true)"
     [ "$soft" -eq 0 ] || missing="${missing:+$missing }$soft continue-on-error in the job"
     # A SKIPPED JOB IS GREEN — GitHub concludes a run on what ran — so an `if:`
     # is the third way, and the one no flag check can see. `!cancelled()` must be
-    # there (a red oracle must not delete the lane it guards), and nothing that
-    # makes the lane conditional on how the run was started or on how the caller
-    # asked: gating phase 1 on `github.event_name == 'workflow_dispatch'` would
-    # leave a hand-run smoke looking perfect and every release proving nothing.
+    # there, and nothing that makes the lane conditional on how the run was
+    # started: gating phase 1 on `github.event_name == 'workflow_dispatch'` would
+    # leave a hand-run smoke perfect and every release proving nothing.
     gate="$(printf '%s\n' "$body" | awk '
       /^    if:/ { inif = 1; print; next }
       inif && /^      / { print; next }
@@ -929,18 +865,17 @@ EOF
     # never runs again and nothing goes red to say so.
     printf '%s\n' "$body" | grep -qE '^    needs: inventory$' ||
       missing="${missing:+$missing }needs: inventory"
-    # AND THE GATE AND THE MATRIX MUST NAME THE SAME OUTPUT. Both names are
-    # declared and printed, so the correspondence check below is satisfied while
-    # a lane gated on the Windows rows builds itself from the Linux ones — it
-    # then runs on some releases and not others, for no visible reason.
+    # AND THE GATE AND THE MATRIX MUST NAME THE SAME OUTPUT. Both names being
+    # declared satisfies the correspondence check below while a lane gated on the
+    # Windows rows builds itself from the Linux ones.
     gate_ref="$(printf '%s\n' "$gate" |
       grep -oE 'needs\.inventory\.outputs\.[a-z_]+' | cut -d. -f4 | sort -u | tr '\n' ' ')"
     rows_ref="$(printf '%s\n' "$body" |
       grep -oE 'fromJSON\(needs\.inventory\.outputs\.[a-z_]+' | cut -d. -f4 | sort -u | tr '\n' ' ')"
     [ "$gate_ref" = "$rows_ref" ] ||
       missing="${missing:+$missing }gates on [$gate_ref] but builds its matrix from [$rows_ref]"
-    # The verdict on its own step, always: a launch step that never ran leaves no
-    # verdict file and no PROVE_RC, and only a step that runs anyway can say so.
+    # A launch step that never ran leaves no verdict file and no PROVE_RC, and
+    # only a step that runs anyway can say so.
     printf '%s\n' "$body" | grep -qE '^      - name: The verdict$' ||
       missing="${missing:+$missing }a 'The verdict' step of its own"
     # The frames are what the lane produces; `ignore` would publish an empty
@@ -955,7 +890,6 @@ EOF
 $opens_ids
 EOF
 
-  # Each platform's lane must be the one that launches THAT platform's artifact
   # AGAINST THE DOWNLOAD: three lanes all proving linux would pass every check
   # above.
   while IFS='|' read -r job script arg; do
@@ -975,16 +909,14 @@ PHASE1
 
   # ── and the name each lane goes under in the Checks list ───────────────────
   # THE ID DECLARES THE PHASE TO THIS FILE; THE NAME DECLARES IT TO A HUMAN, and
-  # the Checks list is the only one of the two anybody triaging a red release
-  # ever sees. A blocking lane under a name that reads like the advisory phase —
-  # or the reverse — sends that reader to the wrong lane, and every assertion
-  # above is satisfied by it, because every one of them reads the id.
+  # the Checks list is the only one of the two a reader ever sees. Every
+  # assertion above reads the id, so all of them are satisfied by a blocking lane
+  # named as though it were advisory.
   #
   # A PREFIX, not the whole name: the per-target suffix is the lane's to write.
   #
   # `^    name:` is only ever the job's: a step's is `      - name:`, six in.
-  # Either quote style, or none — the yaml admits all three, and a name this
-  # could not read would red a workflow that is correct.
+  # Either quote style, or none — the yaml admits all three.
   job_name() { # <job id> — its display name, unquoted
     job_body "$1" | sed -n 's/^    name: *//p' | head -1 | sed "s/^['\"]//; s/['\"]\$//"
   }
@@ -995,8 +927,7 @@ PHASE1
       opens-*) want="test opens app — " ;;
       static-*) want="test static checks — " ;;
       inventory) want="setup test" ;;
-      # An id in neither phase already failed the block above; failing it twice
-      # would just name the same job under a second heading.
+      # An id in neither phase already failed the block above.
       *) continue ;;
     esac
     got="$(job_name "$job")"
@@ -1014,11 +945,9 @@ EOF
 
   # ── and every ROW of a matrixed lane must render a DIFFERENT name ──────────
   # `${{ matrix.x }}` BEING IN THE NAME IS NOT THE PROPERTY. opens-windows runs
-  # three rows over {runner, kind}: a name interpolating only `kind` still holds
-  # the substring, and renders windows-2022/nsis and windows-2025/nsis
-  # identically — a red Checks list in which the failing installer cannot be
-  # told from the passing one. So the rows are RESOLVED and the rendered names
-  # compared, which is the thing actually being claimed.
+  # three rows over {runner, kind}: a name interpolating only `kind` holds the
+  # substring and still renders windows-2022/nsis and windows-2025/nsis
+  # identically. So the rows are RESOLVED and the rendered names compared.
   full_assets='a_linux.deb
 a_linux.AppImage
 a_aarch64_darwin.dmg
@@ -1030,8 +959,7 @@ a_x64_windows.msi'
   #
   # SPLIT ON `}` WITH A TRAILING NEWLINE GUARANTEED, not `sed 's/},{/}\n{/'`:
   # sed leaves the last row without a newline, `read` discards a final partial
-  # line, and the closing row of every lane vanishes — this parser did exactly
-  # that, and the collision check silently examined 2 of the 3 Windows rows.
+  # line, and the closing row of every lane vanishes.
   json_rows() {
     printf '%s\n' "$1" | tr '}' '\n' | while IFS= read -r row; do
       # First colon only, so a value like `ubuntu:22.04` survives intact.
@@ -1043,15 +971,14 @@ a_x64_windows.msi'
   }
   render_row() { # <name template> <key=value;…> — the name as GitHub renders it
     # NO MATRIX VALUE EVER REACHES sed. Interpolated into `s|…|$v|`, a value
-    # holding `|` or `\1` aborts the command and renders the row EMPTY, and an
-    # empty row is counted by neither total below — so it leaves both tallies
-    # agreeing and takes the collision it was supposed to expose with it. An `&`
-    # is worse: it silently puts the placeholder back. So the placeholder is
-    # normalised by a sed carrying no data, and bash does the substituting.
+    # holding `|` or `\1` aborts the command and renders the row EMPTY — counted
+    # by neither total below, so both tallies agree and the collision goes with
+    # it. An `&` is worse: it silently puts the placeholder back. So sed carries
+    # no data and bash does the substituting.
     local out rest="$2" kv k v
     out="$(printf '%s' "$1" | sed 's/\${{ *matrix\.\([a-z_]*\) *}}/${{matrix.\1}}/g')"
     # Every row ends in `;`, so this consumes the whole string. No IFS splitting
-    # and no `$2` left unquoted: a value is data, never a glob.
+    # and no `$2` unquoted: a value is data, never a glob.
     while [ -n "$rest" ]; do
       kv="${rest%%;*}"; rest="${rest#*;}"
       [ -n "$kv" ] || continue
@@ -1063,8 +990,8 @@ a_x64_windows.msi'
   literal_rows() { # <job body> — rows of a matrix written literally in the yaml
     local decls
     decls="$(printf '%s\n' "$1" | sed -n 's/^        \([a-z_]*\): \[\(.*\)\]$/\1|\2/p')"
-    # ONE KEY ONLY. Two would be a cross product, and emitting each key's values
-    # as rows of their own would assert against a matrix GitHub does not run.
+    # ONE KEY ONLY: two would be a cross product, and emitting each key's values
+    # as rows of their own asserts against a matrix GitHub does not run.
     [ "$(printf '%s\n' "$decls" | grep -c . || true)" -eq 1 ] || return 1
     printf '%s\n' "$decls" | while IFS='|' read -r key vals; do
       printf '%s\n' "$vals" | tr -d ' ' | tr ',' '\n' |
@@ -1072,11 +999,9 @@ a_x64_windows.msi'
     done
   }
   rows_for() { # <job id> — its matrix rows; non-zero for a lane this cannot resolve
-    # THE SOURCE THE JOB ITSELF NAMES, never a table keyed on the job id. A
-    # second home for "which rows does this lane run" is resolved confidently
-    # against rows GitHub will not run the moment a lane is re-sourced — and
-    # both halves move together, so the gate/matrix correspondence check above
-    # stays green while this one compares the wrong names.
+    # THE SOURCE THE JOB ITSELF NAMES, never a table keyed on the job id: a
+    # second home for "which rows does this lane run" resolves confidently
+    # against rows GitHub will not run the moment a lane is re-sourced.
     local body src keys
     body="$(job_body "$1")"
     src="$(printf '%s\n' "$body" |
@@ -1084,10 +1009,9 @@ a_x64_windows.msi'
     case "$src" in
       prove_linux | prove_windows | dmgs)
         json_rows "$(printf '%s\n' "$inv_out" | sed -n "s/^$src=//p")" ;;
-      # This one the setup job builds in a shell step of its own rather than
-      # taking from the inventory, so the rows are the distro list, slugged the
-      # way that step slugs it — and the keys are read back off the step, since
-      # renaming one there would leave this resolving a matrix that is gone.
+      # The setup job builds this one in a shell step of its own, so the rows are
+      # the distro list slugged the way that step slugs it, and the keys are read
+      # back off the step.
       # </dev/null: this runs inside a loop reading the job list on stdin, and a
       # callee that read it would silently end that loop early.
       images)
@@ -1136,35 +1060,29 @@ EOF
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "two rows of a lane render the same check name" "$collided" >&2
   fi
-  # A LANE THIS CANNOT RESOLVE IS A FAILURE, not a lane to skip: quietly passing
-  # over the one matrix it does not recognise is how the check above stops
-  # checking the next lane somebody adds.
+  # A LANE THIS CANNOT RESOLVE IS A FAILURE, not a lane to skip: passing over the
+  # one matrix it does not recognise is how the check above stops checking.
   if [ -z "$unwired" ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "a matrixed lane whose rows nothing here resolves" "$unwired" >&2
   fi
-  # AND A FLOOR ON HOW MANY IT EXAMINED. The `matrix:` detector above is anchored
-  # at six spaces, and a miss skips the lane rather than failing it — so without
-  # this, reindenting the yaml would exempt every lane and still read green.
+  # AND A FLOOR ON HOW MANY IT EXAMINED: the `matrix:` detector is anchored at six
+  # spaces, so reindenting the yaml would otherwise exempt every lane.
   if [ "$matrixed" -ge 6 ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the matrixed-lane check examined too few lanes" \
       "$matrixed of the 6 matrixed lanes; the rest were skipped, not checked" >&2
   fi
-  # AND A FLOOR ON THE ROWS, because the lane count says nothing about how many
-  # rows of each were read. A parser that drops the last row of every lane still
-  # examines all six and still finds no collision among what is left of them —
-  # which is precisely the bug json_rows shipped with. 15 is the full set today
-  # (2 linux + 2 macos + 3 windows launches, 4 images + 2 macos + 2 windows
-  # static); a floor, not the count, because a new distro row legitimately adds.
+  # AND A FLOOR ON THE ROWS: a parser that drops the last row of every lane still
+  # examines all six lanes and finds no collision among what is left — the bug
+  # json_rows shipped with. A floor, not the count, because a new distro adds.
   if [ "$resolved" -ge 15 ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the name check resolved fewer rows than exist" \
       "$resolved row(s) across $matrixed lane(s); expected at least 15" >&2
   fi
-  # AND ACROSS LANES, not only within one. Two lanes rendering the same name is
-  # the same unreadable Checks list, and neither lane's own comparison can see
-  # it — every check above is satisfied by two lanes that agree.
+  # AND ACROSS LANES: two lanes rendering the same name is the same unreadable
+  # Checks list, and neither lane's own comparison can see it.
   utot="$(printf '%s' "$all_names" | sort -u | grep -c . || true)"
   if [ "$resolved" -gt 0 ] && [ "$resolved" = "$utot" ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
@@ -1172,9 +1090,8 @@ EOF
       "$resolved row(s) across every lane render $utot distinct name(s)" >&2
   fi
 
-  # The setup job is blocking for phase 1's sake, which is worth nothing if the
-  # oracle step is softened or deleted — this file cannot notice that it was
-  # never called, so it asserts the call site instead.
+  # This file cannot notice that it was never called, so it asserts the call site
+  # instead.
   inv_body="$(job_body inventory)"
   if printf '%s\n' "$inv_body" | grep -qF 'bash scripts/smoke/test-oracle.sh' &&
      [ "$(printf '%s\n' "$inv_body" | grep -c 'continue-on-error' || true)" -eq 0 ]; then
@@ -1184,11 +1101,10 @@ EOF
       "an advisory oracle makes every assertion here decoration" >&2
   fi
 
-  # THE STEP AS IT RUNS, not the strings in it. `|| true` on the verdict call, a
-  # redirect that eats its status, a shell that stops at the wrong line: all of
-  # them leave both greps above satisfied and turn a NOT PROVEN lane green. So
-  # the step is extracted verbatim and driven against a stub prover and the REAL
-  # publish_verdict.py, under the shell options GitHub gives a `run:` block.
+  # THE STEP AS IT RUNS, not the strings in it: `|| true` on the verdict call or
+  # a redirect that eats its status leaves both greps above satisfied and turns a
+  # NOT PROVEN lane green. So the step is extracted verbatim and driven against a
+  # stub prover and the REAL publish_verdict.py, under GitHub's shell options.
   step_run() { # <job id> <step-name substring> — the run: body, dedented
     job_body "$1" | awk -v want="$2" '
       $0 ~ "^      - name: .*" want { instep = 1; next }
@@ -1197,24 +1113,21 @@ EOF
       inrun && /^          / { sub(/^          /, ""); print; next }
       inrun { inrun = 0 }'
   }
-  # A matrix value is not available to a shell here; what it stands for does not
-  # matter, only that the lane label reaches the verdict as one word.
+  # A matrix value is not available to a shell here; all that matters is that the
+  # lane label reaches the verdict as one word.
   dematrix() { sed 's/\${{ *matrix\.[a-z]* *}}/deb/g'; }
   launch_step="$(step_run opens-linux 'Launch it and photograph' | dematrix)"
   verdict_step="$(step_run opens-linux 'The verdict' | dematrix)"
-  # The steps invoke python3, so driving them needs one. Every runner these
-  # steps run on has it; a bare container does not, and a SKIP says which of
-  # the two this is rather than reporting the missing interpreter as a lane
-  # that came out red.
+  # The steps invoke python3. Every runner they run on has it; a bare container
+  # does not, and a SKIP says which of the two this is.
   if ! command -v python3 >/dev/null 2>&1; then
     echo "SKIP  the phase-1 launch and verdict steps (no python3 to drive them)" >&2
     launch_step=""
     verdict_step=""
   fi
   if [ -n "$launch_step" ] && [ -n "$verdict_step" ]; then
-    # BOTH STEPS, in order, with $GITHUB_ENV carried between them exactly as the
-    # runner carries it — that handoff is how the launch's exit code reaches the
-    # verdict, and it is the one part of the Windows lane's shape this can drive.
+    # BOTH STEPS, in order, with $GITHUB_ENV carried between them as the runner
+    # carries it — that handoff is how the launch's exit code reaches the verdict.
     # The job's colour is red if EITHER step is red, which is what is returned.
     run_lane() { # <stub exit> <stub stdout> <run the launch step at all?>
       local dir rc=0 line
@@ -1241,8 +1154,8 @@ EOF
       rm -rf "$dir"
       echo "$rc"
     }
-    # The answers that must reach the job. The last is the one the split exists
-    # for: a launch step that never ran leaves no verdict and no PROVE_RC.
+    # The last is the one the split exists for: a launch step that never ran
+    # leaves no verdict and no PROVE_RC.
     while IFS='|' read -r code verdict ran want desc; do
       [ -n "$desc" ] || continue
       got="$(run_lane "$code" "$verdict" "$ran")"
@@ -1266,17 +1179,14 @@ LAUNCHES
 
   # A lane gates on `needs.inventory.outputs.<x>`; an <x> the job never declares,
   # or one release-inventory.sh never prints, is EMPTY at runtime — the gate
-  # reads false, the lane skips, and nothing says why. Both directions, because
-  # the two ways to lose a lane forever are a typo here and a rename there.
+  # reads false, the lane skips, and nothing says why. Both directions.
   printed="$(printf '%s\n' "$inv_out" | grep -oE '^[a-z_]+=' | tr -d '=')"
   declared="$(sed -n '/^    outputs:/,/^    steps:/p' "$wf" | grep -oE '^      [a-z_]+:' | tr -d ' :')"
   missing=""
   refs="$(grep -oE 'needs\.inventory\.outputs\.[a-z_]+' "$wf" | cut -d. -f4 | sort -u)"
-  # NO REFERENCES IS NOT A CLEAN RESULT. The loop below would iterate zero times,
-  # leave `missing` empty and count a pass — at the exact moment the gates
-  # changed shape, which is the moment this block exists for. Six is what a
-  # workflow with both phases wired reads; the floor, not the count, because a
-  # new lane legitimately adds one.
+  # NO REFERENCES IS NOT A CLEAN RESULT: the loop below would iterate zero times
+  # and count a pass, at the exact moment the gates changed shape. A floor, not
+  # the count, because a new lane legitimately adds one.
   refcount="$(printf '%s\n' "$refs" | grep -c . || true)"
   [ "$refcount" -ge 6 ] || missing="only $refcount gate(s) read an inventory output"
   while IFS= read -r ref; do
@@ -1296,11 +1206,10 @@ EOF
     printf 'FAIL  %-58s %s\n' "a lane gates on an output nothing produces" "$missing" >&2
   fi
 
-  # THE STEP RUN, not the shape of its source. Asserting that some line containing
-  # `continue` precedes the summarise call is satisfied by a comment, and stays green
-  # when the guard moves and the bug comes back with it. Extracted verbatim from the
-  # yaml and driven against a stub summariser, with $GITHUB_STEP_SUMMARY caught in a
-  # file — the summary is the artifact, and a lane absent from it reads as a verdict.
+  # THE STEP RUN, not the shape of its source: asserting that some line containing
+  # `continue` precedes the summarise call is satisfied by a comment. Extracted
+  # verbatim from the yaml and driven against a stub summariser, with
+  # $GITHUB_STEP_SUMMARY caught in a file.
   # shellcheck disable=SC2016  # sed scripts and the stub below are literals, not expansions
   win="$(sed -n '/^  static-windows:/,/^  [a-z]/p' "$wf" | sed -n '/^          rc=0$/,/^          exit "\$rc"$/p' | sed 's/^          //')"
   if [ -n "$win" ]; then
@@ -1342,10 +1251,9 @@ STUB
       "the rc=0 and exit anchors it is sliced between moved" >&2
   fi
 
-  # The flag is only safe because a hand-run smoke cannot be handed a green run
-  # for a red one. AN ALLOWLIST, not a ban on the two names we happen to have
-  # used: a dispatch input called anything at all, wired into a phase-1 gate,
-  # softens the one run that is supposed to answer red for everything.
+  # AN ALLOWLIST, not a ban on the two names we happen to have used: a dispatch
+  # input called anything at all, wired into a phase-1 gate, softens the one run
+  # that is supposed to answer red for everything.
   dispatch_inputs="$(sed -n '/^  workflow_dispatch:/,/^  workflow_call:/p' "$wf" |
     grep -oE '^      [a-z-]+:' | tr -d ' :' | sort -u | tr '\n' ' ')"
   if [ "$dispatch_inputs" = "release " ]; then pass=$((pass + 1)); else
@@ -1362,9 +1270,8 @@ STUB
       "non-blocking softened every phase; static-checks-advisory replaced it" >&2
   else pass=$((pass + 1)); fi
 
-  # THE NOTE THE STEP SUMMARY CARRIES has to agree with the wiring: inverting its
-  # condition tells the reader of a hand-dispatched run that a failure blocks
-  # nothing, which is the one thing a hand dispatch is not.
+  # THE NOTE THE STEP SUMMARY CARRIES has to agree with the wiring: inverted, it
+  # tells the reader of a hand-dispatched run that a failure blocks nothing.
   note="$(sed -n '/^  STATIC_NOTE:/,/^jobs:/p' "$wf")"
   wrong=""
   for want in 'inputs.static-checks-advisory == true' \
@@ -1382,8 +1289,7 @@ fi
 
 # ── a tag the msi cannot carry must die in stage 1 ───────────────────────────
 # msi-version.sh is the only thing that rejects a tag the trigger admits: the
-# trigger is a glob, so it takes any `-dev.*`, numeric or not. Derived in the
-# Windows job it fired four platform builds in.
+# trigger is a glob, so it takes any `-dev.*`, numeric or not.
 rel="$here/../../.github/workflows/release-tauri-app.yaml"
 if [ -f "$rel" ]; then
   stage1="$(sed -n '/^  publish-happ:/,/^  release-tauri-app:/p' "$rel")"
@@ -1395,8 +1301,8 @@ if [ -f "$rel" ]; then
       printf 'FAIL  %-58s %s\n' "a release-tauri-app job slice came out empty" "a job key was renamed" >&2
     fi
   done
-  # WHOLE lines: `# bash …--self-test` still contains the substring, and `id: msiver`
-  # still contains `id: msi`. Both are how a real regression would read.
+  # WHOLE lines: `# bash …--self-test` still contains the substring, and
+  # `id: msiver` still contains `id: msi`.
   in_stage() { # <slice> <line, verbatim> <description>
     if printf '%s\n' "$1" | grep -qxF -- "$2"; then pass=$((pass + 1)); else
       fail=$((fail + 1)); printf 'FAIL  %-58s %s\n' "$3" "$2" >&2; fi
@@ -1416,8 +1322,8 @@ if [ -f "$rel" ]; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "nothing writes the key the bundler reads" "bundle.windows.wix.version" >&2
   fi
-  # BOTH halves of the guard. Without the version half a stable release writes an
-  # empty wix.version and the bundler rejects it — the user-facing channel, this time.
+  # BOTH halves. Without the version half a stable release writes an empty
+  # wix.version and the bundler rejects it — the user-facing channel, this time.
   pin_if="$(printf '%s\n' "$stage2" | sed -n '/name: Pin the MSI product version/,/run:/p' | grep -m1 '^ *if:')"
   if printf '%s\n' "$pin_if" | grep -qF -- "runner.os == 'Windows'" &&
      printf '%s\n' "$pin_if" | grep -qF -- "msiVersion != ''"; then pass=$((pass + 1)); else
@@ -1429,9 +1335,9 @@ if [ -f "$rel" ]; then
     printf 'FAIL  %-58s %s\n' "the build job derives the msi version itself" \
       "a bad tag then fails four platform builds in, not in seconds" >&2
   else pass=$((pass + 1)); fi
-  # The channels msi-version.sh is written against. Add one and every tag on it dies
-  # in stage 1 on a message about -dev, from a step named for the msi. The case
-  # patterns are QUOTED, or `[0-9]` would be read as a character class and match both.
+  # The channels msi-version.sh is written against; add one and every tag on it
+  # dies in stage 1. The case patterns are QUOTED, or `[0-9]` would be read as a
+  # character class and match both.
   tags="$(sed -n '/^    tags:$/,/^jobs:$/p' "$rel" | grep -oE '"[^"]+"' | tr -d '"')"
   unknown=""
   for tag in $tags; do
@@ -1446,12 +1352,9 @@ if [ -f "$rel" ]; then
       "${unknown:-no tag patterns found at all}" >&2
   fi
 
-  # ── what a release run is allowed to soften ────────────────────────────────
-  # The release calls the smoke with the static phase advisory. Two ways that
-  # goes wrong and neither is visible in a green run: the call stops asking (and
-  # a red signing check starts blocking a release it never blocked), or it starts
-  # softening phase 1 as well (and a release run goes green with the app never
-  # having opened). The second is the one this file exists for.
+  # The release calls the smoke with the static phase advisory. Two ways that goes
+  # wrong, neither visible in a green run: the call stops asking, or it starts
+  # softening phase 1 as well.
   # Bounded at the next job key, not run to EOF: smoke-test is last today, and a
   # job added after it would fold in and be judged as part of the call.
   stage3="$(sed -n '/^  smoke-test:/,/^  [a-z]/p' "$rel")"
@@ -1461,10 +1364,9 @@ if [ -f "$rel" ]; then
   fi
   in_stage "$stage3" '      static-checks-advisory: true' \
     "a release run must ask for an advisory static phase"
-  # THIS NAME IS PAID FOR SIXTEEN TIMES. GitHub prefixes every called job with
-  # it, so a description here is a description on every line of the Checks list,
-  # pushing the part that differs off the end. What each lane does is
-  # release-smoke.yaml's to say, and the assertions there hold it to it.
+  # THIS NAME IS PAID FOR SIXTEEN TIMES: GitHub prefixes every called job with it,
+  # so a description here pushes the part that differs off the end of every line
+  # of the Checks list.
   in_stage "$stage3" '    name: Stage 3' \
     "the stage-3 name prefixes all 16 smoke lanes, so it stays the stage"
   if [ "$(printf '%s\n' "$stage3" | grep -cE '^ *(non-blocking|continue-on-error):' || true)" -ne 0 ]; then
@@ -1472,9 +1374,9 @@ if [ -f "$rel" ]; then
     printf 'FAIL  %-58s %s\n' "the release softens the whole smoke" \
       "phase 1 would go green with the app never having opened" >&2
   else pass=$((pass + 1)); fi
-  # AND THE CALL ITSELF MUST NOT BE CONDITIONAL ON HOW THE RUN STARTED. A
-  # skipped job is green, so `if: github.event_name == 'workflow_dispatch'` here
-  # would leave every release calling no smoke at all, with nothing red anywhere.
+  # AND THE CALL ITSELF MUST NOT BE CONDITIONAL ON HOW THE RUN STARTED: a skipped
+  # job is green, so `if: github.event_name == 'workflow_dispatch'` here would
+  # leave every release calling no smoke, with nothing red anywhere.
   stage3_if="$(printf '%s\n' "$stage3" | grep -m1 '^    if:')"
   if printf '%s\n' "$stage3_if" | grep -qF -- '!cancelled()' &&
      [ "$(printf '%s\n' "$stage3_if" | grep -cE 'github\.event|inputs\.' || true)" -eq 0 ]; then
@@ -1486,34 +1388,29 @@ if [ -f "$rel" ]; then
   in_stage "$stage3" '    uses: ./.github/workflows/release-smoke.yaml' \
     "the release must call the smoke workflow"
 
-  # ── the macOS labels, and why the two files answer differently ─────────────
   # A GATE MAY NOT RIDE A ROLLING LABEL. macos-latest moved to macOS 26, whose
-  # screen-capture rules differ from the ones phase 1 is proven against, so a
-  # gate on it would quietly change what "proven" means with no commit to point
-  # at. windows-latest/ubuntu-latest are not the same risk: the Windows lanes
-  # name both images explicitly and the Linux static lane runs in containers, so
-  # the host image is not what either asserts.
+  # screen-capture rules differ from the ones phase 1 is proven against, so a gate
+  # on it would change what "proven" means with no commit to point at.
+  # windows-latest/ubuntu-latest are not the same risk: the Windows lanes name
+  # both images explicitly and the Linux static lane runs in containers.
   #
   # Full-line comments stripped, because the label is named in the comments that
-  # explain all this; a trailing comment is left in place, since a line that
-  # still RUNS on it is exactly what this looks for.
+  # explain all this; a trailing one is left, since a line that still RUNS on it
+  # is exactly what this looks for.
   #
   # COUNTED, never `| grep -q`: under `pipefail` the -q exits on the first match
   # and the upstream grep dies of SIGPIPE, so the pipeline reports 141 and the
-  # `if` reads it as "no match" — this assertion passed a mutation before it was
-  # written this way.
+  # `if` reads it as "no match".
   if [ "$(grep -v '^[[:space:]]*#' "$wf" | grep -c 'macos-latest' || true)" -ne 0 ]; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "a smoke lane rides the rolling macOS image" \
       "gates run macos-15 / macos-15-intel — the images phase 1 is proven on" >&2
   else pass=$((pass + 1)); fi
 
-  # THE BUILD IS THE OPPOSITE RULE, and it is deliberate: these legs produce what
-  # users install, so pinning them changes the product rather than a gate, and
-  # that is a decision of its own — not something a change to the tests carries
-  # in. So macos-latest is REQUIRED here, and both a pin and a move fail: the
-  # artifact is meant to be built on a newer macOS than the gates install it on
-  # (release-smoke.yaml's header says why that gap is the useful direction).
+  # THE BUILD IS THE OPPOSITE RULE, deliberately: these legs produce what users
+  # install, so pinning them changes the product rather than a gate. macos-latest
+  # is REQUIRED here, and both a pin and a move fail — the artifact is meant to be
+  # built on a newer macOS than the gates install it on.
   build_macos="$(grep -v '^[[:space:]]*#' "$rel" |
     grep -oE 'platform: macos[a-z0-9.-]*' | sed 's/platform: //' | sort -u | tr '\n' ' ')"
   if [ "$build_macos" = "macos-latest " ]; then pass=$((pass + 1)); else
@@ -1527,8 +1424,7 @@ fi
 
 # ── the inventory decides which lanes run, so it must not be able to lie ─────
 # A lane skips when its artifact is absent — right for a build that failed, wrong
-# for an inventory that reports nothing by accident, which would leave a run that
-# passed having examined nothing.
+# for an inventory that reports nothing by accident.
 inv() { UNYT_SMOKE_ASSETS="$1" bash "$here/release-inventory.sh" 000 2>/dev/null; }
 inv_rc() { UNYT_SMOKE_ASSETS="$1" bash "$here/release-inventory.sh" 000 >/dev/null 2>&1; }
 
@@ -1547,11 +1443,9 @@ done
 if [ "$(printf '%s\n' "$got" | grep -o '"arch"' | grep -c .)" = 2 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "full release should yield both macOS matrix rows" >&2; fi
 
-# ── phase 1's matrices ──────────────────────────────────────────────────────
-# Every installer the release carries gets a lane, and the row COUNT is the
-# assertion: a row quietly dropped from LINUX_PROVE_ROWS or WINDOWS_PROVE_ROWS is
-# an installer nobody ever launches again, and no lane goes red to say so.
-# Rows are counted by their kind key, which every row of both matrices carries.
+# The row COUNT is the assertion: a row dropped from LINUX_PROVE_ROWS or
+# WINDOWS_PROVE_ROWS is an installer nobody launches again, and no lane goes red
+# to say so. Counted by the kind key, which every row of both matrices carries.
 rows_of() { # <inventory output> <output name>
   printf '%s\n' "$1" | grep "^$2=" | grep -o '"kind"' | grep -c . || true
 }
@@ -1612,11 +1506,9 @@ x_aarch64_darwin.app.tar.gz"; then pass=$((pass + 1)); else
 x_x64_windows.msi.zip" 2>&1 | tail -1)" >&2
 fi
 
-# ── the gate images are pinned, not merely not-latest ───────────────────────
-# `macos-15` → `macos-26` is neither `-latest` nor proven: it moves the gates to
-# an image phase 1 has never answered on, and nothing in the ban above would say
-# so. A CLOSED SET, therefore — the images the 7/7 proof was taken on. The build
-# legs are deliberately not in it; that asymmetry is asserted where the build is.
+# `macos-15` → `macos-26` is neither `-latest` nor proven, and nothing in the ban
+# above would say so. A CLOSED SET, therefore — the images the 7/7 proof was
+# taken on. The build legs are deliberately not in it.
 got="$(inv "$full")"
 runners="$(printf '%s\n' "$got" | grep -o '"runner":"macos[^"]*"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')"
 if [ "$runners" = "macos-15 macos-15-intel " ]; then pass=$((pass + 1)); else
@@ -1672,8 +1564,8 @@ if printf '%s\n' "$got" | grep -q 'dmgs=\[{"runner":"macos-15-intel"' &&
    ! printf '%s\n' "$got" | grep -q 'aarch64'; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "a missing arm64 DMG should drop only its row" >&2; fi
 
-# THE CASE THIS BLOCK EXISTS FOR: the shape of run 31800038674, where every build
-# failed. Skipping all four lanes would be a green run that smoked nothing.
+# The shape of run 31800038674, where every build failed: skipping all four lanes
+# would be a green run that smoked nothing.
 if inv_rc 'unyt.happ
 unyt.webhapp
 alliance.dna'; then
@@ -1702,12 +1594,10 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 # A floor on the COUNT, not just on failures: truncate this file and it would
-# otherwise report "3 passed, 0 failed" and exit 0 — the same shape as the
-# container-never-ran bug one level up. Raise it when adding assertions.
-# DELIBERATELY 3 BELOW a full run of 235: the GLIBC-patch branch legitimately
-# costs exactly 2 on a machine that cannot patch a version, and the tie-break's
-# en_US.UTF-8 leg costs 1 where that locale is not generated. A floor at the full
-# count would red both legitimate skips. Do not "tidy" it up to match.
+# otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding cases.
+# DELIBERATELY 3 BELOW a full run of 235: the GLIBC-patch branch costs exactly 2
+# on a machine that cannot patch a version, and the tie-break's en_US.UTF-8 leg
+# costs 1 where that locale is not generated. Do not "tidy" it up to match.
 if [ "$pass" -lt 232 ]; then
   echo "::error::only $pass assertions ran; expected at least 232 — the test file is truncated or a block was skipped"
   exit 1

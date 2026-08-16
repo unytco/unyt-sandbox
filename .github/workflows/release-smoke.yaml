@@ -1,36 +1,28 @@
 name: "release-smoke"
 
-# Does a shipped artifact work on a user's machine? Two phases, and they answer
-# different halves of that.
+# Does a shipped artifact work on a user's machine?
 #
 #   PHASE 1 — DOES IT OPEN. Installs each shipped installer, launches it, and
-#   photographs the app's OWN WINDOW. One lane per installer — the rows in
-#   scripts/smoke/release-inventory.sh say why. scripts/smoke/load-proving/ owns
-#   the lanes themselves.
+#   photographs the app's OWN WINDOW.
 #
 #   PHASE 2 — STATIC CHECKS. What the artifact is, before anyone runs it:
 #   install/version/dependency checks in pristine Linux containers, the macOS
 #   signing and notarization set, and a Windows install/uninstall cycle.
 #
-# THE PHASES ARE CONCURRENT, not sequential. A signing or notarization finding is
-# worth having on a build whose window came up blank, and a broken phase 1 must
-# not blind anyone to it — so neither waits for the other, and the names are what
+# THE PHASES ARE CONCURRENT: a signing finding is worth having on a build whose
+# window came up blank, so neither waits for the other, and the names are what
 # separates them in the Checks list.
 #
-# WHAT COUNTS. Phase 1 fails the calling run; phase 2 is advisory when the caller
-# asks for it (see `static-checks-advisory`). A release run must not report
-# success when the app never opened.
+# Phase 1 fails the calling run; phase 2 is advisory when the caller asks for it.
+# A release run must not report success when the app never opened.
 #
 # WE BUILD ON A NEWER macOS THAN WE TEST ON, DELIBERATELY. Every macOS lane here
 # runs on the pinned macos-15 / macos-15-intel of release-inventory.sh, while
-# release-tauri-app.yaml builds on macos-latest — macOS 26 today. That gap is the
-# useful direction: it asks whether the artifact runs on an OS OLDER than the one
-# that produced it, which is what most users have, and testing on the build image
-# would answer a question nobody is asking. It is also why the gate images are
-# pinned and the build label is not — a rolling gate would quietly change what
-# "proven" means (macOS 26's screen-capture rules differ from the ones phase 1 is
-# proven against), while a rolling build is simply the newest toolchain. Neither
-# half should be "fixed" to match the other without deciding that on purpose;
+# release-tauri-app.yaml builds on macos-latest. That gap asks whether the
+# artifact runs on an OS OLDER than the one that produced it, which is what most
+# users have. It is also why the gate images are pinned and the build label is
+# not: a rolling gate would change what "proven" means, since macOS 26's
+# screen-capture rules differ from the ones phase 1 is proven against.
 # test-oracle.sh fails on a pinned build leg and on an unpinned gate.
 #
 # Locally, each script is its own entry point: run-smoke.sh <deb>,
@@ -51,8 +43,7 @@ on:
         required: true
         type: string
       static-checks-advisory:
-        # PHASE 2 ONLY, and that is the whole point of it being named for the
-        # phase: it keeps a failed static check out of the CALLER's run
+        # PHASE 2 ONLY: it keeps a failed static check out of the CALLER's run
         # conclusion, and it cannot reach phase 1, which carries no such switch.
         # Not on workflow_dispatch: a hand-run smoke must answer red for
         # everything. Here, not at the call site: `continue-on-error` is rejected
@@ -74,12 +65,10 @@ env:
     || 'Nothing `needs` this job, so a failure here blocks no release — but it does fail THIS run, which is what a hand-dispatched smoke is for.' }}
 
 jobs:
-  # BOTH PHASES GATE ON THIS, so it is blocking whichever phase you care about:
-  # its three answers are the release's asset list (without which phase 1 has
-  # nothing to launch), the distro matrix, and the oracle. The oracle is the
-  # reason a failure here can never be advisory — it is what proves the checks
-  # below can still come out red, phase 1's blocking wiring included, so an
-  # advisory oracle would make phase 1's guarantee unenforceable.
+  # BOTH PHASES GATE ON THIS: the release's asset list, the distro matrix, and
+  # the oracle. The oracle is why a failure here can never be advisory — it is
+  # what proves the checks below can still come out red, phase 1's blocking
+  # wiring included.
   inventory:
     name: "setup test"
     runs-on: ubuntu-latest
@@ -142,29 +131,23 @@ jobs:
   # ══ PHASE 1 — DOES IT OPEN ═══════════════════════════════════════════════════
   #
   # THE MOST VALUABLE OUTPUT IS THE SCREENSHOTS, which upload whatever the
-  # verdict. The second most valuable is the pre-launch control frame each lane
-  # takes before the app exists: if that frame already passes for the app, the
-  # capture path is photographing the desktop and every verdict that job could
-  # produce is void.
+  # verdict — the pre-launch control frame included, since a frame that already
+  # passes for the app voids every verdict that job could produce.
   #
-  # A lane that cannot launch, or whose capture path cannot be trusted, reports
-  # UNTRUSTED or CANNOT PROVE and goes red. It never skips, and it is never
-  # green. macOS is the one exception and says so on the line: it has a second
-  # way to answer, so it drops to WINDOW-ONLY — green, and explicit that paint is
-  # unverified — rather than going red for a photograph it could not take.
+  # A lane that cannot launch, or whose capture path cannot be trusted, goes red.
+  # It never skips. macOS is the one exception: it has a second way to answer, so
+  # it drops to WINDOW-ONLY rather than going red for a photograph it could not
+  # take.
   #
-  # NOTHING MAY SOFTEN THESE THREE, and that is the point of the phase.
-  # `static-checks-advisory` cannot reach them; neither may a `continue-on-error`
-  # at any level, nor an `if:` that makes a lane conditional on how the run was
-  # started — a skipped job is green, so that is the same hole one level up.
-  # test-oracle.sh asserts all three, and that each lane still reaches a prove
-  # script and a verdict.
+  # NOTHING MAY SOFTEN THESE THREE. `static-checks-advisory` cannot reach them;
+  # neither may a `continue-on-error` at any level, nor an `if:` that makes a
+  # lane conditional on how the run was started — a skipped job is green.
+  # test-oracle.sh asserts all three.
   opens-linux:
     name: "test opens app — linux (${{ matrix.kind }})"
     needs: inventory
-    # As phase 2: gated on the OUTPUT, not on `needs.*.result`, and `!cancelled()`
-    # so a lane is not deleted by a red sibling. No rows means the release ships
-    # no Linux installer — the build lane is where that is already red.
+    # Gated on the OUTPUT, not on `needs.*.result`, and `!cancelled()` so a lane is
+    # not deleted by a red sibling.
     if: >-
       ${{ !cancelled()
       && needs.inventory.outputs.prove_linux != ''
@@ -193,11 +176,9 @@ jobs:
           sudo apt-get install -y -qq xvfb x11-utils xdotool imagemagick
           python3 -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
 
-      # Before anything trusts a verdict: can it still come out red? The whole
-      # suite, because the frame thresholds, the lane's verdict and what that
-      # verdict does to the job are three different ways to go green wrongly.
-      # On this runner it also drives the real capture path against an Xvfb
-      # display of its own — the other two platforms' are release-only.
+      # Before anything trusts a verdict: can it still come out red? On this
+      # runner it also drives the real capture path against an Xvfb display of
+      # its own — the other two platforms' are release-only.
       - name: Can the verdicts still fail?
         run: python3 -m unittest discover -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
@@ -219,12 +200,10 @@ jobs:
           echo "PROVE_RC=$rc" >> "$GITHUB_ENV"
           exit "$rc"
 
-      # ITS OWN STEP, AND ALWAYS — as on Windows, and for the reason that lane
-      # already had: the verdict is what colours this job, so it must be read
-      # even when the step above never ran or died before it could say anything.
-      # A launch that did not happen leaves no verdict file and no PROVE_RC, and
-      # publish_verdict.py answers NO ANSWER to both. Nothing else notices a
-      # phase-1 lane that quietly skipped its own launch.
+      # ITS OWN STEP, AND ALWAYS: the verdict is what colours this job, so it has
+      # to be read even when the step above never ran. A launch that did not
+      # happen leaves no verdict file and no PROVE_RC, which reads as NO ANSWER —
+      # nothing else notices a lane that quietly skipped its own launch.
       - name: The verdict
         if: always()
         run: |
@@ -243,8 +222,7 @@ jobs:
           if-no-files-found: error
 
   # THE LANE THAT MAY PROVE LESS, and its verdict says which it managed: PROVEN
-  # off a frame of the app's own screen, or WINDOW-ONLY off the window list —
-  # green, and explicit that paint is unverified. prove.py's MacosLane says why.
+  # off a frame of the app's own screen, or WINDOW-ONLY off the window list.
   opens-macos:
     name: "test opens app — macos (${{ matrix.arch }})"
     needs: inventory
@@ -294,18 +272,16 @@ jobs:
           echo "PROVE_RC=$rc" >> "$GITHUB_ENV"
           exit "$rc"
 
-      # As the other two lanes, and this is the one that needs it most: the
-      # upload below is `warn` here, so an unlaunched lane would otherwise leave
-      # nothing at all to go red.
+      # The lane that needs it most: the upload below is `warn` here, so an
+      # unlaunched lane would otherwise leave nothing at all to go red.
       - name: The verdict
         if: always()
         run: |
           python3 scripts/smoke/load-proving/publish_verdict.py \
             "$RUNNER_TEMP/verdict.txt" "macos ${{ matrix.arch }}" "${PROVE_RC:-99}"
 
-      # Both kinds here: shots/verdict holds window-scoped frames when the lane
-      # managed them, and shots/context the whole-screen ones, which are only
-      # ever evidence about the runner.
+      # shots/verdict holds window-scoped frames; shots/context the whole-screen
+      # ones, which are only ever evidence about the runner.
       - name: Upload every frame
         if: always()
         uses: actions/upload-artifact@v4
@@ -362,9 +338,9 @@ jobs:
             "$RELEASE" "$SUFFIX" "$out")"
           echo "INSTALLER=$installer" >> "$GITHUB_ENV"
 
-      # bash, as the other two lanes: the lane itself is python, and it shells
-      # out to windows-capture.ps1 under `powershell` (not pwsh) for the one
-      # thing only .NET Framework can do — see prove.py's WindowsLane.
+      # bash, as the other two lanes: the lane itself is python, and it shells out
+      # to window-capture.ps1 under `powershell` (not pwsh) for the one thing
+      # only .NET Framework can do.
       - name: Launch it and photograph what a user would see
         shell: bash
         run: |
@@ -396,18 +372,15 @@ jobs:
 
   # ══ PHASE 2 — STATIC CHECKS ══════════════════════════════════════════════════
   #
-  # What the artifact IS, rather than what it does when a user opens it: this
-  # phase never has to launch anything to answer, and phase 1 above is what
-  # launches. Advisory when the caller asks — see `static-checks-advisory`.
+  # What the artifact IS, rather than what it does when a user opens it.
+  # Advisory when the caller asks — see `static-checks-advisory`.
   static-linux:
     name: "test static checks — linux install (${{ matrix.image }})"
     needs: inventory
     # !cancelled() is load-bearing: a job `if` without a status function means
     # `success() && <expr>`, which would skip this lane on a red setup job — and
-    # a red oracle must not delete the lanes it guards. Gated on the OUTPUTS
-    # rather than `needs.*.result` for the same reason: what this lane needs is
-    # the list, not the setup job's colour. Fail-closed either way: no list, no
-    # lane.
+    # a red oracle must not delete the lanes it guards. Gated on the OUTPUTS for
+    # the same reason. Fail-closed either way: no list, no lane.
     if: >-
       ${{ !cancelled()
       && needs.inventory.outputs.images != ''
@@ -488,10 +461,9 @@ jobs:
         if: ${{ !cancelled() && steps.download-deb.outcome == 'success' }}
         run: bash scripts/smoke/run-smoke.sh --exec depends
 
-      # The one launch in this phase, and it is a BACKEND launch: a pristine
-      # container has no display, so this asserts the process comes up, reaches a
-      # healthy state and shuts down — never what the webview drew. That is phase
-      # 1's question, on a runner with a display.
+      # A BACKEND launch: a pristine container has no display, so this asserts the
+      # process comes up, reaches a healthy state and shuts down — never what the
+      # webview drew.
       - name: "launches, stays up, shuts down (.deb)"
         if: ${{ !cancelled() && steps.download-deb.outcome == 'success' }}
         run: bash scripts/smoke/run-smoke.sh --exec launch
@@ -522,7 +494,6 @@ jobs:
         if: always()
         run: bash scripts/smoke/run-smoke.sh --stop
 
-      # Concludes failure whenever a check failed or never reported.
       - name: Summary — and did every check report?
         if: ${{ !cancelled() }}
         env:
@@ -566,13 +537,10 @@ jobs:
           path: ${{ runner.temp }}/smoke.log
           if-no-files-found: warn
 
-  # STATIC CHECKS ONLY, and that is a division of labour rather than a limit:
-  # phase 1's opens-macos launches this same DMG and photographs its window. What
-  # remains out of reach on any runner is a PRISTINE Mac — Apple's licence caps
-  # VMs at two per host, so there is no container equivalent — so these checks
-  # examine the artifact, never a first-run machine's reaction to it.
-  # Arch must match the runner; rows come from the inventory, which pins the
-  # image (see MACOS_ROWS — never macos-latest).
+  # STATIC CHECKS ONLY: phase 1's opens-macos launches this same DMG. What is out
+  # of reach on any runner is a PRISTINE Mac — Apple's licence caps VMs at two
+  # per host — so these checks examine the artifact, never a first-run machine's
+  # reaction to it. Arch must match the runner; rows come from the inventory.
   static-macos:
     name: "test static checks — macos (${{ matrix.arch }})"
     needs: inventory
@@ -727,9 +695,8 @@ jobs:
           if-no-files-found: warn
 
   # No pristine machine here, so the import check compares against what WINDOWS
-  # guarantees, not what is installed. Separate state dirs per installer: an
-  # NSIS .exe and an MSI land in different places. This lane installs, examines
-  # and uninstalls; launching the result is phase 1's opens-windows.
+  # guarantees, not what is installed. Separate state dirs per installer: an NSIS
+  # .exe and an MSI land in different places.
   static-windows:
     name: "test static checks — windows install (${{ matrix.runner }})"
     needs: inventory
@@ -920,9 +887,9 @@ jobs:
           for want in EXE MSI; do
             eval "expect=\${EXPECT_$want:-}"
             if [ "$expect" != true ]; then
-              # Into the TABLE, which is what reaches the step summary: a lane simply
+              # Into the TABLE, which is what reaches the step summary: a lane
               # missing from it reads as a complete verdict for the release. No
-              # summarise-checks run, though — it would call every check DID NOT RUN.
+              # summarise-checks run — it would call every check DID NOT RUN.
               printf '\n##### .%s — not in this release, not smoked #####\n' "${want,,}" >>"$table"
               continue
             fi
@@ -938,8 +905,8 @@ jobs:
               >>"$table" 2>&1 || rc=1
             summarised=$((summarised + 1))
           done
-          # The job starts only when the inventory says one of them is here, so zero
-          # lanes means that gate broke — and a table with no rows publishes as clean.
+          # The job starts only when the inventory says one of them is here, so
+          # zero lanes means that gate broke.
           if [ "$summarised" -eq 0 ]; then
             echo "::error::neither installer was smoked, so this lane examined nothing"
             rc=1
@@ -949,8 +916,8 @@ jobs:
             echo "### Windows release smoke, phase 2 — \`$RELEASE\` ($LABEL)"
             echo ""
             echo '```'
-            # 100, as on Linux: this lane's table is two installers plus their
-            # diagnostics, and 50 dropped most of the second one's rows unmarked.
+            # 100: this lane's table is two installers plus their diagnostics,
+            # and 50 dropped most of the second one's rows unmarked.
             head -100 "$table"
             echo '```'
             echo ""

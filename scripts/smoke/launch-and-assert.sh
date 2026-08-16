@@ -6,10 +6,8 @@
 # Runs in the container after install. Only Xvfb is added, which adds nothing to
 # the app's dependency closure.
 #
-# Four assertions: REACHES a healthy terminal state, did so from a COLD install,
-# STAYS there (longer than one heartbeat interval, so a conductor that boots then
-# wedges fails), and SHUTS DOWN on SIGTERM within a bound. All four are the
-# backend's: what the webview drew is not asserted here.
+# Every assertion below is the backend's: what the webview drew is not asserted
+# here.
 #
 # Env: UNYT_SMOKE_SANDBOX (default /tmp/ut-smoke) · UNYT_SMOKE_TIMEOUT (default
 #      240) · UNYT_SMOKE_SETTLE (default 45, must exceed the 5s first backoff) ·
@@ -60,8 +58,7 @@ dump_logs() {
 }
 
 # Nothing here can type into the first-run password prompt, so the keystore is
-# created with an empty passphrase. That still exercises REAL keystore creation
-# and a real conductor start — it skips the prompt, not the work.
+# created with an empty passphrase — which skips the prompt, not the work.
 export UNYT_BYPASS_PASSWORD=1
 # Without this the single-instance plugin is installed and a second launch on the
 # same machine would just focus the first window instead of starting.
@@ -89,7 +86,7 @@ set +m
 
 # Track the APP, not the launcher: xvfb-run does not exec, so watching it would
 # report a clean shutdown for a hung app. Exact process name, because -f would
-# also match xvfb-run and Xvfb (their command lines contain the binary path).
+# also match xvfb-run and Xvfb.
 app_proc=""
 # An AppImage runs as its INNER binary, not as the .AppImage filename, so the
 # caller can name the process to watch (container-checks-appimage.sh does).
@@ -103,15 +100,13 @@ done
 if [ -n "$app_proc" ]; then
   echo "  app pid $app_proc (launcher $app_pid)" >&2
 else
-  # Never silently downgrade to the launcher: that is the assertion that fails
-  # open. An app that never appeared is itself the failure.
+  # Never silently downgrade to the launcher: that is the assertion failing open.
   echo "::error::no '$app_name' process appeared under the launcher within 20s" >&2
   dump_logs
   exit 1
 fi
 alive() { kill -0 "$app_proc" 2>/dev/null; }
 
-# ── 1. reaches a healthy terminal state ───────────────────────────────────────
 deadline=$(( $(date +%s) + TIMEOUT ))
 reached=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -141,7 +136,6 @@ if [ -z "$reached" ]; then
 fi
 echo "OK: reached a healthy backend state -> ${reached}" >&2
 
-# ── 1b. this was a COLD install ───────────────────────────────────────────────
 # The wiped sandbox is the setup's claim, not a measurement — a carried identity
 # means this is a warm start, not the path a user hits on first install.
 if smoke_all_logs "$SANDBOX" | smoke_match_carried; then
@@ -150,9 +144,8 @@ if smoke_all_logs "$SANDBOX" | smoke_match_carried; then
   dump_logs
   exit 1
 fi
-# Positive counterpart, not just the absence: the identity check must have RUN
-# and found nothing. Absence alone is equally satisfied by a boot that never got
-# that far, which is the one thing this assertion must not confuse with clean.
+# Positive counterpart, not just the absence: an absence alone is equally
+# satisfied by a boot that never got that far.
 if ! smoke_all_logs "$SANDBOX" | smoke_match_fresh; then
   echo "::error::the boot never reported a fresh identity, so this run cannot claim to be a" >&2
   echo "  cold install — the identity check did not run, or its log line changed." >&2
@@ -161,7 +154,6 @@ if ! smoke_all_logs "$SANDBOX" | smoke_match_fresh; then
 fi
 echo "OK: cold install (fresh identity, nothing carried forward)" >&2
 
-# ── 2. stays up ───────────────────────────────────────────────────────────────
 # Bounded by construction (a fixed window, never "wait until healthy again"), so
 # a permanently flapping conductor fails instead of hanging the job.
 echo "Watching ${SETTLE}s for a wedged conductor..." >&2
@@ -194,16 +186,14 @@ if [ "$new_drops" -gt 1 ]; then
 fi
 echo "OK: still healthy after ${SETTLE}s ($new_drops transient disconnect(s))" >&2
 
-# ── 3. shuts down ─────────────────────────────────────────────────────────────
 echo "Sending SIGTERM..." >&2
 kill -TERM -- "-$app_pid" 2>/dev/null || true
 exit_deadline=$(( $(date +%s) + 30 ))
 while [ "$(date +%s)" -lt "$exit_deadline" ]; do
   if ! alive; then
     # `wait` gives the launcher's status; the app is not this shell's child, so
-    # its own code is unavailable. A crash on the way down still shows up as a
-    # failure line or a signal message in the log, so check that rather than
-    # reporting a clean shutdown purely from the process being gone.
+    # its own code is unavailable. A crash on the way down still shows up in the
+    # log, so that is what is read.
     app_pid=""
     if smoke_all_logs "$SANDBOX" | smoke_match_failed; then
       echo "::error::the app logged a failure while shutting down:" >&2

@@ -5,13 +5,11 @@
 # land under $XDG_DATA_HOME/<id>/logs — no AGENT_ID suffix on this one.
 UNYT_BUNDLE_ID="co.unyt.unyt.sandbox"
 
-# The glibc of the OLDEST distro we support (Ubuntu 22.04 ships 2.35) — i.e. the
-# highest version a shipped binary is allowed to require. Named for what it is:
-# the floor of the support range, which is the ceiling on what we may import.
+# The glibc of the OLDEST distro we support (Ubuntu 22.04 ships 2.35), which is
+# the ceiling on what a shipped binary may require.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_OLDEST_GLIBC="2.35"
 
-# ── The health oracle ─────────────────────────────────────────────────────────
 # Statuses as the app's own log writes them (unyt/src-tauri/src/runtime/status.rs
 # — `Status update: {from} -> {to}`).
 # HEALTHY IS A SET ON PURPOSE — all four are genuine first-run outcomes, which is
@@ -19,12 +17,9 @@ UNYT_OLDEST_GLIBC="2.35"
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_BACKEND_READY='Status update: .* -> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|Status update: .* -> Ready\b'
 
-# The state that means "the keystore password prompt is what the user is looking
-# at" — the app's Debug spelling, `LairAwaitingPassword { is_initial_setup: true }`.
+# The keystore password prompt, in the app's own Debug spelling.
 # ON A COLD SANDBOX THIS IS SUCCESS, not a stall: the main window is only created
-# once the conductor is up, so a fresh install legitimately parks here with the
-# splash's prompt on screen. Read by load-proving/prove.py, which is the only
-# thing that can see a screen.
+# once the conductor is up, so a fresh install parks here with the prompt up.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_AWAITING_PASSWORD='Status update: .* -> LairAwaitingPassword \{'
 
@@ -33,8 +28,8 @@ UNYT_RE_AWAITING_PASSWORD='Status update: .* -> LairAwaitingPassword \{'
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_FAILED='panicked at|Status update: .* -> (ConductorError|AppInstallationError|Error)\(|Status update: .* -> (ConductorCrashed|HcAuthFailed|LairInvalidPassword|NetworkUnreachable)\b'
 
-# Watched separately, with a bounded tolerance rather than an open-ended wait: a
-# conductor that keeps dropping is a wedged app even though no single drop is fatal.
+# Bounded tolerance rather than an open-ended wait: a conductor that keeps
+# dropping is a wedged app even though no single drop is fatal.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_DISCONNECTED='Status update: .* -> ConductorDisconnected'
 
@@ -48,12 +43,10 @@ UNYT_RE_CARRIED_IDENTITY='identity: agent identity carried forward'
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_FRESH_IDENTITY='identity: no prior data-root identity; using a fresh identity'
 
-# ── the matchers ─────────────────────────────────────────────────────────────
 # The ONLY place these patterns are applied, so the regression test drives the
 # real call sites — every oracle bug so far has been in the invocation, not the
-# pattern (a leading "-" read as grep options; an unanchored alternation matching
-# another subsystem's line). The `(...)` before `.*` is load-bearing: `A|B.*`
-# binds `.*` to B alone and truncates a match on any earlier alternative.
+# pattern. The `(...)` before `.*` is load-bearing: `A|B.*` binds `.*` to B alone
+# and truncates a match on any earlier alternative.
 smoke_match_backend_ready(){ grep -qE -e "$UNYT_RE_BACKEND_READY"; }
 smoke_first_backend_ready(){ grep -oE -e "($UNYT_RE_BACKEND_READY).*" | head -1; }
 smoke_match_carried()      { grep -qF -e "$UNYT_RE_CARRIED_IDENTITY"; }
@@ -62,16 +55,12 @@ smoke_match_failed()       { grep -qE -e "$UNYT_RE_FAILED"; }
 smoke_first_failures()     { grep -oE -e "($UNYT_RE_FAILED).*" | head -3; }
 smoke_count_disconnects()  { grep -cE -e "$UNYT_RE_DISCONNECTED" || true; }
 
-# ── dependency comparison ────────────────────────────────────────────────────
-# One dependency per line, trimmed and sorted, so the sets compare as text.
-# Lives here rather than in check-deb-depends.sh so the regression test drives
-# the REAL ordering: `sort -u` puts a bare `libgtk-3-0` before `libgtk-3-0 (>=
-# 3.21.5)`, and that ordering is what used to decide the verdict.
+# `sort -u` puts a bare `libgtk-3-0` before `libgtk-3-0 (>= 3.21.5)`, and that
+# ordering is what used to decide the verdict.
 smoke_normalize_depends() {
   tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | { grep -v '^$' || true; } | sort -u
 }
 
-# Computed vs DECLARED: one finding per line, MISSING/UNCONSTRAINED/TOOLOW.
 smoke_split_constraint() {
   local c="${1:-}" op ver
   c="${c#"${c%%[![:space:]]*}"}"; c="${c%"${c##*[![:space:]]}"}"
@@ -81,12 +70,11 @@ smoke_split_constraint() {
   printf '%s %s\n' "$op" "$ver"
 }
 
-# Rank one DECLARED constraint as evidence of a floor covering `$2` (the version
-# the computed entry requires), printing `<rank> [floor]`. 5 is adequate; 1–4 are
-# all inadequate and all red, and their order decides only WHICH declaration the
-# report names — the one closest to a usable floor, because that is the one worth
-# fixing. Printed rather than returned because every rank is non-zero, which
-# `set -e` would read as this function failing.
+# Rank one DECLARED constraint as evidence of a floor covering `$2`, printing
+# `<rank> [floor]`. 5 is adequate; 1–4 are all inadequate and all red, and their
+# order decides only WHICH declaration the report names — the one closest to a
+# usable floor. Printed rather than returned because every rank is non-zero,
+# which `set -e` would read as this function failing.
 smoke_declared_rank() { # <declared-constraint> <required-version>
   local cconstraint="${1:-}" want="${2:-}" dop dver
   [ -n "$cconstraint" ] || { printf '1\n'; return 0; }   # bare: no floor at all
@@ -106,11 +94,9 @@ smoke_declared_rank() { # <declared-constraint> <required-version>
   fi
 }
 
-# The branches of a declared entry, one per line, trimmed. `a (>= 1) | b` is an
-# alternation: apt may satisfy it through EITHER package.
 # The trailing newline is load-bearing — `read` returns non-zero on a final line
-# without one, so a `while read` caller would silently drop the last branch, and
-# a line with no `|` at all is nothing BUT a last branch.
+# without one, so a `while read` caller would drop the last branch, and a line
+# with no `|` at all is nothing BUT a last branch.
 smoke_declared_branches() { # <declared-line>
   printf '%s\n' "${1:-}" | tr '|' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
@@ -119,11 +105,7 @@ smoke_declared_branches() { # <declared-line>
 #
 # AN ALTERNATION IS ONLY AS STRONG AS ITS WEAKEST BRANCH. apt is free to satisfy
 # `libgtk-3-0 | libgtk-3-0t64 (>= 3.21.5)` by installing an unversioned
-# `libgtk-3-0`, so the floor on the second branch guarantees nothing — and a
-# branch naming a package outside the alias set can satisfy the whole line
-# without our dependency being met at all. The line's rank is therefore the
-# MINIMUM across its branches. Declaring the floor on every branch is what makes
-# an alternation count.
+# `libgtk-3-0`, so the line's rank is the MINIMUM across its branches.
 smoke_declared_line_rank() { # <declared-line> <required-version> <aliases>
   local line="${1:-}" want="${2:-}" aliases="${3:-}"
   local branch bname bconstraint brank bver alias bmatch rank=5 floor=""
@@ -150,12 +132,10 @@ smoke_declared_line_rank() { # <declared-line> <required-version> <aliases>
 # input order — among too-low floors the highest, since ANDing the entries puts
 # that one in force, and otherwise the lexicographically smaller constraint.
 # Arbitrary, but stable: two runs over the same declared set must name the same
-# entry whatever order it arrives in. (Two too-low floors of the SAME version,
-# `>= 1.0` and `>> 1.0`, also fall to the lexicographic tie — they differ by an
-# epsilon and both are red, so which one is named does not matter.)
+# entry whatever order it arrives in.
 smoke_declared_supersedes() { # <rank> <floor> <constraint> <best-rank> <best-floor> <best-constraint>
   # Byte order, not the caller's collation: en_US.UTF-8 and C disagree on where
-  # `<` sorts against `=`, and the entry a CI log names should not depend on that.
+  # `<` sorts against `=`.
   local LC_ALL=C LC_COLLATE=C
   [ "$1" -gt "$4" ] && return 0
   [ "$1" -eq "$4" ] || return 1
@@ -174,10 +154,9 @@ smoke_declared_supersedes() { # <rank> <floor> <constraint> <best-rank> <best-fl
 # Debian `Depends` is a comma-separated AND list, so a duplicate entry ADDS a
 # requirement rather than replacing one — `libgtk-3-0 (>= 3.21.5), libgtk-3-0`
 # still requires 3.21.5, as apt and dpkg both confirm. tauri-bundler appends
-# exactly those bare duplicates, and `smoke_normalize_depends`'s `sort -u` puts
-# the bare entry first (a prefix sorts before its extension), so judging on the
-# first match reported a correctly-floored package as UNCONSTRAINED. Order must
-# not change the verdict.
+# exactly those bare duplicates, and `sort -u` puts the bare entry first, so
+# judging on the first match reported a correctly-floored package as
+# UNCONSTRAINED.
 smoke_depends_gaps() {
   local declared_file="${1:?declared file required}" computed_file="${2:?computed file required}"
   local provides_file="${3:-}"
@@ -198,17 +177,15 @@ smoke_depends_gaps() {
     op=""; ver=""
     if [ -n "$constraint" ]; then
       read -r op ver <<<"$(smoke_split_constraint "$constraint")"
-      # A REQUIREMENT with no version is not a weaker requirement, it is an
-      # unreadable one: `dpkg --compare-versions X ge ''` is true for every X, so
-      # letting it through would mark every declaration adequate.
+      # A REQUIREMENT with no version is unreadable, not weaker: `dpkg
+      # --compare-versions X ge ''` is true for every X.
       if [ -z "$ver" ]; then
         printf 'UNPARSEABLE %s (no version in its constraint)\n' "$dep"; continue
       fi
     fi
 
-    # The declared list may legitimately name something this package PROVIDES
-    # rather than the package itself; collect those aliases so the lookup below
-    # accepts either.
+    # The declared list may name something this package PROVIDES rather than the
+    # package itself, so the lookup below accepts either.
     aliases="$name"
     if [ -n "$provides_file" ] && [ -f "$provides_file" ]; then
       while read -r pline; do
@@ -236,14 +213,14 @@ smoke_depends_gaps() {
       # Nothing to prove beyond presence when the computed entry carries no floor.
       [ -n "$constraint" ] || continue
       read -r rank dver <<<"$(smoke_declared_line_rank "$cline" "$ver" "$aliases")"
-      # A rank outside 1–5 means the ranking itself broke. Staying quiet here
-      # would pass the gate, so it is reported and reds the run.
+      # A rank outside 1–5 means the ranking itself broke, and silence would pass
+      # the gate.
       case "$rank" in
         [1-5]) ;;
         *) printf 'UNPARSEABLE %s (internal: rank %s for declared "%s")\n' "$dep" "$rank" "$cline"
            internal=1; break ;;
       esac
-      # An alternation's finding must quote the whole line: naming one branch's
+      # An alternation's finding quotes the whole line: naming one branch's
       # constraint would point at a floor that is not the one in doubt.
       case "$cline" in
         *\|*) cconstraint="$cline" ;;
@@ -273,15 +250,14 @@ smoke_depends_gaps() {
         2) printf 'NOFLOOR %s declared (%s) — not a lower bound\n' "$dep" "$best_detail" ;;
         3) printf 'BADVERSION %s declared (%s)\n' "$dep" "$best_detail" ;;
         4) printf 'TOOLOW %s declared (%s)\n' "$dep" "$best_detail" ;;
-        # Matched, had a floor to prove, yet nothing was ever judged — the loop
-        # above is broken. Silence would pass the gate, so this reds it instead.
+        # Matched, had a floor to prove, yet nothing was judged — the loop above
+        # is broken, and silence would pass the gate.
         *) printf 'UNPARSEABLE %s (internal: no declared entry was judged)\n' "$dep" ;;
       esac
     fi
   done <"$computed_file"
 }
 
-# ── the check runner ─────────────────────────────────────────────────────────
 # One definition of the sequence, plus a `--only <id>` mode resuming from a state
 # directory — which is how each check becomes its own CI step.
 # shellcheck disable=SC2034  # read by the scripts that source this file
@@ -313,7 +289,6 @@ smoke_print_checks() {
   done
 }
 
-# ── state between checks ──────────────────────────────────────────────────────
 # A CI step is a separate process, so check 1's findings must outlive it.
 smoke_state_dir()   { printf '%s\n' "${UNYT_SMOKE_STATE:-/tmp/unyt-smoke-state}"; }
 smoke_state_file()  { printf '%s/state.env\n' "$(smoke_state_dir)"; }
@@ -346,10 +321,8 @@ smoke_state_load() {
 # `binary-compat` is not a legal shell variable name.
 smoke_state_var()   { printf 'RAN_%s\n' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"; }
 
-# ── the order guard ───────────────────────────────────────────────────────────
-# The order is load-bearing and `--only` is how it could stop being honoured, so
-# it is enforced: every earlier check must have RUN, and the gate must have
-# PASSED. Ran, not passed, for the rest — one red check may not silence the next.
+# Every earlier check must have RUN, and the gate must have PASSED. Ran, not
+# passed, for the rest — one red check may not silence the next.
 smoke_order_ok() { # <id>
   local id="$1" entry eid var missing=""
   for entry in "${UNYT_SMOKE_CHECKS[@]}"; do
@@ -379,9 +352,8 @@ smoke_run_one() { # <id>
   local id="$1" name fn rc=0
   name="$(smoke_check_name "$id")" || { echo "::error::no such check: $id" >&2; return 2; }
   fn="$(smoke_check_fn "$id")"
-  # The first check starts a fresh run. Both Linux bundles are smoked in the same
-  # job, so a state file an earlier artifact left behind would otherwise let a
-  # later check report on the wrong install.
+  # Both Linux bundles are smoked in the same job, so a state file an earlier
+  # artifact left behind would let a later check report on the wrong install.
   [ "$id" != "$UNYT_SMOKE_GATE" ] || smoke_state_reset
   echo "" >&2
   echo "===== $name =====" >&2
@@ -396,8 +368,8 @@ smoke_run_one() { # <id>
   return "$rc"
 }
 
-# Rows on stdout, narration on stderr. Also to UNYT_SMOKE_RESULTS: a row that
-# only ever existed on a pipe dies with the container.
+# Also to UNYT_SMOKE_RESULTS: a row that only ever existed on a pipe dies with
+# the container.
 smoke_emit_rows() {
   local row
   [ "${#smoke_results[@]}" -gt 0 ] || return 0
@@ -407,9 +379,8 @@ smoke_emit_rows() {
   done
 }
 
-# Exit 2 rather than 1 for a bad invocation: a check that went red and a check
-# that was never named are different answers, and a caller that mistypes an id
-# must not read as an artifact that failed.
+# Exit 2 rather than 1 for a bad invocation: a caller that mistypes an id must
+# not read as an artifact that failed.
 smoke_dispatch() { # print | only <id> | all
   local entry rc=0
   case "${1:?smoke_dispatch needs a mode}" in
@@ -440,8 +411,8 @@ smoke_dispatch() { # print | only <id> | all
 # unyt.v<major>.<minor>.log.YYYY-MM-DD.
 smoke_log_dir() { printf '%s/data/%s/logs\n' "${1:?sandbox root required}" "$UNYT_BUNDLE_ID"; }
 
-# Concatenate every log sink the app writes, for grepping. Both matter: the file
-# is durable, stdout catches a crash that happens before the log dir exists.
+# Both sinks matter: the file is durable, stdout catches a crash from before the
+# log dir exists.
 smoke_all_logs() {
   local sandbox="${1:?sandbox root required}"
   cat "$sandbox/app-stdout.log" "$(smoke_log_dir "$sandbox")"/unyt.v*.log.* 2>/dev/null || true

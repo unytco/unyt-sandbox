@@ -118,14 +118,11 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          # macos-latest ON PURPOSE, and it is the one runner label in this repo
-          # that is meant to roll. The smoke's gates are pinned to macos-15 /
-          # macos-15-intel instead, so the artifact is BUILT on a newer macOS
-          # than it is installed and launched on — see release-smoke.yaml's
-          # header for why that gap is the useful direction and not a bug to
-          # close. Pinning these two legs changes what users install, so it is a
-          # decision of its own rather than something a test change carries in;
-          # test-oracle.sh fails on a pin here for exactly that reason.
+          # macos-latest ON PURPOSE, and the one runner label in this repo that
+          # is meant to roll: the smoke's gates are pinned to macos-15 /
+          # macos-15-intel, so the artifact is BUILT on a newer macOS than it is
+          # installed on. Pinning these two legs changes what users install, so
+          # test-oracle.sh fails on a pin here.
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
             arc_factor: default
@@ -226,9 +223,9 @@ jobs:
           }
 
       - name: Pin the MSI product version
-        # Written here, never committed: a wix.version in tauri.conf.json would outlive the
-        # release that set it. Empty means a stable build, which tauri versions itself —
-        # writing the key anyway would hand the bundler an empty string.
+        # Written here, never committed: a wix.version in tauri.conf.json would
+        # outlive the release that set it. Empty means a stable build, which
+        # tauri versions itself.
         if: runner.os == 'Windows' && needs.publish-happ.outputs.msiVersion != ''
         shell: bash
         env:
@@ -278,16 +275,14 @@ jobs:
         run: df -h /
 
   # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
-  # human publishes it, so the run's colour is what tells them, and it must not
-  # read green when the app never opened. Phase 2 keeps the advisory behaviour it
-  # has always had here — the two phases are release-smoke.yaml's header.
+  # human publishes it, so the run's colour is what tells them. Phase 2 keeps the
+  # advisory behaviour it has always had here.
   #
   # Nothing `needs` this job either way. Not `workflow_run` — that only fires on
   # the default branch.
   smoke-test:
-    # JUST THE STAGE. GitHub prefixes every called job with this one, so anything
-    # said here is said again on all 16 lines of the Checks list — and what each
-    # lane does is the called job's to say. release-smoke.yaml names them.
+    # JUST THE STAGE: GitHub prefixes every called job with this one, so anything
+    # said here is said again on all 16 lines of the Checks list.
     name: Stage 3
     needs: [publish-happ, release-tauri-app]
     # Not gated on the build job — one failed row would suppress every lane.

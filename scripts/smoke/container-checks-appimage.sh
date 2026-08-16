@@ -7,9 +7,8 @@
 #   container-checks-appimage.sh --print-checks                   <id><TAB><name>
 #
 # A bare image proves less here than for a .deb: an AppImage declares nothing, so
-# a bare image only says it is not 100% self-contained, which none are. So the
-# structural checks run first on the untouched bundle and the launch gets a GTK
-# baseline. Order is enforced by smoke_order_ok, as next door.
+# a bare image only says it is not 100% self-contained, which none are. Hence
+# structural checks first on the untouched bundle, and a GTK baseline to launch.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,9 +38,8 @@ esac
 if [ "$MODE" != print ]; then
   ARTIFACT="${1:?usage: container-checks-appimage.sh [--only <check-id>] <artifact.AppImage>}"
   export DEBIAN_FRONTEND=noninteractive
-  # APPIMAGE_EXTRACT_AND_RUN avoids FUSE entirely, which is the portable answer:
-  # 22.04 needs libfuse2 and 24.04 renamed it libfuse2t64, and neither is present
-  # on a clean image. Extraction is also how the structural checks get at the bundle.
+  # APPIMAGE_EXTRACT_AND_RUN avoids FUSE entirely: 22.04 needs libfuse2, 24.04
+  # renamed it libfuse2t64, and neither is present on a clean image.
   export APPIMAGE_EXTRACT_AND_RUN=1
 
   echo "===== distro =====" >&2
@@ -82,10 +80,9 @@ check_bundle() {
 
 check_launch() {
   local desktop_exec inner_bin
-  # Name the package, not the sonames: apt resolves its closure per distro, and
-  # a hand-listed set is silently wrong elsewhere (debian:13 also needs
-  # libgpg-error and libcom_err). Does not weaken the check — the AppImage still
-  # prefers its own bundled libs via LD_LIBRARY_PATH.
+  # Name the package, not the sonames: apt resolves its closure per distro, and a
+  # hand-listed set is silently wrong elsewhere. Does not weaken the check — the
+  # AppImage still prefers its own bundled libs via LD_LIBRARY_PATH.
   apt-get update -qq >/dev/null 2>&1
   apt-get install -y -qq libwebkit2gtk-4.1-0 libgbm1 libgl1 libegl1 xvfb >/dev/null 2>&1
 
@@ -95,9 +92,8 @@ check_launch() {
     sed 's/^Exec=//; s/[[:space:]].*//')"
   inner_bin="$APPDIR/usr/bin/$desktop_exec"
   if [ -z "$desktop_exec" ] || [ ! -x "$inner_bin" ]; then
-    # No guessing. Picking some other executable is how this failed in the first
-    # place, and a launch check watching the wrong process reports a red that says
-    # nothing about the artifact.
+    # No guessing: a launch check watching the wrong process reports a red that
+    # says nothing about the artifact.
     echo "::error::cannot tell which binary this AppImage runs: .desktop Exec='${desktop_exec:-<none>}'" >&2
     echo "  is missing or not executable under usr/bin. Candidates present:" >&2
     find "$APPDIR/usr/bin" -type f -executable -exec basename {} \; 2>/dev/null | sed 's/^/    /' >&2

@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
 """Is a captured frame the app's own first screen, or something else entirely?
 
-  frames.py <shot.png> [shot.png ...]   one line per shot, then a verdict
-
-Exit status: 0 when at least one shot is PAINTED, 3 when none is but something
-was readable, 4 when nothing could be read at all. prove.py imports assess()
-rather than reading those lines back, and decides what a verdict means for a
-lane; this command line is for reading an uploaded artifact by hand.
-
-"NOT BLANK" IS NOT THE ASSERTION, and this is the whole point of the file. A
-macOS desktop wallpaper is a rich gradient: thousands of distinct colours and a
-low dominant share. A process without the Screen Recording grant does not get an
-error from `screencapture` — it gets the desktop with every application window
-silently omitted. A variance-only threshold scores that PAINTED and reports a
-blank-window release as green. So a frame must be dominated by a colour THE APP
-ITSELF DECLARES before it counts as the app's.
+"NOT BLANK" IS NOT THE ASSERTION, and that is the whole point of the file. A
+macOS desktop wallpaper is a rich gradient — thousands of distinct colours at a
+low dominant share — so a variance-only threshold scores a frame of the desktop
+PAINTED and reports a blank-window release as green. A frame must be dominated
+by a colour THE APP ITSELF DECLARES before it counts as the app's.
 
 One analyser for all three platforms rather than ImageMagick here, `sips` there
 and System.Drawing on Windows: three implementations of one threshold drift, and
@@ -27,7 +18,6 @@ import sys
 
 from PIL import Image, UnidentifiedImageError
 
-# ── what the app's own first screen is made of ────────────────────────────────
 # The boot screen's background is a STACK of translucent layers, so the colour a
 # frame is dominated by is a composite and not any single declared value. Every
 # source is in unyt/ui/white-label:
@@ -40,15 +30,10 @@ from PIL import Image, UnidentifiedImageError
 #                                   .translucent-overlay  rgba(68,68,75,0.6)
 #                                   .modal-backdrop       rgba(0,0,0,0.5)
 #
-# Every render path in runtime-boot-view.ts lays the overlay over the host; the
-# keystore password prompt adds the backdrop on top of that. Composing them here
-# rather than listing hex values keeps this honest when the CSS moves.
-#
-# The window-glow animation is a continuous interpolation, so its intermediate
-# frames are colours no keyframe names. They belong in the SET, not in the slack
-# around it: widening the tolerance to reach them widens it in every direction at
-# once, and the accepted region becomes "any dark grey". Only the blue channel
-# moves, so the ramp is eleven values.
+# The window-glow animation interpolates continuously, so its intermediate frames
+# are colours no keyframe names. They belong in the SET, not in the slack around
+# it: widening the tolerance to reach them widens it in every direction at once,
+# and the accepted region becomes "any dark grey". Only the blue channel moves.
 BOOT_BASE_COLOURS = [
     (0x3F, 0x3F, 0x46),
     (0x4F, 0x4F, 0x5E),
@@ -63,9 +48,9 @@ def _over(base, layer, alpha):
 
 
 def boot_backgrounds():
-    """Every base, and every prefix of the layer stack over it. A frame taken
-    before Lit mounts sees the bare body colour; one taken at the password prompt
-    sees both layers; the states in between see one."""
+    """Every base, and every prefix of the layer stack over it: a frame taken
+    before Lit mounts sees the bare body colour, one at the password prompt sees
+    both layers, and the states in between see one."""
     out = set()
     for base in BOOT_BASE_COLOURS:
         out.add(base)
@@ -80,21 +65,18 @@ def boot_backgrounds():
 
 BOOT_BACKGROUNDS = boot_backgrounds()
 
-# Per-channel slack on that match, and DELIBERATELY TIGHT: the set above already
-# contains every colour the boot screen can show, so this covers nothing but
-# rounding. A capture on Xvfb, on GDI or on a runner's virtual display goes
-# through no colour management. Every unit beyond that widens the accepted region
-# into somebody else's dark grey — at 16, #2c2c2c and #444444 both matched.
+# Per-channel slack, DELIBERATELY TIGHT: the set above already holds every colour
+# the boot screen can show, and these captures go through no colour management,
+# so this covers nothing but rounding. At 16, #2c2c2c and #444444 both matched.
 BACKGROUND_TOLERANCE = 3
 
-# ── the two bars, and why they sit where they do ──────────────────────────────
-# MEASURED, NOT REASONED. Bars set from first principles were walked through by
-# an adversarial frame built from a real Linux capture: the app's boot background
-# plus the native menu bar, modal blanked out, scored 96.88% dominant over 203
-# distinct colours. The menu bar is drawn by the native toolkit and not by the
-# webview, so "the chrome renders, the webview content is missing" — the bug this
-# file exists to catch — was a pass. Every frame run 31862262726 captured, plus
-# that one:
+# THE TWO BARS BELOW ARE MEASURED, NOT REASONED. Bars set from first principles
+# were walked through by an adversarial frame built from a real Linux capture:
+# the app's boot background plus the native menu bar, modal blanked out, scored
+# 96.88% dominant over 203 distinct colours. The menu bar is drawn by the native
+# toolkit and not by the webview, so "the chrome renders, the webview content is
+# missing" — the bug this file exists to catch — was a pass. Every frame run
+# 31862262726 captured, plus that one:
 #
 #   real screens        50.00% – 53.90% dominant     1847 – 2360 distinct
 #   unpainted / early   92.94% – 99.69% dominant        3 –  556 distinct
@@ -104,25 +86,21 @@ BACKGROUND_TOLERANCE = 3
 # their gap. A tighter bar costs nothing in time — each lane polls until a frame
 # passes rather than looking once.
 
-# The geometric middle of 556..1847. A CONSEQUENCE WORTH STATING: at 8 bits per
-# pixel a greyscale or palette PNG holds 256 colours at most, so a capture in one
-# can never clear this bar. That is right rather than unfortunate — a tool that
-# quantised the frame has not handed us a screen.
+# A CONSEQUENCE WORTH STATING: at 8 bits per pixel a greyscale or palette PNG
+# holds 256 colours at most, so a capture in one can never clear this bar. That
+# is right rather than unfortunate — a tool that quantised the frame has not
+# handed us a screen.
 MIN_DISTINCT_COLOURS = 1000
 
-# No single colour may be more than this much of the frame. THE BAR THE MENU-BAR
-# FRAME BROKE: a colour count alone cannot tell a screen from a blank window with
-# something small and rich on it, because a strip of chrome carries hundreds of
-# colours in 3% of the pixels.
+# A colour count alone cannot tell a screen from a blank window with something
+# small and rich on it: a strip of chrome carries hundreds of colours in 3% of
+# the pixels.
 MAX_DOMINANT_SHARE = 0.75
 
 # A 1x1 or 16x16 capture is a tool that failed and wrote something anyway; it
 # cannot be evidence about an 800x800 window whatever its colour variance.
 MIN_DIMENSION = 200
 
-# FOREIGN is the verdict this file exists for: a frame with plenty of content
-# whose dominant colour is not one the app declares. A wallpaper lands here, and
-# so does a capture that photographed the wrong window.
 PAINTED, FOREIGN, FLAT, UNREADABLE = "PAINTED", "FOREIGN", "FLAT", "UNREADABLE"
 
 
@@ -136,10 +114,8 @@ def count_colours(path):
     invented would otherwise split one visible colour into several."""
     try:
         with Image.open(path) as image:
-            # PNG because it is what all three capture tools emit by default and
-            # it is lossless — a JPEG's ringing would manufacture the colour
-            # variance this looks for, and a frame in one is a capture path that
-            # is not the one these bars were measured against.
+            # PNG only, because a JPEG's ringing would manufacture the colour
+            # variance this looks for.
             if image.format != "PNG":
                 raise Unreadable("not a PNG (%s)" % (image.format or "unknown format"))
             image.load()
@@ -153,7 +129,6 @@ def count_colours(path):
 
 
 def nearest_background(colour):
-    """The declared background this colour matches, or None."""
     best, best_distance = None, BACKGROUND_TOLERANCE + 1
     for candidate in BOOT_BACKGROUNDS:
         distance = max(abs(colour[i] - candidate[i]) for i in range(3))
@@ -173,8 +148,8 @@ def assess(path):
         return UNREADABLE, str(exc)
 
     # BEFORE the counter is read: a frame with no pixels in it makes
-    # most_common() empty, and the IndexError would be reported as "the analyser
-    # itself failed" when the truth is a capture tool that wrote nothing.
+    # most_common() empty, and the IndexError would read as the analyser failing
+    # rather than as a capture tool that wrote nothing.
     if width < MIN_DIMENSION or height < MIN_DIMENSION:
         return (
             UNREADABLE,
@@ -231,9 +206,6 @@ def assess(path):
 
 
 def uniform_black(path):
-    """One flat black rectangle and nothing else. Its own function rather than a
-    substring of the line above, so a caller reading it is coupled to an answer
-    and not to a sentence."""
     try:
         _, _, counts = count_colours(path)
     except Unreadable:
@@ -242,7 +214,6 @@ def uniform_black(path):
 
 
 def report(paths, out=sys.stdout):
-    """[(path, verdict, detail)], printed as it goes."""
     results = []
     for path in paths:
         verdict, detail = assess(path)

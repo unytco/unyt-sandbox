@@ -23,7 +23,6 @@ command -v objdump >/dev/null || { echo "::error::objdump not found (apt-get ins
 
 status=0
 
-# ── the ceiling, across every ELF the bundle ships ────────────────────────────
 # THE APP'S OWN BINARY, named by the .desktop file's Exec — not
 # `find usr/bin | head -1`, which is directory order and therefore a coin flip.
 desktop_exec="$(grep -hm1 '^Exec=' "$APPDIR"/*.desktop 2>/dev/null | sed 's/^Exec=//; s/[[:space:]].*//' || true)"
@@ -83,7 +82,6 @@ else
   echo "OK: the whole bundle runs on glibc $UNYT_OLDEST_GLIBC" >&2
 fi
 
-# ── what it still expects FROM the system ────────────────────────────────────
 # Reported, not gated: nothing else records the AppImage's implicit dependency
 # contract on the host.
 echo "--- libraries NOT bundled, so required from the system ---" >&2
@@ -95,7 +93,6 @@ else
   echo "  (none — fully self-contained)" >&2
 fi
 
-# ── AppRun environment hazards ───────────────────────────────────────────────
 # The other half of tauri#15665: a plugin search path baked at build time that
 # points OUTSIDE the AppDir loads the build machine's plugins, or nothing at all.
 echo "--- AppRun search paths pointing outside the bundle ---" >&2

@@ -4,10 +4,9 @@
 #   summarise-checks.sh --label <label> --results <file> -- <print-checks command...>
 #
 # One step per check buys visibility at the cost of a check being able to stop
-# HAPPENING — and every way that occurs produces a SHORTER table, which is
-# exactly as green as a clean one. So the expected list is asked for (the
-# `--print-checks` command after `--`), never repeated here; two rows for one
-# check is the same failure wearing the other hat.
+# HAPPENING, and every way that occurs produces a SHORTER table — exactly as
+# green as a clean one. So the expected list is asked for (the `--print-checks`
+# command after `--`), never repeated here.
 #
 # `warn` passes the exit status and still prints as warn: it is the Windows
 # signing tripwire, and a warn that failed the job is a red people scroll past.
@@ -26,9 +25,8 @@ done
 [ -n "$RESULTS" ] || { echo "::error::--results <file> is required" >&2; exit 2; }
 [ $# -gt 0 ] || { echo "::error::a --print-checks command is required after --" >&2; exit 2; }
 
-# FAILS CLOSED on an unreadable list. With no expected checks every row is
-# unaccounted for and every absence is invisible, so the guard would report a
-# clean table having compared against nothing.
+# FAILS CLOSED on an unreadable list: with no expected checks every absence is
+# invisible, and the guard would report a clean table having compared nothing.
 declared="$("$@")" || {
   echo "::error::could not read the check list ($*) — refusing to report a table that was" >&2
   echo "  compared against nothing." >&2
@@ -46,16 +44,16 @@ fi
 
 status=0
 
-# The table below reads a row's SECOND field and nothing else, so `name|pass|whatever` would print
-# the pass it did not earn; and a row naming a check that no longer exists is never looked up at
-# all, so a rename drops a check silently.
+# The table below reads a row's SECOND field and nothing else, so
+# `name|pass|whatever` would print the pass it did not earn; and a row naming a
+# check that no longer exists is never looked up, so a rename drops it silently.
 declared_names=""
 while IFS=$'\t' read -r _ name; do
   [ -n "$name" ] && declared_names="$declared_names$name"$'\n'
 done <<<"$declared"
 
-# Collected for the table below: an annotation does not stop a `pass` in the RESULT column, which is
-# the part a reader scans, being believed.
+# Collected for the table below: an annotation does not stop a `pass` in the
+# RESULT column, which is the part a reader scans, being believed.
 malformed_names=""
 reject() { # <name> <reason...>
   echo "::error::${*:2}" >&2

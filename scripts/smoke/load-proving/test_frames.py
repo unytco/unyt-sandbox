@@ -1,17 +1,9 @@
 #!/usr/bin/env python3
 """Can frames.py's verdicts still come out the other way?
 
-  python3 -m unittest discover -s scripts/smoke/load-proving
-
-A threshold nothing can fail is not a threshold, and this file is what says
-these two still can. Every fixture is one the real captures produce: the numbers
-in the margin cases are measurements from run 31862262726, so a bar that moved
-inside the measured gap is caught here rather than on a release.
-
-The PNG codec is Pillow's and is not retested. What is tested is what a FORMAT
-implies: a greyscale or palette capture holds at most 256 colours, so it can
-never clear the colour bar whatever it depicts — a tool that handed us one did
-not hand us a rendered screen.
+A threshold nothing can fail is not a threshold. The numbers in the margin cases
+are measurements from run 31862262726, so a bar that moved inside the measured
+gap is caught here rather than on a release.
 """
 
 import tempfile
@@ -25,17 +17,16 @@ import frames
 SIZE = 400
 SHOT = 800
 BACKGROUND = frames.boot_backgrounds()[0]
-# What the real captures contain, so the fixtures are calibrated the way the bars
-# are: half the frame is content, over about two thousand colours.
+# What the real captures contain: half the frame is content, over about two
+# thousand colours.
 CONTENT_COLOURS = 2000
 
 
 def content_colour(n):
     """The n'th of a run of distinct colours, injective while n fits two bytes —
     they ARE two of the channels — so a fixture's colour count is a number the
-    case states rather than a side effect of arithmetic that happens to collide.
-    Every one is far darker in red than any background here, so content can never
-    merge into the fill it is drawn on."""
+    case states rather than a collision. Every one is far darker in red than any
+    background here, so content can never merge into the fill it is drawn on."""
     return (n // 256, n % 256, (n * 7) % 256)
 
 
@@ -45,9 +36,7 @@ def flat(size, colour):
 
 def drawn_on(size, background, content_rows, content_colours, top=0):
     """A boot background with `content_rows` rows of exactly `content_colours`
-    distinct colours across it. ONE BUILDER FOR EVERY CASE, because the two bars
-    look at exactly two things — how much of the frame is not its background, and
-    how many colours are on it."""
+    distinct colours across it — the two things the bars look at."""
     pixels = flat(size, background)
     for y in range(top, top + content_rows):
         for x in range(size):
@@ -57,14 +46,13 @@ def drawn_on(size, background, content_rows, content_colours, top=0):
 
 def with_modal(size, background):
     """The keystore modal over the boot background, at the proportions the real
-    captures have: half the frame, over two thousand colours."""
+    captures have."""
     return drawn_on(size, background, size // 2, CONTENT_COLOURS, top=size // 4)
 
 
 def wallpaper(size):
-    """What a macOS desktop looks like when a capture without the Screen
-    Recording grant hands back the desktop instead of the window: a wide, rich
-    gradient with no flat majority anywhere near the app's palette."""
+    """A wide, rich gradient with no flat majority anywhere near the app's
+    palette — what a macOS desktop looks like."""
     return [
         (40 + (x * 180) // size, 90 + (y * 120) // size, 200 - (x * 90) // size)
         for y in range(size)
@@ -89,7 +77,6 @@ class Frames(unittest.TestCase):
         got, detail = frames.assess(path)
         self.assertEqual(want, got, detail)
 
-    # ── what a broken run actually produces ───────────────────────────────────
     def test_unpainted_white_window(self):
         self.assertVerdict(frames.FLAT, flat(SIZE, (255, 255, 255)))
 
@@ -111,20 +98,16 @@ class Frames(unittest.TestCase):
 
     def test_a_window_split_into_two_flat_blocks(self):
         # A third of the frame differs from the dominant colour, so the SHARE bar
-        # is satisfied and only the colour count says this is not a render. The
-        # boot screen has a conic-gradient ring and antialiased text on it;
-        # nothing it draws is two solid rectangles.
+        # is satisfied and only the colour count says this is not a render.
         pixels = flat(SIZE, BACKGROUND)
         for y in range(SIZE * 2 // 3, SIZE):
             for x in range(SIZE):
                 pixels[y * SIZE + x] = (90, 90, 90)
         self.assertVerdict(frames.FLAT, pixels)
 
-    # ── the adversarial pair ──────────────────────────────────────────────────
     def test_the_background_with_only_a_menu_bar_on_it(self):
-        # The frame that walked through the first pair of bars: the native menu
-        # bar renders while the webview content is missing, which is very nearly
-        # the bug this file exists to catch.
+        # The frame that walked through the first pair of bars: chrome renders
+        # while the webview content is missing.
         self.assertVerdict(frames.FLAT, drawn_on(SHOT, BACKGROUND, 25, 202), SHOT)
 
     def test_and_that_fixture_is_still_the_frame_that_was_measured(self):
@@ -151,7 +134,6 @@ class Frames(unittest.TestCase):
         # blank window passes for the app.
         self.assertVerdict(frames.FLAT, drawn_on(SHOT, BACKGROUND, 25, 1200), SHOT)
 
-    # ── the margins, which is where a bar is really pinned ────────────────────
     def test_the_worst_real_capture_is_still_the_apps_own_screen(self):
         # windows-2022's 1847 colours and linux-appimage's 53.90% dominant, in
         # one frame: both bars sit below the worst thing a real screen did.
@@ -163,7 +145,6 @@ class Frames(unittest.TestCase):
     def test_one_step_over_the_dominant_bar(self):
         self.assertVerdict(frames.FLAT, drawn_on(SIZE, BACKGROUND, 99, 1200))
 
-    # ── the slack around the app's palette ────────────────────────────────────
     def test_a_capture_three_off_the_declared_colour_is_still_the_app(self):
         # Literal offsets, not BACKGROUND_TOLERANCE ± 1: an assertion written in
         # terms of the constant it asserts moves with it and cannot fail.
@@ -189,12 +170,11 @@ class Frames(unittest.TestCase):
     def test_a_window_glow_frame_between_the_two_keyframes(self):
         self.assertVerdict(frames.PAINTED, with_modal(SIZE, (35, 35, 44)))
 
-    # ── the one this file exists for ──────────────────────────────────────────
     def test_a_wallpaper_handed_back_instead_of_the_window(self):
-        # Not blank by any measure of variance, and still not the app.
+        # Not blank by any measure of variance, and still not the app. This is
+        # the case the whole file exists for.
         self.assertVerdict(frames.FOREIGN, wallpaper(SIZE))
 
-    # ── formats a capture tool may hand us ────────────────────────────────────
     def test_an_rgba_capture_flat(self):
         self.assertVerdict(
             frames.FLAT, [BACKGROUND + (255,)] * (SIZE * SIZE), mode="RGBA"
@@ -229,12 +209,9 @@ class Frames(unittest.TestCase):
         self.assertEqual(frames.FLAT, frames.assess(str(path))[0])
 
     def test_a_jpeg_is_not_a_frame_this_judges(self):
-        # A JPEG's ringing manufactures the colour variance this looks for, and
-        # no capture path here emits one.
         path = write(self.dir, "shot.jpg", with_modal(SIZE, BACKGROUND))
         self.assertEqual(frames.UNREADABLE, frames.assess(path)[0])
 
-    # ── we could not look, which is never a verdict about the app ─────────────
     def test_a_truncated_file(self):
         path = Path(self.dir) / "cut.png"
         whole = write(self.dir, "whole.png", with_modal(SIZE, BACKGROUND))
@@ -252,7 +229,6 @@ class Frames(unittest.TestCase):
     def test_a_file_that_is_not_there(self):
         self.assertEqual(frames.UNREADABLE, frames.assess(self.dir + "/nothing.png")[0])
 
-    # ── what a run of frames concludes ────────────────────────────────────────
     def test_one_painted_frame_is_enough(self):
         results = [("a", frames.FLAT, ""), ("b", frames.PAINTED, "")]
         self.assertEqual(0, frames.exit_code(results))

@@ -13,7 +13,7 @@
   use PowerShell 7 syntax. Everything it is asked for happens in ONE invocation,
   because the C# below is compiled on every start.
 
-  On stdout, one line each, in this order:
+  On stdout, one line each, in no guaranteed order:
     STATION <name>            the window station this process runs on
     WINDOW <hwnd> <x> <y> <w> <h> <title>    per visible window of -TargetPid
     LARGEST <hwnd>            which of them was photographed

@@ -8,8 +8,7 @@
 #
 # THE ORDER IS LOAD-BEARING: closure must be proven before any tooling is
 # installed, or `apt-get install xvfb` satisfies the very dependency the package
-# failed to declare. `--only` is the obvious way for that to stop being
-# honoured, so smoke_order_ok enforces it rather than assuming it.
+# failed to declare. smoke_order_ok enforces it rather than assuming it.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,8 +37,8 @@ if [ "$MODE" != print ]; then
   DEB="${1:?usage: container-checks.sh [--only <check-id>] <artifact.deb>}"
   export DEBIAN_FRONTEND=noninteractive
 
-  # Printed on every invocation, i.e. once per CI step: which distro a row came
-  # from is the first thing anyone reads it against.
+  # Once per CI step: which distro a row came from is the first thing anyone
+  # reads it against.
   echo "===== distro =====" >&2
   ( . /etc/os-release && echo "  $PRETTY_NAME" ) >&2
   echo "  glibc: $(ldd --version | head -1)" >&2
@@ -58,15 +57,14 @@ check_install() {
   BIN="$(dpkg -L "$PKG" | grep -E '^/usr/bin/' | head -1)"
   echo "  package: $PKG · binary: ${BIN:-<none>}" >&2
   if [ -z "$BIN" ]; then
-    # Every check below is about that binary, and an empty path makes each of
-    # them fail for a reason that reads as a different defect. Say it here, once,
-    # where it is actually true.
+    # An empty path makes every check below fail for a reason that reads as a
+    # different defect.
     echo "::error::$PKG installed but ships nothing under /usr/bin — there is no application" >&2
     echo "  binary for the checks below to look at." >&2
     return 1
   fi
-  # Recorded LAST and only on success: GATE_OK is what every check below reads to
-  # mean "there is an install here to look at".
+  # LAST and only on success: GATE_OK is what every check below reads to mean
+  # "there is an install here to look at".
   smoke_state_set PKG "$PKG" && smoke_state_set BIN "$BIN" && smoke_state_set GATE_OK 1 || {
     echo "::error::could not record the install in $(smoke_state_file) — every check below" >&2
     echo "  would then blame this one for not having run." >&2

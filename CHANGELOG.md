@@ -14,43 +14,15 @@ Application-level changes belong in
 
 ### Added
 
-- **Every installer a release ships is installed, launched and photographed (UNYT-966/967/968)** — the `.deb`, the AppImage, both `.dmg`s, the NSIS `.exe` on windows-2022 and windows-2025, and the `.msi` (`scripts/smoke/load-proving/`, phase 1 of `release-smoke.yaml`).
-- **A green phase-1 lane means:** the artifact installed, the app reached a healthy backend state, and a frame of *its own window* is the app's own screen.
-- **The bars that frame clears:** at least 1000 distinct colours, and no single colour over 75% of it. A bare menu bar over a blank window clears neither.
-- **It does not mean the screen is the right screen.** No text is read and no element is identified.
-- **A lane that cannot launch, or cannot trust its capture, is red.** Nothing here skips, and nothing is quietly green.
-- **Every lane photographs the screen before it launches anything.** On Linux and Windows a frame that already passes for the app answers `UNTRUSTED`; on macOS it turns pixel mode off instead.
-- **macOS may answer `WINDOW-ONLY`:** the app put a real on-screen window up at a real size, and webview paint is unverified. Green with a warning, and never the word a photographed lane gets.
-- **Static checks of what the artifact is** (phase 2): install, version, binary compatibility and declared dependencies in pristine distro containers; macOS signing, notarization, architecture and deployment target; a Windows install/uninstall cycle with an import-table check. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
-- **A lane that does not answer is red on every platform.** Each reads its verdict in a step of its own that runs whatever the launch did, so a launch that never happened reads as NO ANSWER.
-- **An installer the inventory cannot name fails the run.** The presence tests are exact suffixes, and anything installer-shaped that no suffix claims is an error naming the asset — not a lane that quietly stops existing.
-- **The phases run concurrently**, so a notarization finding still lands on a build whose window came up blank.
-- **The harnesses run on every pull request** (`.github/workflows/ci.yaml`): the smoke oracle, the macOS check harness bare and in CI's shape, both again under bash 3.2, the load-proving suite against an Xvfb display of its own, and four linters.
-- **Tag-derived release kinds and `.happ` inheritance (UNYT-948).** `vM.m.0` builds the DNA; `vM.m.p` inherits it and repacks only the UI.
-- **A version contract (UNYT-946).** `unyt/src-tauri/Cargo.toml` is the single source of truth for the version; a tag or a `tauri.conf.json` that disagrees fails the release before an artifact is built (`scripts/check-version-contract.sh`).
-- **The shipped build receives `VITE_MIGRATION_SERVICE_URL`** — the update router the app polls — and an empty value fails the run.
-- **What CI cannot cover, as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that CI never sees; likewise a machine without the WebView2 runtime or the Visual C++ redistributable.
+- **A release now proves its app opens (UNYT-966/967/968).** Every installer it ships is installed on a clean machine, launched, and photographed: the release passes only if the app reached a healthy state and a frame of its own window shows a drawn screen. It does not prove the screen is the *right* screen — nothing in the frame is read or identified.
+- **Static checks of what each artifact is:** install and uninstall, version, binary compatibility and declared dependencies in pristine distro containers; signing, notarization, architecture and deployment target on macOS. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
+- **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
 
 ### Changed
 
-- **A release run fails when the app does not open**, or when the smoke cannot prove its own checks still fail. The `static-checks-advisory` input softens phase 2 alone; nothing can reach phase 1 or the oracle.
-- **A release is created draft.** A human publishes it, and the run's colour is what they read first.
-- **The phase-1 lanes are one driver, not three.** `load-proving/prove.py` holds the control, the watch and the verdict for every platform; the capture stays native — ImageMagick on Linux, `screencapture` on macOS, `PrintWindow` on Windows.
-- **The pre-release tag channel is `-dev.*`.** The update router matches `vM.m.p` only, so no pre-release is offered to users as an update.
-- **A pre-release MSI's product version is derived from its tag at build time** (`scripts/msi-version.sh`): `0.101.0-dev.3` yields `0.101.0.3`.
-- **An artifact is checked against its own version**, pre-release suffix included, and the `.msi` against the four-field version Windows registers.
-- **The macOS gate images are pinned to `macos-15` / `macos-15-intel`, and the build legs are not.** The artifact is launched on an OS older than the one that produced it, which is what most users have.
-- **Each stage-3 lane is named for what it tests**: `setup test`, `test opens app — <target>`, `test static checks — <target>`.
-- **Only artifacts the repo builds are published**, and a declared-but-missing artifact fails the release.
-- **A pushed tag never reaches a shell.** Tag names are untrusted input and travel through `env`.
-- **The Linux build leg reports free disk either side of the build.** A release compile of the Holochain 0.7 stack can exhaust a runner.
-- **`AGENTS.md` is one line: read the code.** The scripts, the harnesses that test them and the workflows that run them are the only account of this repo that cannot drift.
+- **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
+- **Release kinds come from the tag, and the version from one file (UNYT-946/948).** `vM.m.0` builds the DNA, `vM.m.p` inherits it and repacks only the UI, and `unyt/src-tauri/Cargo.toml` is the single source of truth for the version — a tag or a config that disagrees fails the release before an artifact is built. Pre-releases ship on a `-dev.*` channel the update router ignores, so one is never offered to users as an update.
 
 ### Fixed
 
-- **The `ui_ready` webview gate is gone — it could never pass.** The breadcrumb comes from the main window, which a cold install on an authenticated build never opens. Whether the webview drew anything is phase 1's question, answered by a photograph.
-- **The dependency check called a correctly-floored package under-declared.** tauri-bundler appends bare duplicates of two entries it also copies with floors; every declared entry for a name is now weighed and the strongest lower bound decides.
-- **A declared alternation handed one package's floor to another.** An alternation is only as strong as its weakest branch, since apt may satisfy it through any of them.
-- **The expected-dependency snapshots were a pre-0.7 baseline**, so the drift gate fired on every image of the first 0.7 release. Re-captured from `v0.101.0-dev.1`.
-- **The macOS check harness worked in the release's own state and results files**, so scenarios shared a mountpoint and fixture rows reached the release's table. Every invocation now gets its own.
-- **The Linux smoke starts on a runner with no cached image.** `docker run`'s pull narration no longer arrives as the container id.
+- **Several smoke checks could pass without testing anything:** a webview gate a cold install could never satisfy, a dependency check that misread a correctly-declared package, macOS scenarios sharing state with the release around them, and a handful of platform-specific parse and path faults. Each now fails when the thing it checks is broken.

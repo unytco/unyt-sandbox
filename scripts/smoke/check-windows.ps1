@@ -11,28 +11,23 @@
   A CI step is its own process, so -Only persists state under UNYT_SMOKE_STATE
   and a check whose prerequisite state is absent FAILS rather than skipping.
 
-  Phase 2 of the release smoke; the phases are release-smoke.yaml's header.
   Windows Sandbox is unavailable on GitHub-hosted runners, so no phase gets a
   pristine machine; both run on a build image.
 
   NO UI AUTOMATION, though `tauri-driver` would support Windows through
   msedgedriver: a driver asserts what the DOM contains, which is the app's own
-  test suite's job, while this suite asks what the SHIPPED INSTALLER does to a
-  machine.
-
-  The check carrying the most weight is the import table: every DLL the binaries
-  load, minus what the installer ships, minus what Windows guarantees.
+  test suite's job.
 
   DO NOT try to capture the app's stdout — release builds set
   windows_subsystem = "windows", so there is no console. Read the log under
   %LOCALAPPDATA%\co.unyt.unyt.sandbox\logs.
 
-  STILL NOT COVERED, by either phase, because a runner is a build image and not a
-  user's PC: SmartScreen's "unknown publisher" block (our installers are
-  unsigned, and CI never meets it — it installs silently), a machine WITHOUT the
-  WebView2 runtime (Tauri loads it through COM, so no import check sees it, and
-  every runner already has it), and a redistributable the build machine had.
-  Those three are the hand check — docs/windows-clean-machine-check.md.
+  STILL NOT COVERED, because a runner is a build image and not a user's PC:
+  SmartScreen's "unknown publisher" block (our installers are unsigned, and CI
+  installs silently), a machine WITHOUT the WebView2 runtime (Tauri loads it
+  through COM, so no import check sees it), and a redistributable the build
+  machine had. Those three are the hand check —
+  docs/windows-clean-machine-check.md.
 
 .PARAMETER Artifact
   Path to the NSIS installer (a plain .exe, not -setup.exe) or the .msi.
@@ -61,20 +56,19 @@ param(
 
 Set-StrictMode -Version Latest
 
-# Narration to stderr, table to stdout. UNYT_SMOKE_LOG collects it: one step per
-# check means an uploaded log would otherwise carry only the last step's.
+# Narration to stderr, table to stdout. UNYT_SMOKE_LOG collects it, because one
+# step per check means an uploaded log would carry only the last step's.
 function Write-Note {
   param([string]$Message)
   [Console]::Error.WriteLine($Message)
   if ($env:UNYT_SMOKE_LOG) { Add-Content -LiteralPath $env:UNYT_SMOKE_LOG -Value $Message }
 }
 
-# ── what Windows itself guarantees ────────────────────────────────────────────
 # THIS LIST IS THE CONTRACT: anything not here and not shipped beside the app is
-# a dependency the user may not have. A lazy addition converts a finding into a
-# pass. Deliberately absent: the VC++ redistributable (VCRUNTIME140/MSVCP140/
-# CONCRT140) — Windows does not ship it — and WebView2Loader.dll, which Tauri
-# links statically. ucrtbase and api-ms-win-crt-* ARE in-box and allowed.
+# a dependency the user may not have, so a lazy addition converts a finding into
+# a pass. Deliberately absent: the VC++ redistributable (VCRUNTIME140/MSVCP140/
+# CONCRT140), which Windows does not ship, and WebView2Loader.dll, which Tauri
+# links statically. ucrtbase and api-ms-win-crt-* ARE in-box.
 $script:WindowsGuaranteedDlls = @(
   'ntdll.dll', 'kernel32.dll', 'kernelbase.dll', 'kernel.appcore.dll',
   'user32.dll', 'gdi32.dll', 'gdi32full.dll', 'advapi32.dll', 'sechost.dll',
@@ -95,22 +89,20 @@ $script:WindowsGuaranteedDlls = @(
   'credui.dll', 'dsound.dll', 'msctf.dll', 'twinapi.appcore.dll'
 )
 
-# ── pure decision logic (driven by test-windows-checks.ps1) ───────────────────
 
 # Returns $null when the name carries no version — "cannot answer", not a pass.
 function Get-ArtifactVersion {
   param([Parameter(Mandatory)][string]$FileName)
-  # The pre-release tail is PART of the version. Stopping at the `-` reads no version
-  # at all out of unyt_0.101.0-dev.0_…, which every check that compares one then fails.
+  # The pre-release tail is PART of the version: stopping at the `-` reads none at
+  # all out of unyt_0.101.0-dev.0_….
   $m = [regex]::Match([System.IO.Path]::GetFileName($FileName), '^unyt_([0-9][0-9.]*(?:-[0-9A-Za-z.]+)?)_')
   if ($m.Success) { return $m.Groups[1].Value }
   return $null
 }
 
-# What an MSI registers for a pre-release build. tauri's msi bundler cannot carry
-# `0.101.0-dev.0`, so scripts/msi-version.sh gives it `0.101.0.0` and Windows writes
-# THAT as the entry's DisplayVersion — while the asset keeps the tag's own name. Both
-# spellings of one build; the mapping is duplicated from that script and pinned here.
+# tauri's msi bundler cannot carry `0.101.0-dev.0`, so scripts/msi-version.sh
+# gives it `0.101.0.0` and Windows writes THAT as the entry's DisplayVersion,
+# while the asset keeps the tag's own name. Two spellings of one build.
 function ConvertTo-MsiProductVersion {
   param([Parameter(Mandatory)][string]$Version)
   $m = [regex]::Match($Version, '^([0-9]+\.[0-9]+\.[0-9]+)-dev\.([0-9]+)$')
@@ -153,7 +145,7 @@ function Get-ImportedDll {
   }
 
   # EVERY FAILURE PATH THROWS: an empty import list is indistinguishable from a
-  # binary that imports nothing, and no real native PE imports nothing.
+  # binary that imports nothing, and no real native PE does.
   $sections = @()
   $secOffset = $optOffset + $sizeOfOptional
   for ($i = 0; $i -lt $numberOfSections; $i++) {
@@ -169,9 +161,8 @@ function Get-ImportedDll {
     }
   }
 
-  # An RVA lands in whichever section covers it; the on-disk offset is its
-  # distance into that section's raw data. A section's virtual size can exceed
-  # its raw size (bss-like padding), so the span is the larger of the two.
+  # An RVA lands in whichever section covers it, and a section's virtual size can
+  # exceed its raw size (bss-like padding), so the span is the larger of the two.
   function Convert-RvaToOffset {
     param([uint32]$Rva)
     foreach ($sec in $sections) {
@@ -190,9 +181,8 @@ function Get-ImportedDll {
     $end = $Offset
     while ($end -lt $bytes.Length -and $bytes[$end] -ne 0) { $end++ }
     $s = [System.Text.Encoding]::ASCII.GetString($bytes, $Offset, $end - $Offset)
-    # An empty name is not a name. Dropping it silently would lose exactly one
-    # DLL from the sweep, and losing the single unsatisfied one turns the finding
-    # into a pass.
+    # Dropping an empty name silently loses exactly one DLL from the sweep, and
+    # losing the single unsatisfied one turns the finding into a pass.
     if (-not $s) { throw "an empty DLL name at offset ${Offset}: $Path" }
     return $s
   }
@@ -227,8 +217,8 @@ function Get-ImportedDll {
       if ($attrs -band 1) { $nameRva = $nameField }
       elseif ($nameField -gt $imageBase) { $nameRva = [uint32]($nameField - $imageBase) }
       else {
-        # Refuse to guess rather than compute a nonsense RVA and report whatever
-        # string lives there. A throw, not a break — a break drops the rest.
+        # Refuse to guess rather than compute a nonsense RVA. A throw, not a
+        # break — a break drops the rest.
         throw "a delay-load descriptor's name field ($nameField) is below the image base ($imageBase): $Path"
       }
       $names.Add((Read-AsciiAt -Offset (Convert-RvaToOffset -Rva $nameRva)))
@@ -236,9 +226,9 @@ function Get-ImportedDll {
     }
   }
 
-  # Returned plainly; EVERY CALLER WRAPS IN @(). `return , @(...)` nests one
-  # level deep, which coerced to [string[]] collapses to one space-joined name —
-  # that shipped, and made the check report a finding whatever the binary imported.
+  # Returned plainly; EVERY CALLER WRAPS IN @(). `return , @(...)` nests one level
+  # deep, which coerced to [string[]] collapses to one space-joined name — that
+  # shipped, and made the check report a finding whatever the binary imported.
   return @($names | Sort-Object -Unique)
 }
 
@@ -267,13 +257,12 @@ function Get-UnsatisfiedImport {
     if ($key -like 'api-ms-win-*' -or $key -like 'ext-ms-win-*') { continue }
     $unsatisfied.Add($imp)
   }
-  # Returned plainly; callers wrap. See Get-ImportedDll for why the unary comma
-  # is wrong here.
+  # Returned plainly; callers wrap. A unary comma would nest the array.
   return @($unsatisfied | Sort-Object -Unique)
 }
 
 # The zero guard sits on the IMPORTS, not the binaries: counting files answers
-# "was there anything to scan", never "did we read anything out of them".
+# "was there anything to scan", never "did we read anything".
 function Get-ImportSweepVerdict {
   param(
     [string[]]$Binaries = @(),
@@ -301,33 +290,27 @@ function Get-ImportSweepVerdict {
   }
 }
 
-# Is an unsatisfied import the Visual C++ redistributable? Worth naming on its
-# own because it has a specific, known fix, and because it is the one this build
-# is expected to hit.
+# Worth naming on its own: it has a specific, known fix, and it is the one this
+# build is expected to hit.
 function Test-IsVcRuntime {
   param([Parameter(Mandatory)][AllowEmptyString()][string]$Dll)
   return ($Dll -match '^(vcruntime|msvcp|concrt|vcomp)\d*.*\.dll$')
 }
 
-# ── the signing declaration ───────────────────────────────────────────────────
 # DELIBERATELY AMBER: we ship unsigned, and a permanently red check is one people
-# scroll past. This is a declared-state tripwire — set it $true the day a
-# certificate is wired in, and it goes red if reality and the declaration ever
-# diverge in either direction. Not a skip: a skip could not see signed-but-broken.
+# scroll past. A declared-state tripwire — set it $true the day a certificate is
+# wired in, and it goes red if reality and the declaration ever diverge. Not a
+# skip: a skip could not see signed-but-broken.
 $script:ExpectWindowsSigned = $false
 
-# Separate from the tools that produce the status so both paths land on one rule,
-# and the rule is testable off Windows. Signed+trusted -> pass; unsigned when
-# expected -> warn; unsigned when not -> FAIL; signed but invalid -> always FAIL.
 function Test-SignatureVerdict {
   param(
     [Parameter(Mandatory)][AllowEmptyString()][string]$Status,
     [AllowEmptyString()][string]$SignerSubject = '',
     [bool]$ExpectSigned = $false
   )
-  # `Valid` is the only status meaning a user's machine will trust it. Anything
-  # that is neither Valid nor NotSigned — HashMismatch, NotTrusted, UnknownError
-  # — is a broken signature, which no declaration excuses.
+  # `Valid` is the only status meaning a user's machine will trust it, so anything
+  # that is neither Valid nor NotSigned is a broken signature.
   if ($Status -eq 'Valid') {
     return [PSCustomObject]@{
       Result = 'pass'; Status = $Status; Signer = $SignerSubject
@@ -361,27 +344,25 @@ function Get-NewUninstallEntry {
   )
   $seen = @{}
   foreach ($b in $Before) { if ($b) { $seen[$b.KeyPath] = $true } }
-  # Returned plainly; callers wrap. See Get-ImportedDll.
+  # Returned plainly; callers wrap.
   return @($After | Where-Object { $_ -and -not $seen.ContainsKey($_.KeyPath) })
 }
 
-# Is the entry an install of the version the artifact claims? Separated from the
-# registry read so the verdict — not just the lookup — is exercised by the
-# regression test, the same reason common.sh owns the Linux matchers.
+# Separated from the registry read so the verdict — not just the lookup — is
+# exercised by the regression test.
 function Test-UninstallEntry {
   param(
     [object]$Entry,
     [AllowNull()][string]$ExpectedVersion,
-    # Mandatory: defaulting to one installer would judge the other against a version
-    # it never registers, and pass or fail it for the wrong reason.
+    # Mandatory: a default would judge the other installer against a version it
+    # never registers.
     [Parameter(Mandatory)][ValidateSet('nsis', 'msi')][string]$Kind
   )
   if (-not $Entry) {
     return [PSCustomObject]@{ Ok = $false; Message = 'the install added no uninstall entry — the app cannot be removed from Settings' }
   }
   if (-not $ExpectedVersion) {
-    # The artifact's name carried no version, so the check cannot answer its
-    # question. Unknown is not a pass.
+    # Unknown is not a pass: the check could not answer its question.
     return [PSCustomObject]@{ Ok = $false; Message = 'the artifact name carries no version, so nothing can be compared against it' }
   }
   $want = if ($Kind -eq 'msi') { ConvertTo-MsiProductVersion -Version $ExpectedVersion } else { $ExpectedVersion }
@@ -398,9 +379,8 @@ function Test-InstallDirectory {
   if (-not $Path) {
     return [PSCustomObject]@{ Ok = $false; Message = 'the uninstall entry records no InstallLocation'; Executables = @(); Path = $null }
   }
-  # The registry value is not a clean path and the installers disagree: NSIS
-  # writes it QUOTED, the MSI bare with a trailing separator. Verbatim, the
-  # quoted form fails every Test-Path and reported a good install as missing.
+  # NSIS writes it QUOTED, the MSI bare with a trailing separator; verbatim, the
+  # quoted form fails every Test-Path.
   $Path = $Path.Trim().Trim('"').TrimEnd('\', '/')
   if (-not $Path) {
     return [PSCustomObject]@{ Ok = $false; Message = 'the uninstall entry records an empty InstallLocation'; Executables = @(); Path = $null }
@@ -423,9 +403,8 @@ function Test-RemovalComplete {
     [object[]]$CurrentEntries = @(),
     [AllowNull()][string]$InstallDir
   )
-  # Neither half may be SKIPPED for want of an input: InstallDir is a file an
-  # earlier step writes, so it is absent whenever that step went red, and an
-  # absent input is a question this check could not answer rather than a pass.
+  # Neither half may be SKIPPED for want of an input: InstallDir is absent
+  # whenever the step that writes it went red, and that is not a pass.
   $problems = [System.Collections.Generic.List[string]]::new()
   if (-not $EntryKeyPath) {
     $problems.Add('no uninstall entry key was recorded, so whether the registration went away cannot be answered')
@@ -447,9 +426,8 @@ function Test-RemovalComplete {
   return [PSCustomObject]@{ Ok = ($problems.Count -eq 0); Problems = @($problems) }
 }
 
-# The command that removes it again. NSIS wants an uninstaller run with /S;
-# an MSI is removed by product code. QuietUninstallString, when the installer
-# provides one, is authoritative over anything constructed here.
+# NSIS wants an uninstaller run with /S; an MSI is removed by product code.
+# QuietUninstallString, when provided, is authoritative over anything built here.
 function Get-UninstallCommand {
   param([Parameter(Mandatory)][object]$Entry)
   $quiet = $null
@@ -470,15 +448,13 @@ function Get-UninstallCommand {
   return "$raw /S"
 }
 
-# ── state that outlives the process ───────────────────────────────────────────
 # A check IS a step and a step is its own process, so state reaches later checks
-# over disk. When set, the disk is the ONLY source even within one process — so a
+# over disk — and the disk is the ONLY source even within one process, so a
 # serialisation defect cannot hide behind a live object still in scope.
 $script:SmokeState = @{}
 
-# Everything one cycle hands forward, named once so a fifth value cannot be
-# added without Clear-SmokeState learning about it — a value the reset does not
-# know is a value that survives into the next artifact's cycle.
+# Named once so a fifth value cannot be added without Clear-SmokeState learning
+# about it: a value the reset does not know survives into the next cycle.
 $script:SmokeStateNames = @('Before', 'Installed', 'Entry', 'InstallDir')
 
 function Get-SmokeStatePath {
@@ -500,10 +476,9 @@ function Save-SmokeState {
   if (-not (Test-Path -LiteralPath $env:UNYT_SMOKE_STATE)) {
     New-Item -ItemType Directory -Path $env:UNYT_SMOKE_STATE -Force | Out-Null
   }
-  # Wrapped in an object so every state file has ONE shape and one `.Value`
-  # reads it — stored bare, a list comes back through ConvertFrom-Json's pipeline
-  # enumeration. Defence against a future bare caller, not a live bug: today's
-  # `@(Get-SmokeState ...)` callers make the wrapper unobservable.
+  # Wrapped in an object so every state file has ONE shape: stored bare, a list
+  # comes back through ConvertFrom-Json's pipeline enumeration. Defence against a
+  # future bare caller, not a live bug.
   # -Depth is generous because the default of 2 silently stringifies deeper data.
   ConvertTo-Json -InputObject @{ Value = $Value } -Depth 20 |
     Set-Content -LiteralPath $path -Encoding utf8
@@ -511,7 +486,7 @@ function Save-SmokeState {
 
 # $null when nothing was stored, which is what turns a missing prerequisite into
 # a FAIL in the check that needed it instead of a silent skip.
-# Returned plainly; callers wrap. See Get-ImportedDll.
+# Returned plainly; callers wrap.
 function Get-SmokeState {
   param([Parameter(Mandatory)][string]$Name)
   $path = Get-SmokeStatePath -Name $Name
@@ -533,7 +508,6 @@ function Clear-SmokeState {
   }
 }
 
-# ── the result table ──────────────────────────────────────────────────────────
 # Above the LibraryOnly guard: the regression test has to drive Invoke-Check.
 $script:Results = [System.Collections.Generic.List[object]]::new()
 function Add-Result { param([string]$Name, [string]$Verdict) $script:Results.Add([PSCustomObject]@{ Name = $Name; Verdict = $Verdict }) }
@@ -551,12 +525,10 @@ function Invoke-Check {
   Write-Note "===== $Name ====="
   $ok = $false
   try {
-    # Must be a real boolean: `[bool](& $Body)` is true for ANY non-empty output,
-    # so one unsilenced cmdlet line would turn a failing check green.
+    # Must be a real boolean: `[bool](& $Body)` is true for ANY non-empty output.
     $emitted = @(& $Body)
     $last = if ($emitted.Count) { $emitted[-1] } else { $null }
-    # 'warn' is a THIRD verdict, not a pass: the row shows it and the job stays
-    # green, which is only ever right for a state we have declared we expect.
+    # 'warn' is a THIRD verdict: the row shows it and the job stays green.
     if ($last -is [string] -and $last -eq 'warn') { $ok = 'warn' }
     elseif ($last -is [bool]) { $ok = $last }
     else {
@@ -565,8 +537,8 @@ function Invoke-Check {
     }
   }
   catch {
-    # An exception is a FAILED check, never a skipped one. A check that threw
-    # and was not recorded is indistinguishable from one that passed.
+    # An exception is a FAILED check: one that threw and was not recorded is
+    # indistinguishable from one that passed.
     Write-Note "::error::$Name threw: $($_.Exception.Message)"
     $ok = $false
   }
@@ -587,18 +559,16 @@ function Write-CheckRow {
   if ($env:UNYT_SMOKE_RESULTS) { Add-Content -LiteralPath $env:UNYT_SMOKE_RESULTS -Value $row }
 }
 
-# A WARN HAS TO EXIT 0 here or the signing check turns the job red — the
-# declared-state design failing in the one direction it exists to prevent. Above
-# the LibraryOnly guard despite ending in `exit`, so the test can pin that.
+# A WARN HAS TO EXIT 0 here, or the signing check turns the job red. Above the
+# LibraryOnly guard despite ending in `exit`, so the test can pin that.
 function Write-RowAndExit {
   $row = $script:Results[-1]
   Write-CheckRow -Name $row.Name -Verdict $row.Verdict
   exit (Get-OverallStatus -Results @($script:Results))
 }
 
-# Run a command and REFUSE TO WAIT FOREVER. An installer that puts a dialog up —
-# which is precisely what a wrong silent switch does — would otherwise hang the
-# job until the runner's own timeout, six hours later, with no diagnosis.
+# REFUSE TO WAIT FOREVER: an installer that puts a dialog up, which is what a
+# wrong silent switch does, would otherwise hang the job for six hours.
 function Invoke-Silently {
   param(
     [Parameter(Mandatory)][string]$FilePath,
@@ -629,7 +599,6 @@ function Invoke-Silently {
   return [PSCustomObject]@{ ExitCode = $p.ExitCode; TimedOut = $false }
 }
 
-# ── the check registry ────────────────────────────────────────────────────────
 # The ONE place the sequence is written down — the run, -Only and -PrintChecks
 # all read it. Above the LibraryOnly guard, bodies included, so the test can
 # drive them off Windows: a scriptblock resolves its calls when it runs.
@@ -647,13 +616,13 @@ function Register-Check {
   $script:Checks[$Id] = [PSCustomObject]@{ Id = $Id; Name = $Name; Body = $Body }
 }
 
-# Returned plainly; callers wrap. See Get-ImportedDll.
+# Returned plainly; callers wrap.
 function Get-CheckId { return @($script:Checks.Keys) }
 
 function Get-Check {
   param([Parameter(Mandatory)][string]$Id)
-  # An unknown id is an error, never a no-op. Narrated as well as thrown:
-  # PowerShell's error view truncates, and the id list is what gets cut.
+  # Narrated as well as thrown: PowerShell's error view truncates, and the id
+  # list is what gets cut.
   if (-not $script:Checks.Contains($Id)) {
     Write-Note "::error::unknown check id '$Id' — the ids are: $((Get-CheckId) -join ', ')"
     throw "unknown check id '$Id'"
@@ -663,13 +632,13 @@ function Get-Check {
 
 # What -PrintChecks emits, as a function so the format has one definition and the
 # regression test can assert it without starting a process.
-# Returned plainly; callers wrap. See Get-ImportedDll.
+# Returned plainly; callers wrap.
 function Get-CheckListing {
   return @(foreach ($id in Get-CheckId) { "$id`t$((Get-Check -Id $id).Name)" })
 }
 
-# Which registered checks produced no row: a run that reported nothing otherwise
-# prints an empty table and "All checks passed". Returned plainly; callers wrap.
+# A run that reported nothing otherwise prints an empty table and "All checks
+# passed". Returned plainly; callers wrap.
 function Get-UnreportedCheck {
   param([object[]]$Results = @())
   $seen = @{}
@@ -688,8 +657,7 @@ function Invoke-AllChecks {
     $check = Get-Check -Id $id
     Invoke-Check -Name $check.Name -Body $check.Body
   }
-  # A row per missing check, not one summary line: the table is what gets read,
-  # and "did not run" has to be as red in it as "failed".
+  # A row per missing check: "did not run" has to be as red as "failed".
   $unreported = @(Get-UnreportedCheck -Results @($script:Results))
   if ($unreported.Count -gt 0) {
     Write-Note "::error::$($unreported.Count) registered check(s) never reported — they did not run:"
@@ -700,14 +668,12 @@ function Invoke-AllChecks {
   }
 }
 
-# ── 1. it installs without asking anything ────────────────────────────────────
 Register-Check -Id 'install' -Name 'installs silently' -Body {
   # A cycle starts here, so whatever a previous one left goes first — see
   # Clear-SmokeState for what that costs if it does not.
   Clear-SmokeState
-  # SNAPSHOTTED HERE, before the installer runs, and persisted: check 2 finds the
-  # new entry by diffing against it, and one check per step this process is gone
-  # long before check 2 starts.
+  # SNAPSHOTTED HERE, before the installer runs, and persisted: check 2 diffs
+  # against it, and this process is gone long before check 2 starts.
   Save-SmokeState -Name 'Before' -Value @(Get-UninstallEntry)
   $r = if ($kind -eq 'nsis') {
     # UPPERCASE /S — see Get-UninstallCommand. NSIS defaults to a per-user
@@ -726,11 +692,8 @@ Register-Check -Id 'install' -Name 'installs silently' -Body {
   return $true
 }
 
-# ── 2. it registered itself, as the version on the tin ────────────────────────
 # An installer that registers nothing leaves an app the user cannot remove.
 Register-Check -Id 'registers' -Name 'registers an uninstall entry for this version' -Body {
-  # A missing prerequisite is a FAILURE, and it names the check that should have
-  # left the state — otherwise it reads as an unexplained failure of this one.
   if (-not (Get-SmokeState -Name 'Installed')) {
     Write-Note "::error::nothing was installed, so there is nothing to find — the '$((Get-Check -Id 'install').Name)' check did not pass"
     return $false
@@ -756,7 +719,6 @@ Register-Check -Id 'registers' -Name 'registers an uninstall entry for this vers
   return $true
 }
 
-# ── 3. the program is actually on disk ────────────────────────────────────────
 Register-Check -Id 'executable' -Name 'installs the application executable' -Body {
   $entry = Get-SmokeState -Name 'Entry'
   if (-not $entry) {
@@ -771,7 +733,6 @@ Register-Check -Id 'executable' -Name 'installs the application executable' -Bod
   return $true
 }
 
-# ── 4. Authenticode ───────────────────────────────────────────────────────────
 # See $script:ExpectWindowsSigned: amber while we ship unsigned, red the day
 # reality and that declaration diverge.
 Register-Check -Id 'signed' -Name 'the installer is Authenticode-signed and trusted' -Body {
@@ -783,8 +744,8 @@ Register-Check -Id 'signed' -Name 'the installer is Authenticode-signed and trus
     -ExpectSigned $script:ExpectWindowsSigned
 
   # /pa is MANDATORY: without it signtool applies the DRIVER signing policy and
-  # rejects good application signatures. Absence is not a failure — the cmdlet
-  # already asked the OS trust store.
+  # rejects good application signatures. Its absence is not a failure — the
+  # cmdlet already asked the OS trust store.
   if ($verdict.Result -eq 'pass') {
     $signtool = Get-ChildItem -Path 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
       Sort-Object -Property FullName | Select-Object -Last 1
@@ -805,8 +766,7 @@ Register-Check -Id 'signed' -Name 'the installer is Authenticode-signed and trus
   }
 
   if ($verdict.Result -eq 'warn') {
-    # Amber, not red, and only because we said so. The job stays green; the row
-    # and the annotation both say what is being tolerated and what it costs.
+    # Amber, and only because we said so.
     Write-Note "::warning::$($verdict.Message)"
     Write-Note '  This is the DECLARED state (ExpectWindowsSigned = $false in this script), not a'
     Write-Note '  clean bill of health. Wire a Windows code-signing certificate into'
@@ -820,7 +780,6 @@ Register-Check -Id 'signed' -Name 'the installer is Authenticode-signed and trus
   return $false
 }
 
-# ── 5. what it needs from the machine ─────────────────────────────────────────
 # Every shipped binary's imports, minus what the installer put beside it, minus
 # what Windows ships.
 Register-Check -Id 'imports' -Name 'imports nothing the machine is not guaranteed to have' -Body {
@@ -833,14 +792,14 @@ Register-Check -Id 'imports' -Name 'imports nothing the machine is not guarantee
   $all = [System.Collections.Generic.List[string]]::new()
   $unsat = [System.Collections.Generic.List[string]]::new()
   foreach ($b in $binaries) {
-    # NOT wrapped in a try: an unparseable file is a failed sweep. Note a
-    # non-PE file named *.dll reds the lane — a fixture problem, not a finding.
+    # NOT wrapped in a try: an unparseable file is a failed sweep. A non-PE file
+    # named *.dll reds the lane — a fixture problem, not a finding.
     $imports = @(Get-ImportedDll -Path $b.FullName)
     Write-Note "  $($b.Name): $($imports.Count) imports"
     foreach ($i in $imports) { $all.Add($i) }
     # Per DIRECTORY: the loader looks beside the importing binary, so a DLL in
     # resources\ does not satisfy the top-level .exe's import. Deliberately
-    # STRICTER than the real loader — that direction is a false red, not green.
+    # STRICTER than the real loader — that direction is a false red.
     $beside = @(Get-ChildItem -LiteralPath $b.DirectoryName -Filter '*.dll' -ErrorAction SilentlyContinue |
       ForEach-Object { $_.Name })
     foreach ($m in @(Get-UnsatisfiedImport -Imports $imports -ShippedFiles $beside)) { $unsat.Add($m) }
@@ -863,17 +822,16 @@ Register-Check -Id 'imports' -Name 'imports nothing the machine is not guarantee
   return $false
 }
 
-# ── 6. and it goes away again ─────────────────────────────────────────────────
-# One install/uninstall cycle catches real installer bugs — an uninstaller that
-# does not remove the program, or one that cannot run unattended at all.
+# Catches an uninstaller that does not remove the program, or one that cannot run
+# unattended at all.
 Register-Check -Id 'uninstall' -Name 'uninstalls cleanly' -Body {
   $entry = Get-SmokeState -Name 'Entry'
   if (-not $entry) {
     Write-Note "::error::no uninstall entry, so nothing can be removed — the '$((Get-Check -Id 'registers').Name)' check did not pass"
     return $false
   }
-  # Before the uninstaller runs, not during the poll below: read late, the app is already
-  # gone by the time the check finds it cannot verify the removal.
+  # Before the uninstaller runs: read late, the app is already gone by the time
+  # the check finds it cannot verify the removal.
   $installDir = Get-SmokeState -Name 'InstallDir'
   if (-not $installDir) {
     Write-Note "::error::no install directory was recorded, so removal cannot be verified — the '$((Get-Check -Id 'executable').Name)' check did not pass"
@@ -889,7 +847,6 @@ Register-Check -Id 'uninstall' -Name 'uninstalls cleanly' -Body {
   if ($m.Success) { $exe = $m.Groups[1].Value; $rest = $m.Groups[2].Value }
   else { $parts = $cmd -split '\s+', 2; $exe = $parts[0]; $rest = if ($parts.Count -gt 1) { $parts[1] } else { '' } }
   # NOT $args — assigning to it inside a scriptblock shadows the invocation's own.
-  # Quote-aware, not a whitespace split, which would undo the grouping.
   # DOES NOT COVER NSIS's unquoted `_?=C:\Program Files\...`; if our registry
   # entry ever carries a bare `_?=`, fix it here.
   $argList = @([regex]::Matches($rest, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
@@ -916,11 +873,10 @@ Register-Check -Id 'uninstall' -Name 'uninstalls cleanly' -Body {
   return $true
 }
 
-# ABOVE the LibraryOnly guard with the bodies, not below with the run: three of them
-# call it, so left below it they threw "not recognized" under the test harness and the
-# harness never saw a single body past its own guard.
+# ABOVE the LibraryOnly guard with the bodies: three of them call it, so left
+# below it they threw "not recognized" under the test harness.
 # Per-user (NSIS) and both views of per-machine (MSI), so nothing depends on
-# knowing which the installer chose. Off Windows every root simply reads absent.
+# knowing which the installer chose. Off Windows every root reads absent.
 $script:UninstallRoots = @(
   'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
   'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
@@ -943,7 +899,7 @@ function Get-UninstallEntry {
         })
     }
   }
-  # Returned plainly; callers wrap. See Get-ImportedDll.
+  # Returned plainly; callers wrap.
   return $out.ToArray()
 }
 
@@ -957,10 +913,9 @@ if ($PrintChecks) {
 
 if ($LibraryOnly) { return }
 
-# ── from here down: the real run ──────────────────────────────────────────────
 
-# EXIT 2 IS "THE INVOCATION IS WRONG", not interchangeable with 1: a mistyped id
-# exiting 1 reads as a failing artifact. Resolved before anything artifact-driven.
+# EXIT 2 IS "THE INVOCATION IS WRONG": a mistyped id exiting 1 reads as a failing
+# artifact.
 $script:Requested = $null
 if ($Only) {
   # Get-Check narrates the id and the valid list before it throws.
@@ -1008,9 +963,8 @@ Write-Note "  Windows $([System.Environment]::OSVersion.Version) ($env:PROCESSOR
 Write-Note "  artifact: $([System.IO.Path]::GetFileName($Artifact)) ($kind)"
 
 if ($kind -eq 'unsupported') {
-  # The row carries the REQUESTED check's name. One check per step, a step that
-  # reported some other check's name would leave its own unaccounted for by the
-  # guard that matches the rows against -PrintChecks.
+  # The row carries the REQUESTED check's name: a step reporting some other
+  # check's name leaves its own unaccounted for by the did-it-run guard.
   $failed = if ($script:Requested) { $script:Requested } else { Get-Check -Id 'install' }
   Add-Result -Name $failed.Name -Verdict 'FAIL'
   Write-Note "::error::unsupported artifact '$Artifact' (expected .exe or .msi)"
@@ -1018,9 +972,6 @@ if ($kind -eq 'unsupported') {
   Write-SummaryAndExit
 }
 
-# ONE DEFINITION OF THE SEQUENCE, driven two ways: one check per CI step, or the
-# whole suite in this process. The bodies live in the registry above, so neither
-# path can quietly run a different set from the one -PrintChecks advertises.
 if ($script:Requested) {
   Invoke-Check -Name $script:Requested.Name -Body $script:Requested.Body
   Write-RowAndExit

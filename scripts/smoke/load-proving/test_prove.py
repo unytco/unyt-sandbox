@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """Can the lane verdicts still fail?
 
-  python3 -m unittest discover -s scripts/smoke/load-proving
-
 Drives the REAL watch, verdict, control and publish against a scripted platform:
 what the log says, whether the process is alive, and what each capture writes.
-The frames come from test_frames.py's builders, so nothing here is a second
-implementation of anything frames.py asserts.
 
-The platform capture paths (Xvfb + import, screencapture, PrintWindow) are not
+The platform capture paths (Xvfb + import, screencapture, PrintWindow) are NOT
 driven from here — test_prove_display.py drives the Linux one against a real X
-display, and the release run is what exercises the other two. What IS driven
+display, and the release run is what exercises the other two. What is driven
 here is every decision made about what they hand back.
 """
 
@@ -56,8 +52,7 @@ def setUpModule():
 class FakeLane(prove.Lane):
     """A lane whose platform half is a script: `frame` is the fixture each
     capture writes, None for an app that owns no window and "blind" for one with
-    a window it cannot photograph. Takes (artifact, shots) like a real lane, so
-    prove.main can build one."""
+    a window it cannot photograph."""
 
     script = {"log": "", "alive": True, "frame": "app", "control": "flat"}
 
@@ -154,8 +149,6 @@ class Verdicts(Quiet):
         self.assertIn("attempt(s) failed", why)
 
     def test_an_app_that_owns_no_window_at_all(self):
-        # A different finding from the one above, and about the artifact rather
-        # than the runner.
         word, why = self.conclude(log=AWAITING, frame=None)
         self.assertEqual("NOT PROVEN", word)
         self.assertIn("never owned a visible window", why)
@@ -167,15 +160,12 @@ class Verdicts(Quiet):
         stale = Path(self.dir) / "verdict"
         stale.mkdir(parents=True, exist_ok=True)
         shutil.copy(FIXTURES["app"], stale / "99-stale.png")
-        # The constructor prepares the directories, which is what clears it.
         word, _ = self.conclude(log=AWAITING, frame="blind")
         self.assertEqual("CANNOT PROVE", word)
 
     def test_a_backend_that_failed_after_reaching_its_state(self):
-        # A conductor that crashed BEHIND the prompt: the state was reached, the
-        # window painted, and the run is still not a pass. Both halves have to
-        # be true at once for this to be the case it names, so the failure
-        # arrives on a later poll than the state does.
+        # The failure arrives on a later poll than the state, so both halves are
+        # true at once — which is the case this names.
         polls = []
 
         def log():
@@ -195,8 +185,6 @@ class Verdicts(Quiet):
     def test_and_a_painted_window_does_not_rescue_it(self):
         # EVERY OTHER CONDITION FOR PROVEN IS SATISFIED HERE: the state was
         # reached, and the frame the failure poll takes is the app's own screen.
-        # A painted screen with a failed backend behind it is a different bug,
-        # not a pass, and this is the only shape that says so.
         polls = []
 
         def log():
@@ -276,10 +264,10 @@ class EvidenceThatIsNotAPhotograph(Quiet):
 
 
 class SeekPaint(Quiet):
-    """The bounded phase macOS runs after its watch: it can only ever upgrade a
+    """The bounded phase macOS runs after its watch. It may only ever upgrade a
     verdict the lane already earned, so a budget that never ran out or a loop
-    that stopped at the first frame whatever it held would both turn that
-    upgrade into a lie."""
+    that stopped at the first frame whatever it held would turn that upgrade
+    into a lie."""
 
     def lane(self, frames_before_paint, ceiling=8):
         lane = self.fake(frame="flat")
@@ -304,8 +292,6 @@ class SeekPaint(Quiet):
 
     def test_a_window_that_is_the_apps_screen_at_once(self):
         lane = self.lane(1)
-        # A pass has to NAME THE FRAME: macOS cites it in a PROVEN line, and
-        # what the watch already answered is a different claim.
         self.assertRegex(lane.seek_paint("pixel", 1) or "", r"^\d+-pixel-t\d+s$")
 
     def test_a_window_that_paints_on_the_third_attempt(self):
@@ -330,10 +316,6 @@ class SeekPaint(Quiet):
         self.assertEqual([], lane.attempts)
 
     def test_the_frame_ceiling_ends_it_as_surely_as_the_clock(self):
-        # Past the ceiling nothing is captured at all, so a loop that only
-        # watched the clock would poll out its remaining seconds taking no
-        # frames — and the caller would report those non-attempts as frames that
-        # were photographed and found wanting.
         # HOW LONG IT TOOK IS PART OF THE ASSERTION: the return is the same
         # whichever budget ended the loop, so only the clock tells them apart —
         # and a bound here is what turns a loop that stopped ending into a
@@ -477,8 +459,6 @@ class TheMacLanesPixelPhase(Quiet):
         self.assertIn(lane.painted_frame, why)
 
     def test_a_blank_window_is_window_only_however_many_frames_it_took(self):
-        # The bug this split exists to make impossible: the window list already
-        # says a window is there, and that must never stand in for a photograph.
         lane = self.lane("flat")
         lane.after_watch()
         word, why = lane.verdict()
@@ -535,9 +515,6 @@ class TheMacLanesPixelPhase(Quiet):
         self.assertIn("not the 800x800 the splash declares", why)
 
     def test_the_window_list_is_read_by_field(self):
-        # The largest layer-0 window big enough to be one a user sees, out of a
-        # dump that also carries the survey lines and a window too small to be
-        # the app's.
         lane = self.lane("app")
         dump = (
             "DUMP   pid=4242 layer=0\n"
@@ -566,7 +543,6 @@ class TheWindowsLanesDecisions(Quiet):
         return frames.report(sorted(lane.verdict_dir.glob("*.png")), io.StringIO())
 
     def test_every_frame_uniform_black_is_a_desktop_we_were_not_shown(self):
-        # Not "the app drew nothing": a window existed, so this is the runner.
         lane = self.lane()
         why = lane.unreadable_screen(self.frames_of(lane, (0, 0, 0), (0, 0, 0)))
         self.assertIn("uniform black", why)
@@ -589,9 +565,7 @@ class TheWindowsLanesDecisions(Quiet):
         self.assertIsNone(lane.unreadable_screen(results))
 
     def test_each_control_asks_the_helper_for_its_own_frame(self):
-        # The two controls exist because a sub-rect can clear a bar the whole
-        # desktop does not; routed by the same argument they would be one frame
-        # taken twice.
+        # Routed by the same argument they would be one frame taken twice.
         lane = self.lane()
         asked = []
         lane.helper = lambda **arguments: asked.append(arguments) or ["WROTE desktop x"]
@@ -666,7 +640,6 @@ class TheWindowsLanesDecisions(Quiet):
         lane.helper = helper
         self.assertTrue(lane.capture("01-t0s"))
         self.assertTrue(lane.saw_window)
-        # The PrintWindow frame decides; the CopyFromScreen one stays context.
         self.assertEqual(
             ["01-t0s-print.png"], [p.name for p in lane.verdict_dir.glob("*.png")]
         )
@@ -703,12 +676,9 @@ class WhatTheMacLaneLeavesBehind(Quiet):
                 lane.install()
         self.assertEqual("CANNOT PROVE", raised.exception.word)
         self.assertIn("ditto", raised.exception.why)
-        # And it is /Applications it would have copied into: bundle identity and
-        # signature evaluation both depend on the path it runs from.
         self.assertEqual(Path("/Applications/Unyt.app"), removed.call_args[0][0])
 
     def test_a_detach_that_failed_keeps_the_handle(self):
-        # A volume this lane has forgotten is one nothing will unmount again.
         lane = self.lane()
         lane.mount = lane.work / "mnt"
         with mock.patch.object(
@@ -728,10 +698,7 @@ class WhatTheMacLaneLeavesBehind(Quiet):
 
 
 class StoppingTheApp(unittest.TestCase):
-    """A lane ends what it started, and there are two implementations of that:
-    end_process everywhere, and the process group on POSIX. Each is driven
-    against a real process on the platform that uses it — the Windows lanes have
-    only the first, and nothing else here exercises a syscall."""
+    """Driven against a real process, which nothing else here does."""
 
     def sleeper(self, seconds=300):
         proc = subprocess.Popen(
@@ -768,10 +735,9 @@ class StoppingTheApp(unittest.TestCase):
     "process groups are POSIX; the Windows lane ends the app with end_process",
 )
 class EndingTheWholeTreeOnPosix(unittest.TestCase):
-    """The Linux lane launches into a session of its own so that the app's
-    conductor and keystore go with it. An AppImage's launcher exits into its
-    inner binary, and every poll of the watch reaps the launcher — so the group
-    has to come from whichever pid is still there."""
+    """An AppImage's launcher exits into its inner binary, and every poll of the
+    watch reaps the launcher — so the group has to come from whichever pid is
+    still there."""
 
     def test_a_child_that_outlived_its_launcher_is_still_ended(self):
         launcher = subprocess.Popen(
@@ -792,8 +758,7 @@ class EndingTheWholeTreeOnPosix(unittest.TestCase):
 
     @staticmethod
     def gone(pid):
-        """Dead, or a zombie nobody has reaped yet: either way it is not
-        running, and whose job it is to reap it is not this code's business."""
+        """Dead, or a zombie nobody has reaped yet: either way not running."""
         for _ in range(50):
             try:
                 os.kill(pid, 0)
@@ -891,9 +856,8 @@ class WhenPixelsMayDecide(unittest.TestCase):
 
     def test_the_line_the_swift_prints_is_the_line_this_reads(self):
         # NOTHING ELSE JOINS THEM, and a drift is silent in the worst way: the
-        # read comes back empty, pixel mode is off for good, and the lane
-        # reports WINDOW-ONLY — green, and indistinguishable from a runner that
-        # really has no grant.
+        # read comes back empty, pixel mode is off for good, and the lane reports
+        # WINDOW-ONLY — green, and indistinguishable from a runner with no grant.
         swift = (prove.HERE / "mac-window-info.swift").read_text(encoding="utf-8")
         printed = re.search(r'emit\("(GRANT[^\\"]*)', swift)
         self.assertTrue(printed, "mac-window-info.swift prints no GRANT line")
@@ -942,8 +906,7 @@ class TheStepsColour(unittest.TestCase):
 
     def publish(self, printed, code):
         path = Path(self.dir) / "verdict.txt"
-        # UTF-8, as prove.py writes it: the default is the runner's code page,
-        # and on Windows that is not the encoding publish_verdict reads.
+        # UTF-8, as prove.py writes it: the default is the runner's code page.
         path.write_text(printed, encoding="utf-8")
         return publish_verdict.publish(str(path), "lane", code)[1]
 
@@ -983,8 +946,6 @@ class TheStepsColour(unittest.TestCase):
         )
 
     def test_a_lane_that_answered_twice_is_red(self):
-        # Reading the first would pick whichever it printed before the one that
-        # mattered.
         printed = "VERDICT lane: PROVEN — all good\nVERDICT lane: NOT PROVEN — blank\n"
         self.assertEqual(1, self.publish(printed, "0"))
 
@@ -1008,8 +969,6 @@ class TheStepsColour(unittest.TestCase):
                 )
 
     def test_a_log_line_quoting_the_word_does_not_make_a_red_lane_green(self):
-        # The word is read as a field, never matched as text: the why carries app
-        # log lines into the tail of the line.
         printed = (
             "VERDICT lane: NOT PROVEN — the log never said: PROVEN was not reached\n"
         )
@@ -1022,8 +981,7 @@ class TheStepsColour(unittest.TestCase):
 
     def test_a_separator_no_encoding_survived_still_names_the_word(self):
         # A verdict written or read in the wrong code page arrives with the em
-        # dash mangled. The WORD is what decides a release, and it is read by
-        # name — this must not turn a green lane red or a red one green.
+        # dash mangled.
         for dash in ("\u2014", "\u2013", "?", "\ufffd", "â\u20ac\u201d"):
             with self.subTest(dash=dash):
                 self.assertEqual(
@@ -1156,8 +1114,6 @@ class EveryWayOutSaysSomething(unittest.TestCase):
             },
             prove.EXIT_CODES,
         )
-        # The two green words, and only those, are the ones publish_verdict lets
-        # through with exit 0.
         green = {word for word, code in prove.EXIT_CODES.items() if code == 0}
         self.assertEqual(set(publish_verdict.GREEN), green)
 
@@ -1196,9 +1152,8 @@ class TheLinuxWindowSearch(Quiet):
             self.assertEqual("222", self.lane().window())
 
     def test_the_root_children_answer_when_no_client_set_its_pid(self):
-        # _NET_WM_PID is the client's to set, and a window placed partly
-        # off-screen carries negative offsets a `+`-only match would skip —
-        # skipping the app's window reads as "the app showed nothing".
+        # The window here is placed partly off-screen, so it carries the negative
+        # offsets a `+`-only match would skip.
         tree = (
             "xwininfo: Window id: 0x1 (the root window) (has no name)\n"
             "\n  2 children:\n"
@@ -1209,9 +1164,6 @@ class TheLinuxWindowSearch(Quiet):
             self.assertEqual("0x400001", self.lane().window())
 
     def test_a_probe_that_could_not_open_the_display_is_said_out_loud(self):
-        # xdotool exits 1 for "no window" and for "no display" alike, so the
-        # code says nothing and only its stderr tells them apart. Reading the
-        # first as the second blames the artifact for our tooling.
         def failing(argv, **kwargs):
             broken = "Error: Can't open display: :99"
             if "xdotool search" in " ".join(str(word) for word in argv):
@@ -1235,8 +1187,8 @@ class TheLinuxWindowSearch(Quiet):
 
 
 class TheSandboxPath(unittest.TestCase):
-    """lair binds a unix-domain socket under the data root, and unix sockets cap
-    the path at ~108 characters."""
+    """Unix sockets cap the path at ~108 characters, and lair binds one under
+    the data root."""
 
     def test_a_short_tmp_path_is_taken_as_given(self):
         os.environ["UNYT_PROVE_SANDBOX"] = "/tmp/ut-prove-test"
@@ -1281,7 +1233,6 @@ class WhatWindowsIsToldToInstall(unittest.TestCase):
         )
 
     def test_nsis_runs_itself_with_an_uppercase_switch(self):
-        # /s runs the installer interactively and hangs the job on a dialog.
         self.assertEqual(
             [r"C:\a\x.exe", "/S"], prove.install_argv(r"C:\a\x.exe", "nsis")
         )
@@ -1293,7 +1244,6 @@ class WhatWindowsIsToldToInstall(unittest.TestCase):
         )
 
     def test_an_msi_install_logs_what_it_did(self):
-        # Without a log, 1619 is all a failed install ever says.
         self.assertEqual(
             [
                 "msiexec.exe",

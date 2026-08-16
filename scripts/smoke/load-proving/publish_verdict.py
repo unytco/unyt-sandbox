@@ -1,34 +1,24 @@
 #!/usr/bin/env python3
 """Turn one lane's verdict line into the step's colour and its summary.
 
-  publish_verdict.py <verdict-file> <lane> <lane-exit-code>
+A LANE THAT PRINTED NO VERDICT IS RED: this whole exercise exists because steps
+were going green without answering.
 
-One home for the mapping, so every phase-1 lane of release-smoke.yaml concludes
-the same way. A LANE THAT PRINTED NO VERDICT IS RED: this whole exercise exists
-because steps were going green without answering, and a silent lane is exactly
-that failure.
-
-A verdict line is `VERDICT <lane>: <WORD> — <why>`. Only the WORD decides, and
-it is read as a FIELD, never matched as text: the why carries app log lines and
-analyser output, so a substring match would let a log line reading "PROVEN" turn
-a red lane green.
-
-THE WORD IS READ BY NAME, NOT BY THE DASH THAT FOLLOWS IT. The separator is an
-em dash and the why can carry anything the app logged, so a runner that wrote or
-read one of them in the wrong code page would leave a green lane unparseable —
-and this file must not decide a release on an encoding.
+A verdict line is `VERDICT <lane>: <WORD> — <why>`, and only the WORD decides.
+It is read as a FIELD by name — never matched as a substring, since the why
+carries app log lines that could contain one of these words, and never located
+by the em dash, since a runner reading that in the wrong code page would leave a
+green lane unparseable.
 """
 
 import os
 import sys
 
-# The only two words a green step may carry, and they are separate on purpose:
-# in the Checks list a window-only lane and a photographed one would otherwise
-# look identical.
+# Two green words on purpose: in the Checks list a window-only lane and a
+# photographed one would otherwise look identical.
 GREEN = ("PROVEN", "WINDOW-ONLY")
 
-# Every word a lane may answer with, longest first so "NOT PROVEN" is read
-# before "PROVEN" would be. "NO ANSWER" is this file's own.
+# "NO ANSWER" is this file's own; every other word comes from a lane.
 WORDS = (
     "CANNOT PROVE",
     "WINDOW-ONLY",
@@ -59,7 +49,6 @@ def word_of(verdict):
 
 
 def publish(path, lane, code):
-    """(the verdict line, the step's exit code)."""
     lines = verdict_lines(path)
     if len(lines) > 1:
         # Reading the first would pick whichever it happened to print before the
@@ -85,7 +74,7 @@ def publish(path, lane, code):
     verdict, word = lines[0], word_of(lines[0])
     # A code that is not a plain number must never be read as 0: the Windows lane
     # hands this over $GITHUB_ENV, so one stray carriage return is all it would
-    # take. `isdigit` rejects ' 0', '1 ', '0x0' and '' along with 'abc'.
+    # take.
     if not str(code).isdigit():
         print(
             "::error title=%s reported no usable exit code::'%s' is not a number"
@@ -116,8 +105,6 @@ def publish(path, lane, code):
             file=sys.stderr,
         )
         return verdict, 1
-    # The lane's own reason, not a generic one: it is the most specific thing
-    # anyone triaging a red release will read.
     print(
         "::error title=%s: %s::%s" % (lane, word, verdict.split(" — ", 1)[-1]),
         file=sys.stderr,
@@ -126,7 +113,6 @@ def publish(path, lane, code):
 
 
 def main(argv):
-    # As prove.py: the verdict line is UTF-8 whatever the runner's code page.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")

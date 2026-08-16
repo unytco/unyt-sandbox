@@ -5,24 +5,18 @@
 //
 // WHY THIS EXISTS INSTEAD OF A SCREENSHOT. Since Catalina, reading screen pixels
 // needs the TCC "Screen Recording" grant, which a GitHub-hosted runner has never
-// had and cannot be given. Without it `screencapture` DOES NOT FAIL — it returns
-// the desktop with every application window silently omitted, and a wallpaper is
-// a rich gradient that any not-blank threshold scores as a painted app. So no
-// pixel-based verdict on a runner can be trusted.
+// had and cannot be given.
 //
 // The window LIST is only partly redacted: kCGWindowName is withheld without the
 // grant, while kCGWindowOwnerPID, kCGWindowOwnerName, kCGWindowLayer and
-// kCGWindowBounds remain readable. That is enough to prove the app launched and
-// put a real on-screen window up at a real size — which is less than "the
-// webview painted", and the lane says so rather than implying more.
+// kCGWindowBounds remain readable. That proves the app put a real on-screen
+// window up at a real size, which is less than "the webview painted".
 //
 // THAT REDACTION BOUNDARY IS THE LEAST CERTAIN THING HERE, so it is measured
 // rather than assumed: the survey below reports how many entries carry each key,
-// and a list where the pid or the bounds are gone across the board exits 5 so the
-// lane reports UNTRUSTED instead of quietly asserting nothing.
+// and a list where the pid or the bounds are gone across the board exits 5.
 //
-// Swift rather than pyobjc: swiftc is on the runner image with Xcode, and pyobjc
-// is not — this needs no install step.
+// Swift rather than pyobjc: swiftc is on the runner image with Xcode.
 //
 // Output on stdout, all of it machine-readable and all of it worth reading:
 //   DUMP   <one line per on-screen window>
@@ -95,8 +89,7 @@ for window in windows {
 
 emit("KEYS   total=\(windows.count) pid=\(withPid) bounds=\(withBounds) layer=\(withLayer) name=\(withName)")
 // Titles readable means the process HAS Screen Recording, which is the only
-// state in which a captured frame is evidence about the app rather than about
-// the desktop. Reported, never assumed either way.
+// state in which a captured frame is evidence about the app.
 emit("GRANT  screen-recording=\(withName > 0 ? "granted" : "not-granted")")
 for line in mine { emit(line) }
 

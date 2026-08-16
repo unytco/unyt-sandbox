@@ -20,22 +20,18 @@
 #
 # Detached container + `docker exec`, NOT GitHub's job-level `container:` — that
 # injects its own Node.js and tooling and the image stops being pristine.
-#
-# Needs only Docker. The whole-run path drives the same --start/--exec machinery.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── THE MATRIX ────────────────────────────────────────────────────────────────
-# BOTH ENDS of the supported range, because they fail differently and each hides
-# the other's bug: the OLD end catches a missing glibc floor (installs, dies at
-# exec), the NEW end catches bundled libs colliding with the host's newer ones
-# (tauri-apps/tauri#15665). Testing only the middle LTSs misses both — keep both
-# ends when adding.
+# BOTH ENDS of the supported range, because they fail differently: the OLD end
+# catches a missing glibc floor (installs, dies at exec), the NEW end catches
+# bundled libs colliding with the host's newer ones (tauri-apps/tauri#15665).
+# Keep both ends when adding.
 UNYT_SMOKE_IMAGES=(ubuntu:22.04 ubuntu:24.04 debian:13 ubuntu:26.04)
 
 # release-smoke.yaml builds its matrix by ASKING for this list: a second copy in
-# YAML would drift, and the workflow would silently stop testing an image.
+# YAML would drift and stop testing an image.
 if [ "${1:-}" = "--print-images" ]; then
   printf '%s\n' "${UNYT_SMOKE_IMAGES[@]}"
   exit 0
@@ -57,11 +53,8 @@ abs_artifact() {
   printf '%s/%s\n' "$(cd "$(dirname "$a")" && pwd)" "$(basename "$a")"
 }
 
-# Everything the checks say about themselves comes from the driver, never from a
-# list repeated here — same rule as the image matrix above.
 print_checks() { bash "$here/$(driver_for "$1")" --print-checks; }
 
-# ── the state directory ───────────────────────────────────────────────────────
 # Shared by --start/--exec/--summary/--stop. Rows live on the HOST, so a
 # container that dies still leaves what it had already reported.
 STATE_ROOT="${UNYT_SMOKE_STATE:-}"
@@ -87,7 +80,6 @@ record_row() { # <artifact> <image> <name> <verdict>
   printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >>"$STATE_ROOT/results"
 }
 
-# ── start ─────────────────────────────────────────────────────────────────────
 cmd_start() { # <artifact> <image>
   local artifact image driver lane out err rc
   artifact="$(abs_artifact "${1:?usage: --start <artifact> <image>}")" || return 1
@@ -124,12 +116,10 @@ cmd_start() { # <artifact> <image>
   # --shm-size: WebKit needs more than Docker's 64MB default or the webview
   # process dies on start for reasons that look nothing like the real cause.
   #
-  # STDOUT ONLY. `2>&1` here folded docker's own narration into the container id:
-  # on a runner with no cached image, `Unable to find image 'ubuntu:24.04'
-  # locally` and the pull progress go to stderr, so $out became a multi-line blob
-  # and every later `docker exec "$out"` failed — which the reaping probe below
-  # then reported as "PID 1 is not reaping orphans". The stderr is kept in the
-  # lane so a genuine docker failure is still diagnosable.
+  # STDOUT ONLY. `2>&1` folded docker's own narration into the container id: on a
+  # runner with no cached image the pull progress goes to stderr, so $out became a
+  # multi-line blob and every later `docker exec "$out"` failed. The stderr is
+  # kept in the lane so a genuine docker failure is still diagnosable.
   err="$lane/docker-run.err"
   out="$(docker run -d --shm-size=1g \
     -v "$artifact:/artifact/$(basename "$artifact"):ro" \
@@ -163,7 +153,6 @@ cmd_start() { # <artifact> <image>
   return 0
 }
 
-# ── exec one check ────────────────────────────────────────────────────────────
 container_state() { docker inspect -f "{{.State.$1}}" "$2" 2>/dev/null || true; }
 
 cmd_exec() { # <check-id>
@@ -179,9 +168,7 @@ cmd_exec() { # <check-id>
   name="$(bash "$here/$driver" --print-checks | awk -F'\t' -v i="$id" '$1 == i { print $2 }')"
   [ -n "$name" ] || { echo "::error::no such check in $driver: $id" >&2; return 2; }
 
-  # A container that is already known to be gone. Reported once, as itself,
-  # rather than re-diagnosed per step — the point is that the reader is looking
-  # at one failure, not five.
+  # Reported once, as itself, rather than re-diagnosed per step.
   if [ -s "$lane/down" ]; then
     echo "::error::'$name' DID NOT RUN — $(cat "$lane/down")" >&2
     record_row "$(basename "$artifact")" "$image" "$name" "DID NOT RUN"
@@ -228,7 +215,6 @@ cmd_exec() { # <check-id>
   [ "$verdict" = pass ]
 }
 
-# ── stop ──────────────────────────────────────────────────────────────────────
 cmd_stop() {
   local lane cid
   need_state || return $?
@@ -240,10 +226,8 @@ cmd_stop() {
   return 0
 }
 
-# ── summary, and the did-it-run guard ─────────────────────────────────────────
-# EVERY DECLARED CHECK MUST HAVE REPORTED, per started lane. One step per check
-# makes a silently-missing check real, and each such case produces a SHORTER
-# table rather than a red one.
+# EVERY DECLARED CHECK MUST HAVE REPORTED, per started lane: a check that stops
+# happening produces a SHORTER table rather than a red one.
 cmd_summary() {
   local artifact image driver rows overall=0
   need_state || return $?
@@ -252,9 +236,7 @@ cmd_summary() {
     return 1
   }
   rows="$STATE_ROOT/lane-rows"
-  # One table per lane, each guarded against the driver's OWN check list —
-  # summarise-checks.sh is the single home for that comparison, so a lane that
-  # went quiet reads the same here as it does on macOS and Windows.
+  # One table per lane, each guarded against the driver's OWN check list.
   while IFS='|' read -r artifact image driver; do
     printf '\n##### %s on %s #####\n' "$artifact" "$image"
     awk -F'|' -v a="$artifact" -v i="$image" '$1 == a && $2 == i { print $3 "|" $4 }' \
@@ -267,7 +249,6 @@ cmd_summary() {
   return "$overall"
 }
 
-# ── the whole run, locally ────────────────────────────────────────────────────
 cmd_run() { # <artifact> [image ...]
   local artifact images image id rc=0
   artifact="$(abs_artifact "$1")" || return 1
@@ -281,7 +262,6 @@ cmd_run() { # <artifact> [image ...]
     STATE_OWNED=1
   fi
   mkdir -p "$STATE_ROOT"
-  # Never leave a container behind on someone's laptop, whatever goes wrong.
   trap 'cmd_stop >/dev/null 2>&1; [ -z "$STATE_OWNED" ] || rm -rf "$STATE_ROOT"' EXIT INT TERM
 
   for image in "${images[@]}"; do
@@ -299,9 +279,6 @@ cmd_run() { # <artifact> [image ...]
   return "$rc"
 }
 
-# ── regeneration path for expected-deb-depends.txt ────────────────────────────
-# Install into a throwaway container and print what dpkg-shlibdeps computes,
-# nothing else.
 cmd_print_computed_depends() { # <artifact.deb> [image]
   local artifact base image
   artifact="$(abs_artifact "${1:?usage: --print-computed-depends <artifact.deb> [image]}")" || return 1

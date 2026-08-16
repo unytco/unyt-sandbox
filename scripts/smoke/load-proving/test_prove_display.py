@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
 """Does the Linux lane photograph the app's own window, on a real display?
 
-  python3 -m unittest discover -s scripts/smoke/load-proving
-
 The rest of the suite scripts the platform away; this is the only thing that
-drives the real Xvfb start, the real window search and the real `import`. It
-skips where those are absent and FAILS where CI says they should be there —
-ci.yaml installs them, and a job that skipped this silently would claim a
-capture path it never touched.
-
-The app is stood in for by `display` showing a frame we composed, which is
-enough to answer the two questions that matter about the capture path: is it
-aimed at the app's window rather than at the screen, and can it still come out
-NOT PROVEN when the window is blank."""
+drives the real Xvfb start, the real window search and the real `import`. The
+app is stood in for by `display` showing a frame we composed."""
 
 import os
 import shutil
@@ -56,7 +47,8 @@ class ARealDisplay(unittest.TestCase):
         missing = absent_tools()
         # Loud on the runner that installs them, quiet on the ones that cannot:
         # the macOS and Windows lanes run this same discovery and have no Xvfb,
-        # and CI is set on all three.
+        # and CI is set on all three. A silent skip here would claim a capture
+        # path nothing touched.
         if missing and os.environ.get("CI") and sys.platform == "linux":
             self.fail("this runner is missing " + ", ".join(missing))
         if missing:
@@ -103,9 +95,7 @@ class ARealDisplay(unittest.TestCase):
         self.assertEqual("PROVEN", word, why)
 
     def test_and_the_frame_it_judged_is_the_window_not_the_screen(self):
-        # The display is 1400x1050 and the window is 800x800. A full-screen grab
-        # would be the whole desktop with the app somewhere on it — which is what
-        # a variance-only check would happily score as painted.
+        # The display is 1400x1050; the window is 800x800.
         lane = self.lane_showing(build.with_modal(WINDOW, frames.boot_backgrounds()[0]))
         lane.run()
         judged = sorted(lane.verdict_dir.glob("*.png"))
@@ -117,15 +107,11 @@ class ARealDisplay(unittest.TestCase):
                 )
 
     def test_a_blank_window_on_a_real_display_is_not_proven(self):
-        # The end-to-end version of the bar: everything real except what the
-        # window contains.
         lane = self.lane_showing(build.flat(WINDOW, (255, 255, 255)))
         word, why = lane.run()
         self.assertEqual("NOT PROVEN", word, why)
 
     def test_the_pre_launch_control_of_a_bare_display_is_usable(self):
-        # A bare Xvfb root is what the control photographs, and the lane is only
-        # allowed to run because that frame does not pass for the app.
         lane = self.lane_showing(build.flat(WINDOW, (0, 0, 0)))
         lane.prepare()
         lane.preflight()
