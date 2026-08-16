@@ -102,10 +102,13 @@ def first_match(pattern, text):
 
 def run(argv, **kwargs):
     # Captured, never inherited: stdout is the verdict channel, and one stray
-    # line on it is a lane that answered twice.
+    # line on it is a lane that answered twice. `errors="replace"` because a
+    # window title is arbitrary text and a byte the runner's code page cannot
+    # decode must not end the lane.
     kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("stderr", subprocess.PIPE)
     kwargs.setdefault("text", True)
+    kwargs.setdefault("errors", "replace")
     return subprocess.run(argv, check=False, **kwargs)
 
 
@@ -294,12 +297,30 @@ class Lane:
 
     # ── the negative control ──────────────────────────────────────────────────
     def check_controls(self):
+        """A control that passes for the app, or that cannot be read, ends a
+        gating lane on the spot. One that could not be CAPTURED ends it only
+        when no control could be: a platform takes several because they answer
+        different questions, and the ones that worked still answer theirs."""
+        uncapturable = 0
+        gating = 0
         for slug, advisory in self.controls:
             path = self.context_dir / (slug + ".png")
             status, word, why = self.one_control(slug, path)
             self.control_status[slug] = status
-            if word and not advisory:
+            if advisory:
+                continue
+            gating += 1
+            if status == "uncapturable":
+                uncapturable += 1
+                note("::warning::%s captured nothing at all" % slug)
+                continue
+            if word:
                 raise Answer(word, why)
+        if gating and uncapturable == gating:
+            raise Answer(
+                "CANNOT PROVE",
+                "nothing could be captured on this runner even before the app was started",
+            )
 
     def one_control(self, slug, path):
         """(status, word, why) — the word is what a non-advisory lane answers."""
@@ -1624,7 +1645,17 @@ class WindowsLane(Lane):
 LANES = {"linux": LinuxLane, "macos": MacosLane, "windows": WindowsLane}
 
 
+def utf8(stream):
+    """The verdict line carries an em dash and whatever the app logged, and a
+    Windows code page that cannot encode one would kill the lane at the last
+    line it prints."""
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv):
+    utf8(sys.stdout)
+    utf8(sys.stderr)
     if len(argv) != 3 or argv[0] not in LANES:
         note("::error::usage: prove.py <linux|macos|windows> <artifact> <shots-dir>")
         return 2

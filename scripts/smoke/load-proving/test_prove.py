@@ -318,6 +318,34 @@ class Controls(Quiet):
             lane.control_status,
         )
 
+    def test_one_control_that_could_not_be_captured_does_not_end_a_gating_lane(self):
+        # Two controls answer different questions — the whole desktop, and one
+        # window's worth of it — so the one that worked still answers its own.
+        lane = self.fake(control="flat")
+        lane.controls = (
+            ("00-control-desktop", False),
+            ("00-control-splash-rect", False),
+        )
+        capture = lane.control_capture
+        lane.control_capture = lambda slug, path: (
+            slug.endswith("desktop") and capture(slug, path)
+        )
+        lane.check_controls()
+        self.assertEqual(
+            {"00-control-desktop": "usable", "00-control-splash-rect": "uncapturable"},
+            lane.control_status,
+        )
+
+    def test_but_a_lane_that_could_capture_nothing_at_all_stops(self):
+        lane = self.fake(control=None)
+        lane.controls = (
+            ("00-control-desktop", False),
+            ("00-control-splash-rect", False),
+        )
+        with self.assertRaises(prove.Answer) as raised:
+            lane.check_controls()
+        self.assertEqual("CANNOT PROVE", raised.exception.word)
+
     def test_two_controls_leave_two_named_frames(self):
         # A shared filename would leave the second answering for both, with only
         # the sub-rect's finding surviving into the artifact.

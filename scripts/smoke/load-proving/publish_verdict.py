@@ -103,6 +103,10 @@ def publish(path, lane, code):
 
 
 def main(argv):
+    # As prove.py: the verdict line is UTF-8 whatever the runner's code page.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     if len(argv) != 3:
         print(
             "::error::usage: publish_verdict.py <verdict-file> <lane> <exit-code>",
