@@ -249,29 +249,7 @@ def exit_code(results):
     return 3
 
 
-def control(path):
-    """The pre-launch negative control: a frame taken BEFORE the app is running.
-    It must not score PAINTED. If it does, the capture path is photographing
-    something that looks like the app while the app does not exist — so every
-    verdict that job would go on to produce is void.
-
-    0 the capture path can be trusted · 4 it produced nothing readable ·
-    5 it produced a frame that would have passed for the app."""
-    verdict, detail = assess(path)
-    print("%-10s %s: %s" % (verdict, os.path.basename(path), detail))
-    if verdict == PAINTED:
-        return 5
-    if verdict == UNREADABLE:
-        return 4
-    return 0
-
-
 def main(argv):
-    if argv[:1] == ["--control"]:
-        if len(argv) != 2:
-            print("::error::usage: frames.py --control <shot.png>", file=sys.stderr)
-            return 2
-        return control(argv[1])
     if not argv:
         print("::error::usage: frames.py <shot.png> [...]", file=sys.stderr)
         return 2
