@@ -77,7 +77,8 @@ class ARealDisplay(unittest.TestCase):
         app = Path(self.dir) / "app.sh"
         app.write_text(
             "#!/bin/sh\necho '%s'\nexec %s -immutable %s\n"
-            % (log, " ".join(show), window)
+            % (log, " ".join(show), window),
+            encoding="utf-8",
         )
         app.chmod(0o755)
 

@@ -93,7 +93,11 @@ def shell_value(name, path=SMOKE_COMMON):
     has one home. Missing is fatal — a lane matching nothing would report every
     healthy app as one that never reached a state."""
     match = re.search(
-        r"^%s=(['\"]?)(.*)\1$" % re.escape(name), path.read_text(), re.MULTILINE
+        r"^%s=(['\"]?)(.*)\1$" % re.escape(name),
+        # Explicit, because Python would otherwise decode this in the runner's
+        # locale, and a Windows runner's is not UTF-8.
+        path.read_text(encoding="utf-8"),
+        re.MULTILINE,
     )
     if not match:
         raise Answer("CANNOT PROVE", "%s is not in %s" % (name, path))
@@ -112,9 +116,13 @@ def first_match(pattern, text):
 
 def run(argv, **kwargs):
     # Captured, never inherited: stdout is the verdict channel, and one stray
-    # line on it is a lane that answered twice. `errors="replace"` because a
-    # window title is arbitrary text and a byte the runner's code page cannot
-    # decode must not end the lane.
+    # line on it is a lane that answered twice.
+    #
+    # Decoded in the RUNNER'S locale, unlike the files this reads, which are
+    # ours and are read as UTF-8: a tool writes its own platform's encoding, and
+    # PowerShell's is the Windows console's. Every token any decision here rests
+    # on is ASCII, and `errors="replace"` keeps a window title in some other
+    # encoding from ending the lane.
     kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("stderr", subprocess.PIPE)
     kwargs.setdefault("text", True)
@@ -152,7 +160,11 @@ def indent(text):
 
 def tail(path, lines=40):
     try:
-        return "\n".join(Path(path).read_text(errors="replace").splitlines()[-lines:])
+        return "\n".join(
+            Path(path)
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()[-lines:]
+        )
     except OSError as exc:
         return "(nothing readable at %s: %s)" % (path, exc)
 
@@ -170,13 +182,18 @@ def read_all(files, directories, pattern):
         if not path.exists():
             continue
         try:
-            parts.append(path.read_text(errors="replace"))
+            # The app writes UTF-8 whatever the runner's code page is, and a log
+            # decoded in the wrong one carries mojibake into the verdict line.
+            parts.append(path.read_text(encoding="utf-8", errors="replace"))
         except OSError as exc:
             note("::warning::could not read %s — %s" % (path, exc))
     return "\n".join(parts)
 
 
 def end_process(proc):
+    """The process this lane started, and only that one. Every platform can do
+    this much; the Windows lane has nothing else, because Windows has no process
+    group to signal."""
     if proc and proc.poll() is None:
         proc.terminate()
         try:
@@ -186,10 +203,11 @@ def end_process(proc):
 
 
 def end_process_group(*pids):
-    """The whole tree: an AppImage runs an inner binary, and ending the launcher
-    alone would leave the app on the runner. The launcher is often reaped before
-    this runs — every poll of the watch reaps it — so the group is taken from
-    whichever pid still resolves to one."""
+    """The whole tree, on POSIX only — os.killpg and SIGKILL do not exist on
+    Windows. The Linux lane needs it because an AppImage runs an inner binary
+    and ending the launcher alone would leave the app on the runner. The
+    launcher is often reaped before this runs — every poll of the watch reaps
+    it — so the group is taken from whichever pid still resolves to one."""
     for pid in pids:
         if pid is None:
             continue
@@ -302,7 +320,8 @@ class Lane:
         return handle
 
     def stop(self):
-        """Leave no process, nothing mounted and no open handle behind."""
+        """Close what this lane opened. A platform overrides this to end what it
+        started as well, and says how far into the app's tree that reaches."""
         for handle in self.handles:
             handle.close()
 
@@ -865,6 +884,8 @@ class LinuxLane(Lane):
             note(indent(run(["xwininfo", "-root", "-tree"]).stdout))
 
     def stop(self):
+        # The whole session, so the app's conductor and keystore go with it: the
+        # app was launched into one of its own for exactly this.
         if self.app:
             end_process_group(self.app.pid, self.app_pid)
             end_process(self.app)
@@ -1313,6 +1334,10 @@ class MacosLane(Lane):
         self.mount = None
 
     def stop(self):
+        # THE APP, NOT ITS TREE. What it spawned — the conductor, the keystore —
+        # is left to the runner, which is thrown away at the end of the job.
+        # Named rather than implied: the Linux lane does end the tree, and the
+        # difference is a launch flag away if a leak ever costs anything.
         end_process(self.app)
         self.detach()
         super().stop()
@@ -1709,6 +1734,9 @@ class WindowsLane(Lane):
         note(indent("\n".join(self.logs().splitlines()[-40:])))
 
     def stop(self):
+        # The app, not its tree, as on macOS — and here there is no alternative:
+        # Windows has no process group to signal, and TerminateProcess reaches
+        # one pid.
         end_process(self.app)
         super().stop()
 

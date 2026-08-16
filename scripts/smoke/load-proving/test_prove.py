@@ -19,8 +19,8 @@ import io
 import re
 import os
 import shutil
-import signal
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -608,7 +608,7 @@ class TheWindowsLanesDecisions(Quiet):
         # seeing a frame it was handed: a control that silently never wrote, or
         # a CopyFromScreen frame — which CAN be the desktop — promoted to the
         # evidence PrintWindow was supposed to give.
-        helper = (prove.HERE / "window-capture.ps1").read_text()
+        helper = (prove.HERE / "window-capture.ps1").read_text(encoding="utf-8")
         self.assertEqual(
             {"desktop", "rect", "print", "copy"},
             set(re.findall(r"Report '(\w+)'", helper)),
@@ -727,10 +727,92 @@ class WhatTheMacLaneLeavesBehind(Quiet):
         self.assertIsNone(lane.mount)
 
 
-class EndingTheAppsProcessGroup(unittest.TestCase):
-    """An AppImage's launcher exits into its inner binary, and every poll of the
-    watch reaps the launcher — so the group has to come from whichever pid is
-    still there, or the app outlives the lane."""
+class StoppingTheApp(unittest.TestCase):
+    """A lane ends what it started, and there are two implementations of that:
+    end_process everywhere, and the process group on POSIX. Each is driven
+    against a real process on the platform that uses it — the Windows lanes have
+    only the first, and nothing else here exercises a syscall."""
+
+    def sleeper(self, seconds=300):
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(%d)" % seconds]
+        )
+        self.addCleanup(self.reap, proc)
+        return proc
+
+    @staticmethod
+    def reap(proc):
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(30)
+
+    def test_a_running_process_is_ended(self):
+        proc = self.sleeper()
+        prove.end_process(proc)
+        self.assertIsNotNone(proc.poll())
+
+    def test_one_that_already_exited_is_not_an_error(self):
+        # stop() runs in a finally, on every path out of a lane, including the
+        # ones where the app died by itself.
+        proc = self.sleeper(0)
+        proc.wait(30)
+        prove.end_process(proc)
+        self.assertIsNotNone(proc.poll())
+
+    def test_and_a_lane_that_launched_nothing_stops_cleanly(self):
+        prove.end_process(None)
+
+
+@unittest.skipUnless(
+    hasattr(os, "killpg"),
+    "process groups are POSIX; the Windows lane ends the app with end_process",
+)
+class EndingTheWholeTreeOnPosix(unittest.TestCase):
+    """The Linux lane launches into a session of its own so that the app's
+    conductor and keystore go with it. An AppImage's launcher exits into its
+    inner binary, and every poll of the watch reaps the launcher — so the group
+    has to come from whichever pid is still there."""
+
+    def test_a_child_that_outlived_its_launcher_is_still_ended(self):
+        launcher = subprocess.Popen(
+            [
+                "sh",
+                "-c",
+                "%s -c 'import time; time.sleep(300)' & echo $!" % sys.executable,
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        child = int(launcher.stdout.readline().strip())
+        launcher.stdout.close()
+        launcher.wait(30)  # reaped, exactly as the watch reaps it
+        prove.end_process_group(launcher.pid, child)
+        self.assertTrue(self.gone(child), "the app outlived the lane")
+
+    @staticmethod
+    def gone(pid):
+        """Dead, or a zombie nobody has reaped yet: either way it is not
+        running, and whose job it is to reap it is not this code's business."""
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+            if sys.platform == "linux":
+                try:
+                    with open("/proc/%d/stat" % pid, encoding="utf-8") as stat:
+                        if stat.read().rsplit(")", 1)[1].split()[0] == "Z":
+                            return True
+                except OSError:
+                    return True
+            time.sleep(0.1)
+        return False
+
+
+class WhichPidTheGroupComesFrom(unittest.TestCase):
+    """The choice itself, with the syscalls stubbed, so it is asserted on every
+    platform the suite runs on rather than only where killpg exists."""
 
     def signals_for(self, *pids, alive=()):
         sent = []
@@ -741,19 +823,23 @@ class EndingTheAppsProcessGroup(unittest.TestCase):
             return 77
 
         with (
-            mock.patch.object(prove.os, "getpgid", getpgid),
+            mock.patch.object(prove.os, "getpgid", getpgid, create=True),
             mock.patch.object(
-                prove.os, "killpg", lambda group, sig: sent.append((group, sig))
+                prove.os,
+                "killpg",
+                lambda group, sig: sent.append((group, sig)),
+                create=True,
             ),
+            mock.patch.object(prove.signal, "SIGKILL", 9, create=True),
             mock.patch.object(prove.time, "sleep", lambda seconds: None),
         ):
             prove.end_process_group(*pids)
         return sent
 
     def test_the_reaped_launcher_is_skipped_for_the_pid_still_running(self):
+        self.assertEqual(2, len(self.signals_for(1, 2, alive=(2,))))
         self.assertEqual(
-            [(77, signal.SIGTERM), (77, signal.SIGKILL)],
-            self.signals_for(1, 2, alive=(2,)),
+            [77, 77], [group for group, _ in self.signals_for(1, 2, alive=(2,))]
         )
 
     def test_the_launcher_answers_when_it_is_the_one_still_there(self):
@@ -808,7 +894,7 @@ class WhenPixelsMayDecide(unittest.TestCase):
         # read comes back empty, pixel mode is off for good, and the lane
         # reports WINDOW-ONLY — green, and indistinguishable from a runner that
         # really has no grant.
-        swift = (prove.HERE / "mac-window-info.swift").read_text()
+        swift = (prove.HERE / "mac-window-info.swift").read_text(encoding="utf-8")
         printed = re.search(r'emit\("(GRANT[^\\"]*)', swift)
         self.assertTrue(printed, "mac-window-info.swift prints no GRANT line")
         for word in ("granted", "not-granted"):
@@ -856,7 +942,9 @@ class TheStepsColour(unittest.TestCase):
 
     def publish(self, printed, code):
         path = Path(self.dir) / "verdict.txt"
-        path.write_text(printed)
+        # UTF-8, as prove.py writes it: the default is the runner's code page,
+        # and on Windows that is not the encoding publish_verdict reads.
+        path.write_text(printed, encoding="utf-8")
         return publish_verdict.publish(str(path), "lane", code)[1]
 
     def test_a_proven_lane_is_the_only_green_one(self):
@@ -932,15 +1020,39 @@ class TheStepsColour(unittest.TestCase):
         printed = "VERDICT lane: PROVEN — the log said: NOT PROVEN somewhere in it\n"
         self.assertEqual(0, self.publish(printed, "0"))
 
+    def test_a_separator_no_encoding_survived_still_names_the_word(self):
+        # A verdict written or read in the wrong code page arrives with the em
+        # dash mangled. The WORD is what decides a release, and it is read by
+        # name — this must not turn a green lane red or a red one green.
+        for dash in ("\u2014", "\u2013", "?", "\ufffd", "â\u20ac\u201d"):
+            with self.subTest(dash=dash):
+                self.assertEqual(
+                    0, self.publish("VERDICT lane: PROVEN %s all good\n" % dash, "0")
+                )
+                self.assertEqual(
+                    1, self.publish("VERDICT lane: NOT PROVEN %s blank\n" % dash, "1")
+                )
+                self.assertEqual(
+                    1,
+                    self.publish(
+                        "VERDICT lane: CANNOT PROVE %s no capture\n" % dash, "2"
+                    ),
+                )
+
+    def test_and_a_word_no_lane_answers_with_is_not_guessed_at(self):
+        self.assertEqual(1, self.publish("VERDICT lane: NEARLY — close enough\n", "0"))
+
     def test_the_summary_carries_the_verdict(self):
         summary = Path(self.dir) / "summary.md"
         os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
         self.addCleanup(os.environ.pop, "GITHUB_STEP_SUMMARY", None)
         path = Path(self.dir) / "verdict.txt"
-        path.write_text("VERDICT lane: WINDOW-ONLY — a window, no paint\n")
+        path.write_text(
+            "VERDICT lane: WINDOW-ONLY — a window, no paint\n", encoding="utf-8"
+        )
         with contextlib.redirect_stdout(io.StringIO()):
             publish_verdict.main([str(path), "lane", "0"])
-        self.assertIn("NOT PIXEL-VERIFIED", summary.read_text())
+        self.assertIn("NOT PIXEL-VERIFIED", summary.read_text(encoding="utf-8"))
 
 
 class EveryWayOutSaysSomething(unittest.TestCase):
@@ -978,7 +1090,7 @@ class EveryWayOutSaysSomething(unittest.TestCase):
         self.assertEqual(1, len(printed))
         self.assertIn("PROVEN", printed[0])
         verdict = Path(self.dir) / "verdict.txt"
-        verdict.write_text(printed[0] + "\n")
+        verdict.write_text(printed[0] + "\n", encoding="utf-8")
         self.assertEqual(0, publish_verdict.publish(str(verdict), "lane", "0")[1])
 
     def test_a_control_that_passes_for_the_app_stops_before_installing(self):

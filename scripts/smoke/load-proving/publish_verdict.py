@@ -12,6 +12,11 @@ A verdict line is `VERDICT <lane>: <WORD> — <why>`. Only the WORD decides, and
 it is read as a FIELD, never matched as text: the why carries app log lines and
 analyser output, so a substring match would let a log line reading "PROVEN" turn
 a red lane green.
+
+THE WORD IS READ BY NAME, NOT BY THE DASH THAT FOLLOWS IT. The separator is an
+em dash and the why can carry anything the app logged, so a runner that wrote or
+read one of them in the wrong code page would leave a green lane unparseable —
+and this file must not decide a release on an encoding.
 """
 
 import os
@@ -21,6 +26,17 @@ import sys
 # in the Checks list a window-only lane and a photographed one would otherwise
 # look identical.
 GREEN = ("PROVEN", "WINDOW-ONLY")
+
+# Every word a lane may answer with, longest first so "NOT PROVEN" is read
+# before "PROVEN" would be. "NO ANSWER" is this file's own.
+WORDS = (
+    "CANNOT PROVE",
+    "WINDOW-ONLY",
+    "NOT PROVEN",
+    "NO ANSWER",
+    "UNTRUSTED",
+    "PROVEN",
+)
 
 
 def verdict_lines(path):
@@ -32,7 +48,14 @@ def verdict_lines(path):
 
 
 def word_of(verdict):
-    return verdict.split(": ", 1)[-1].split(" —")[0].strip()
+    """The word a lane answered with. An unrecognised one is returned as it
+    stands: it is not in GREEN, so a lane that invents a word goes red rather
+    than being guessed at."""
+    tail = verdict.split(": ", 1)[-1].strip()
+    for word in WORDS:
+        if tail == word or tail.startswith(word + " "):
+            return word
+    return tail.split(" —")[0].strip()
 
 
 def publish(path, lane, code):

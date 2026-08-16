@@ -8,6 +8,11 @@ name: "ci"
 # expensive. Every suite below needs nothing but an ubuntu runner: no artifact,
 # no Mac, no Windows, no release to point at.
 #
+# THE SUITES RUN WHERE THE LANES RUN. release-smoke.yaml runs the load-proving
+# suite on all three runners before each lane launches anything, so a POSIX-only
+# assumption in it reds a Windows release lane — and a Linux-only pull request
+# check cannot see that. Hence the windows job below.
+#
 # WHAT IS STILL ONLY PROVEN BY A RELEASE RUN: the capture paths on macOS and
 # Windows, and everything downstream of installing a real artifact. The Linux
 # capture path is proven here, against a window this job puts on an Xvfb display
@@ -137,6 +142,27 @@ jobs:
             grep -q 'macos check regression:' "$log" ||
               { echo "::error::$log has no tally — the suite did not run to completion"; exit 1; }
           done
+
+  # The same suite the Windows release lanes run before they launch anything.
+  # Only the Python: the bash harnesses never run there, and the capture needs a
+  # released artifact. macOS is not here because it is POSIX like the Linux job
+  # — Windows is the only runner whose stdlib and code page differ.
+  windows:
+    name: "the load-proving suite on windows"
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: "load proving"
+        shell: bash
+        run: |
+          python -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
+          python -m unittest discover -v -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
   bash32:
     name: "the macOS-bound suites under bash 3.2"
