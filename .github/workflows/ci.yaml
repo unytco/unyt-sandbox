@@ -33,13 +33,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, like actionlint below, and for the same reason: the runner
+      # image's own shellcheck moves under us, and a version bump would arrive
+      # as a red pull request on a branch that changed nothing.
+      #
       # -S warning: the info level is dominated by SC2329 on functions this
       # codebase dispatches by name and SC1091 on /etc/os-release, which is only
       # readable inside the containers these scripts run in.
       - name: shellcheck
         run: |
-          shellcheck --version | head -2
-          git ls-files -z '*.sh' | xargs -0 shellcheck -x -S warning
+          git ls-files -z '*.sh' | xargs -0 docker run --rm -i -v "$PWD:/w:ro" \
+            -w /w koalaman/shellcheck:v0.11.0 -x -S warning
 
       # Pinned: `latest` would turn a new rule into a red pull request on a
       # branch that changed nothing.
