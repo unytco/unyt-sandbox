@@ -889,14 +889,10 @@ EOF
     [ -n "$job" ] || continue
     body="$(job_body "$job")"
     missing=""
-    # The prove script appears TWICE in the Windows lane — once as -SelfTest,
-    # once as the launch — and the self-test alone would satisfy a plain match
-    # while the lane launched nothing. It did, before this line excluded it.
-    launch="$(printf '%s\n' "$body" | grep -F -- "load-proving/prove-" |
-      grep -cv -- '-SelfTest' || true)"
-    [ "$launch" -ne 0 ] || missing="a load-proving/prove-* launch (only its self-test runs)"
-    verdict="$(printf '%s\n' "$body" | grep -cF -- "load-proving/publish-verdict.sh" || true)"
-    [ "$verdict" -ne 0 ] || missing="${missing:+$missing }load-proving/publish-verdict.sh"
+    launch="$(printf '%s\n' "$body" | grep -cF -- "load-proving/prove.py" || true)"
+    [ "$launch" -ne 0 ] || missing="a load-proving/prove.py launch"
+    verdict="$(printf '%s\n' "$body" | grep -cF -- "load-proving/publish_verdict.py" || true)"
+    [ "$verdict" -ne 0 ] || missing="${missing:+$missing }load-proving/publish_verdict.py"
     # THE SECOND WAY TO SOFTEN A LANE. The phase check above reads the JOB key,
     # four spaces in; a step-level `continue-on-error: true` sits at eight and
     # turns one lane green just as completely. Comments are already stripped, so
@@ -950,9 +946,8 @@ $opens_ids
 EOF
 
   # Each platform's lane must be the one that launches THAT platform's artifact
-  # AGAINST THE DOWNLOAD: three lanes all running prove-linux.sh would pass every
-  # check above, and on Windows the same path appears twice — once as -SelfTest,
-  # which is why the artifact flag rather than the path is what is asserted.
+  # AGAINST THE DOWNLOAD: three lanes all proving linux would pass every check
+  # above.
   while IFS='|' read -r job script arg; do
     [ -n "$job" ] || continue
     body="$(job_body "$job")"
@@ -963,9 +958,9 @@ EOF
         "$script with $arg" >&2
     fi
   done <<'PHASE1'
-opens-linux|prove-linux.sh|"$ARTIFACT"
-opens-macos|prove-macos.sh|"$DMG"
-opens-windows|prove-windows.ps1|-Artifact $env:INSTALLER
+opens-linux|prove.py linux|"$ARTIFACT"
+opens-macos|prove.py macos|"$DMG"
+opens-windows|prove.py windows|"$INSTALLER"
 PHASE1
 
   # ── and the name each lane goes under in the Checks list ───────────────────
@@ -1183,7 +1178,7 @@ EOF
   # redirect that eats its status, a shell that stops at the wrong line: all of
   # them leave both greps above satisfied and turn a NOT PROVEN lane green. So
   # the step is extracted verbatim and driven against a stub prover and the REAL
-  # publish-verdict.sh, under the shell options GitHub gives a `run:` block.
+  # publish_verdict.py, under the shell options GitHub gives a `run:` block.
   step_run() { # <job id> <step-name substring> — the run: body, dedented
     job_body "$1" | awk -v want="$2" '
       $0 ~ "^      - name: .*" want { instep = 1; next }
@@ -1206,12 +1201,13 @@ EOF
       local dir rc=0 line
       dir="$(mktemp -d)"
       mkdir -p "$dir/scripts/smoke/load-proving"
-      cp "$here/load-proving/publish-verdict.sh" "$dir/scripts/smoke/load-proving/"
+      cp "$here/load-proving/publish_verdict.py" "$dir/scripts/smoke/load-proving/"
+      # A stub prover, in the language the step invokes it in.
       {
-        echo '#!/usr/bin/env bash'
-        [ -z "$2" ] || printf 'printf "%%s\\n" %s\n' "$(printf '%q' "$2")"
-        echo "exit $1"
-      } >"$dir/scripts/smoke/load-proving/prove-linux.sh"
+        echo 'import sys'
+        [ -z "$2" ] || printf 'print(%s)\n' "$(python3 -c 'import sys; print(repr(sys.argv[1]))' "$2")"
+        echo "sys.exit($1)"
+      } >"$dir/scripts/smoke/load-proving/prove.py"
       : >"$dir/env"
       if [ "$3" = launched ]; then
         ( cd "$dir" && ARTIFACT=x RUNNER_TEMP="$dir" GITHUB_ENV="$dir/env" \

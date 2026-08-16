@@ -19,6 +19,15 @@ UNYT_OLDEST_GLIBC="2.35"
 # shellcheck disable=SC2034  # read by the scripts that source this file
 UNYT_RE_BACKEND_READY='Status update: .* -> (HcAuthRequired|NetworkSetupRequired|JoiningRequired) \{ agent_key: "uhCAk|Status update: .* -> Ready\b'
 
+# The state that means "the keystore password prompt is what the user is looking
+# at" — the app's Debug spelling, `LairAwaitingPassword { is_initial_setup: true }`.
+# ON A COLD SANDBOX THIS IS SUCCESS, not a stall: the main window is only created
+# once the conductor is up, so a fresh install legitimately parks here with the
+# splash's prompt on screen. Read by load-proving/prove.py, which is the only
+# thing that can see a screen.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+UNYT_RE_AWAITING_PASSWORD='Status update: .* -> LairAwaitingPassword \{'
+
 # `ConductorDisconnected` is deliberately NOT here: it is the transient first
 # step of the reconnect backoff, and becomes `ConductorCrashed` after ~5 min.
 # shellcheck disable=SC2034  # read by the scripts that source this file

@@ -3,3 +3,5 @@ node_modules
 workdir
 .hc*
 .tauri
+__pycache__
+.ruff_cache

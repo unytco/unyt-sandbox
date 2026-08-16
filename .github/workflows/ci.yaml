@@ -49,9 +49,9 @@ jobs:
             rhysd/actionlint:1.7.7 -color
 
       # PARSE ONLY, and that is the whole of what a Linux runner can say about
-      # these: check-windows.ps1 needs the Windows registry and prove-windows's
-      # capture needs .NET Framework, so neither can run here. A syntax error in
-      # one of them used to be discoverable only by a release.
+      # these: check-windows.ps1 needs the Windows registry and
+      # window-capture.ps1 needs .NET Framework, so neither can run here. A
+      # syntax error in one of them used to be discoverable only by a release.
       - name: powershell parses
         shell: pwsh
         run: |
@@ -69,6 +69,10 @@ jobs:
           }
           if ($bad.Count -gt 0) { exit 1 }
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: ruff
         run: |
           python3 -m pip install --quiet --disable-pip-version-check 'ruff==0.15.14'
@@ -81,11 +85,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: "load proving: the frame verdicts"
-        run: python3 scripts/smoke/load-proving/screenshot-stats.py --self-test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-      - name: "load proving: the lane verdicts"
-        run: bash scripts/smoke/load-proving/test-proving.sh
+      # The same set the release lane installs, so the display tests below drive
+      # the same capture path a release does.
+      - name: Install a display, a screen grabber and the frame reader
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11-utils xdotool imagemagick
+          python3 -m pip install --quiet --disable-pip-version-check pillow
+
+      # Everything under load-proving/, including the lane driven against a real
+      # Xvfb display: the frame thresholds, the verdict, the step's colour and
+      # the Linux capture path.
+      - name: "load proving"
+        run: python3 -m unittest discover -v -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
       - name: "the smoke oracle"
         run: bash scripts/smoke/test-oracle.sh
@@ -121,8 +137,9 @@ jobs:
       - uses: actions/checkout@v4
 
       # /bin/bash on a macOS runner is 3.2.57, and its parser differs from any
-      # bash on a laptop in ways `bash -n` cannot see — a `case` inside a $( )
-      # is the one that has already cost two rounds. test-macos-checks.sh drives
+      # bash on a laptop in ways `bash -n` cannot see: it finds the end of a $( )
+      # by scanning for the closing paren rather than by parsing, so a `case`
+      # pattern or a quote inside one truncates it. test-macos-checks.sh drives
       # check-macos.sh, so both are covered.
       - name: "test-macos-checks.sh, bare and in CI's shape"
         run: |

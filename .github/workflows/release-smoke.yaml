@@ -35,7 +35,7 @@ name: "release-smoke"
 #
 # Locally, each script is its own entry point: run-smoke.sh <deb>,
 # check-macos.sh <dmg>, check-windows.ps1 <exe|msi> for phase 2, and
-# load-proving/prove-{linux.sh,macos.sh,windows.ps1} for phase 1.
+# load-proving/prove.py <linux|macos|windows> <artifact> <shots> for phase 1.
 # Not job-level `container:`: GitHub injects tooling and the image is no longer
 # pristine. run-smoke.sh `docker exec`s into a detached one instead.
 on:
@@ -100,7 +100,8 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
-      # Three bugs have shipped here, each making an assertion unable to fail.
+      # What every check below claims, held against what it does: an assertion
+      # that can no longer come out red reds this step instead.
       - name: Oracle regression test
         run: bash scripts/smoke/test-oracle.sh
 
@@ -182,18 +183,23 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
-      # Before anything trusts a verdict: can it still come out red? Both suites,
-      # because the analyser decides what a frame is and the other decides what a
-      # verdict does to the job — and the second is the one that makes a job green.
-      - name: Can the verdicts still fail?
-        run: |
-          python3 scripts/smoke/load-proving/screenshot-stats.py --self-test
-          bash scripts/smoke/load-proving/test-proving.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-      - name: Install a display and a screen grabber
+      - name: Install a display, a screen grabber and the frame reader
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq xvfb x11-utils xdotool imagemagick
+          python3 -m pip install --quiet --disable-pip-version-check pillow
+
+      # Before anything trusts a verdict: can it still come out red? The whole
+      # suite, because the frame thresholds, the lane's verdict and what that
+      # verdict does to the job are three different ways to go green wrongly.
+      # On this runner it also drives the real capture path against an Xvfb
+      # display of its own — the other two platforms' are release-only.
+      - name: Can the verdicts still fail?
+        run: python3 -m unittest discover -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
       - name: Download the released artifact
         env:
@@ -208,7 +214,7 @@ jobs:
       - name: Launch it and photograph what a user would see
         run: |
           rc=0
-          bash scripts/smoke/load-proving/prove-linux.sh \
+          python3 scripts/smoke/load-proving/prove.py linux \
             "$ARTIFACT" "$RUNNER_TEMP/shots" >"$RUNNER_TEMP/verdict.txt" || rc=$?
           echo "PROVE_RC=$rc" >> "$GITHUB_ENV"
           exit "$rc"
@@ -217,12 +223,12 @@ jobs:
       # already had: the verdict is what colours this job, so it must be read
       # even when the step above never ran or died before it could say anything.
       # A launch that did not happen leaves no verdict file and no PROVE_RC, and
-      # publish-verdict.sh answers NO ANSWER to both. Nothing else notices a
+      # publish_verdict.py answers NO ANSWER to both. Nothing else notices a
       # phase-1 lane that quietly skipped its own launch.
       - name: The verdict
         if: always()
         run: |
-          bash scripts/smoke/load-proving/publish-verdict.sh \
+          python3 scripts/smoke/load-proving/publish_verdict.py \
             "$RUNNER_TEMP/verdict.txt" "linux ${{ matrix.kind }}" "${PROVE_RC:-99}"
 
       # THE POINT OF THE JOB, and `always()` so a red verdict still leaves them.
@@ -238,7 +244,7 @@ jobs:
 
   # THE LANE THAT MAY PROVE LESS, and its verdict says which it managed: PROVEN
   # off a frame of the app's own screen, or WINDOW-ONLY off the window list —
-  # green, and explicit that paint is unverified. prove-macos.sh carries why.
+  # green, and explicit that paint is unverified. prove.py's MacosLane says why.
   opens-macos:
     name: "test opens app — macos (${{ matrix.arch }})"
     needs: inventory
@@ -261,10 +267,14 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Can the verdicts still fail?
         run: |
-          python3 scripts/smoke/load-proving/screenshot-stats.py --self-test
-          bash scripts/smoke/load-proving/test-proving.sh
+          python3 -m pip install --quiet --disable-pip-version-check pillow
+          python3 -m unittest discover -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
       - name: Download the released artifact
         env:
@@ -279,7 +289,7 @@ jobs:
       - name: Launch it and ask the window server what it put on screen
         run: |
           rc=0
-          bash scripts/smoke/load-proving/prove-macos.sh \
+          python3 scripts/smoke/load-proving/prove.py macos \
             "$DMG" "$RUNNER_TEMP/shots" >"$RUNNER_TEMP/verdict.txt" || rc=$?
           echo "PROVE_RC=$rc" >> "$GITHUB_ENV"
           exit "$rc"
@@ -290,7 +300,7 @@ jobs:
       - name: The verdict
         if: always()
         run: |
-          bash scripts/smoke/load-proving/publish-verdict.sh \
+          python3 scripts/smoke/load-proving/publish_verdict.py \
             "$RUNNER_TEMP/verdict.txt" "macos ${{ matrix.arch }}" "${PROVE_RC:-99}"
 
       # Both kinds here: shots/verdict holds window-scoped frames when the lane
@@ -329,16 +339,15 @@ jobs:
           token: ${{ secrets.GIT_PAT }}
           fetch-depth: 1
 
-      # The third suite is Windows-only because the lane it tests is: it decides
-      # which command installs an artifact and where Windows recorded it, and
-      # `powershell` (not pwsh) is what runs that file.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Can the verdicts still fail?
         shell: bash
         run: |
-          python scripts/smoke/load-proving/screenshot-stats.py --self-test
-          bash scripts/smoke/load-proving/test-proving.sh
-          powershell -NoProfile -ExecutionPolicy Bypass \
-            -File scripts/smoke/load-proving/prove-windows.ps1 -SelfTest
+          python -m pip install --quiet --disable-pip-version-check pillow
+          python -m unittest discover -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
       - name: Download the released installer
         shell: bash
@@ -353,34 +362,25 @@ jobs:
             "$RELEASE" "$SUFFIX" "$out")"
           echo "INSTALLER=$installer" >> "$GITHUB_ENV"
 
-      # `powershell`, NOT `pwsh`: System.Drawing is a .NET Framework assembly and
-      # is absent from PowerShell 7's shared framework, so the capture only exists
-      # here. `-File` is the only form whose exit status is the script's own.
+      # bash, as the other two lanes: the lane itself is python, and it shells
+      # out to windows-capture.ps1 under `powershell` (not pwsh) for the one
+      # thing only .NET Framework can do — see prove.py's WindowsLane.
       - name: Launch it and photograph what a user would see
-        shell: powershell
+        shell: bash
         run: |
-          # GitHub's powershell shell sets ErrorActionPreference=stop, under which
-          # a native command's stderr can terminate the step before its verdict is
-          # read — and an unread verdict is the one outcome this must not have.
-          $ErrorActionPreference = 'Continue'
-          $verdict = & powershell -NoProfile -ExecutionPolicy Bypass `
-            -File scripts/smoke/load-proving/prove-windows.ps1 `
-            -Artifact $env:INSTALLER -Shots "$env:RUNNER_TEMP\shots"
-          # WriteAllLines, not `>`: Windows PowerShell writes UTF-16 and
-          # Set-Content -Encoding utf8 adds a BOM, and the reader is bash.
-          [System.IO.File]::WriteAllLines(
-            (Join-Path $env:RUNNER_TEMP 'verdict.txt'),
-            [string[]]@($verdict | ForEach-Object { "$_" }))
-          "PROVE_RC=$LASTEXITCODE" | Add-Content -LiteralPath $env:GITHUB_ENV
+          rc=0
+          python scripts/smoke/load-proving/prove.py windows \
+            "$INSTALLER" "${RUNNER_TEMP//\\//}/shots" \
+            >"${RUNNER_TEMP//\\//}/verdict.txt" || rc=$?
+          echo "PROVE_RC=$rc" >> "$GITHUB_ENV"
+          exit "$rc"
 
-      # Its own step and always, as the other two lanes. `bash` rather than a
-      # second PowerShell copy of publish-verdict.sh — one home for the mapping,
-      # and Git Bash is on the PATH of every Windows runner.
+      # Its own step and always, as the other two lanes.
       - name: The verdict
         if: always()
         shell: bash
         run: |
-          bash scripts/smoke/load-proving/publish-verdict.sh \
+          python scripts/smoke/load-proving/publish_verdict.py \
             "${RUNNER_TEMP//\\//}/verdict.txt" \
             "windows ${{ matrix.kind }} ${{ matrix.runner }}" "${PROVE_RC:-99}"
 
