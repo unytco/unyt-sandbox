@@ -3,27 +3,14 @@
 #
 #   check-appimage.sh <extracted-AppDir>
 #
-# An AppImage carries NO dependency metadata — there is no `Depends:` to diff, so
-# the .deb's drift gate has no equivalent here. What it has instead is a bundle of
-# libraries copied off the BUILD machine, and that is its own hazard: a library
-# bundled from a newer host imports newer glibc symbols and the whole AppImage
-# then refuses to start on an older distro, with no packaging error to explain it
-# (tauri-apps/tauri#15665 — over-bundled libwayland/glib/gstreamer breaking
-# AppImages built on newer Ubuntu).
+# No `Depends:` to diff — instead a bundle of libraries copied off the BUILD
+# machine, which is its own hazard (tauri-apps/tauri#15665).
 #
-# ON appimagelint — TRIED, DROPPED, do not retry. It asks the same ABI-floor
-# question, but it cannot answer it here: on ubuntu:22.04 it dies immediately
-# because its OWN bundled readelf requires GLIBC_2.38, which our oldest supported
-# target does not have; on ubuntu:24.04 its readelf runs but it then fails
-# FUSE-mounting the target ("process exited before we could read AppImage
-# mountpoint"), including with /dev/fuse, SYS_ADMIN and libfuse2t64 granted. The
-# check below covers the same ground without FUSE or a privileged container, and
-# more precisely — it reads every bundled ELF rather than the mounted image.
+# appimagelint cannot run here: its readelf needs GLIBC_2.38, above our oldest
+# target, and it cannot FUSE-mount on 24.04 even with /dev/fuse and SYS_ADMIN.
 #
-# So the gate is the glibc ceiling across the WHOLE BUNDLE, not just the
-# executable. That distinction is load-bearing: for v0.100.0 the inner binary
-# needs 2.34 while the bundled libwebkit2gtk needs 2.35, so checking only the
-# executable would report a floor one release older than the truth.
+# The gate is the glibc ceiling across the WHOLE BUNDLE: for v0.100.0 the inner
+# binary needs 2.34 while bundled libwebkit2gtk needs 2.35.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,19 +23,8 @@ command -v objdump >/dev/null || { echo "::error::objdump not found (apt-get ins
 
 status=0
 
-# ── the ceiling, across every ELF the bundle ships ────────────────────────────
 # THE APP'S OWN BINARY, named by the .desktop file's Exec — not
 # `find usr/bin | head -1`, which is directory order and therefore a coin flip.
-# This bundle ships xdg-mime beside the app, and on the CI runner find returned
-# THAT: the ceiling scan below then ran over xdg-mime plus the .so files with the
-# application binary silently absent from its own compatibility check, and the
-# "libraries required from the system" report described xdg-mime's needs rather
-# than the app's. Same failure that made the launch oracle watch the wrong
-# process (container-checks-appimage.sh), and the same class as N1 below: find
-# order is not an answer to "which file do I want".
-# `|| true`: with no .desktop the glob does not match, grep exits non-zero, and
-# under `set -e` an assignment from a failing substitution aborts the script —
-# killing the diagnosis below before it can be printed.
 desktop_exec="$(grep -hm1 '^Exec=' "$APPDIR"/*.desktop 2>/dev/null | sed 's/^Exec=//; s/[[:space:]].*//' || true)"
 inner="$APPDIR/usr/bin/$desktop_exec"
 if [ -z "$desktop_exec" ] || [ ! -x "$inner" ]; then
@@ -59,22 +35,6 @@ if [ -z "$desktop_exec" ] || [ ! -x "$inner" ]; then
 fi
 
 # EVERY ELF IN THE BUNDLE, found by MAGIC BYTES rather than by name.
-#
-# `*.so*` plus one binary was the old shape, and it does not match what the
-# header and the gate below both promise. It misses a bundled EXECUTABLE — and a
-# usr/bin helper is precisely where a too-new-glibc dependency arrives: a helper
-# built on a newer host requiring GLIBC_2.38 breaks the AppImage on the oldest
-# supported distro while this check stays green, because the maximum it did look
-# at came from libwebkit2gtk either way.
-#
-# Note what this file's own header already said — find order is not an answer to
-# "which file do I want" — and note that the fix for that became "only the Exec
-# binary matters", which is a different wrong answer to the same question. The
-# right answer is that for the CEILING no single file matters: all of them do.
-# The .desktop Exec still names the app, but only for the two app-specific
-# reports below (its own version, and what it wants from the host).
-#
-# Reading four bytes of every file is affordable: the v0.100.0 bundle has 235.
 elf_list="$(mktemp)"
 trap 'rm -f "$elf_list" "$elf_list.versions"' EXIT
 while IFS= read -r f; do
@@ -93,13 +53,9 @@ while read -r f; do
   # `|| true`: most files here import no GLIBC_ symbols at all, and under
   # `set -e` + pipefail the empty grep would abort the whole scan silently.
   v="$(objdump -T "$f" 2>/dev/null | grep -oP 'GLIBC_\K[0-9.]+' | sort -Vu | tail -1 || true)"
-  # `if`, NOT `[ -n "$v" ] && printf`: as an AND-list the body's exit status is
-  # the test's, so a LAST file with no GLIBC_ symbols made the whole `while`
-  # return 1, pipefail carried it through `| sort`, and `set -e` killed the
-  # script — silently skipping every check below, including the ceiling
-  # comparison this file exists for. Which file lands last is `find` order, so
-  # the gate was a coin flip per build, and it failed with a wrong diagnosis
-  # (looks like "too-new glibc", is actually a data-only .so).
+  # `if`, NOT `[ -n "$v" ] && printf`: as an AND-list a LAST file with no GLIBC_
+  # symbols makes the `while` return 1, pipefail carries it, and set -e skips
+  # every check below. `find` order made it a coin flip per build.
   if [ -n "$v" ]; then printf '%s %s\n' "$v" "$f"; fi
 done <"$elf_list" | sort -V >"$elf_list.versions"
 
@@ -126,11 +82,8 @@ else
   echo "OK: the whole bundle runs on glibc $UNYT_OLDEST_GLIBC" >&2
 fi
 
-# ── what it still expects FROM the system ────────────────────────────────────
-# Reported, not gated: an AppImage is not required to bundle everything, and a
-# real desktop has X11/fontconfig. But nothing else records this list, and it is
-# the AppImage's implicit dependency contract — the thing a user hits when the
-# download "just doesn't start" on a minimal system.
+# Reported, not gated: nothing else records the AppImage's implicit dependency
+# contract on the host.
 echo "--- libraries NOT bundled, so required from the system ---" >&2
 external="$(ldd "$inner" 2>/dev/null | grep 'not found' | awk '{print $1}' | sort -u || true)"
 if [ -n "$external" ]; then
@@ -140,7 +93,6 @@ else
   echo "  (none — fully self-contained)" >&2
 fi
 
-# ── AppRun environment hazards ───────────────────────────────────────────────
 # The other half of tauri#15665: a plugin search path baked at build time that
 # points OUTSIDE the AppDir loads the build machine's plugins, or nothing at all.
 echo "--- AppRun search paths pointing outside the bundle ---" >&2

@@ -7,8 +7,8 @@
 # release before any artifact is built, so the tag-derived release kind (release-patterns spec) is
 # trustworthy.
 #
-# Usage:  check-version-contract.sh <git-tag>      e.g.  v0.93.0   or   v0.93.1-rc.2
-# Exit 0 + echo the canonical version (e.g. "0.93.0", "0.101.0-rc.0") on agreement; non-zero + a
+# Usage:  check-version-contract.sh <git-tag>      e.g.  v0.93.0   or   v0.93.1-dev.2
+# Exit 0 + echo the canonical version (e.g. "0.93.0", "0.101.0-dev.0") on agreement; non-zero + a
 # reason on mismatch.
 set -euo pipefail
 
@@ -19,7 +19,8 @@ CONF="$ROOT/unyt/src-tauri/tauri.conf.json"
 
 fail() { echo "version-contract: $*" >&2; exit 1; }
 
-# The tag's release version: strip a leading v. -rc.* versions are possible too and supported by the release workflow.
+# The WHOLE tag is compared, so a -dev.* suffix has to be carried in Cargo.toml and
+# tauri.conf.json too.
 tag_version="${TAG#v}"
 
 [ -f "$CARGO" ] || fail "missing $CARGO (is the unyt submodule checked out?)"

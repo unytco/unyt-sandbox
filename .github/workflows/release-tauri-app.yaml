@@ -3,23 +3,26 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-rc.*"
+      # A throwaway build that proves the pipeline. Never something a user installs.
+      - "v[0-9]+.[0-9]+.[0-9]+-dev.*"
 
 jobs:
   publish-happ:
+    name: Stage 1 - publish happ
     permissions:
       contents: write
     runs-on: ubuntu-22.04
     outputs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
+      msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           submodules: recursive
-          # Full history so a UI (patch) release can read the parent tag's submodule pointer and
-          # diff the DNA source between the parent commit and this one (scripts/inherit-ui-release.sh).
+          # Full history: a UI release diffs the parent tag's submodule pointer.
           fetch-depth: 0
 
       - name: Install nix
@@ -50,6 +53,18 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: bash scripts/release-kind.sh "$TAG" >> "$GITHUB_OUTPUT"
 
+      # Here, not in the Windows job: a tag the msi cannot carry then fails in seconds rather
+      # than after yarn install, the happ download and three other platforms building.
+      - name: Derive and self-test the MSI product version
+        id: msi
+        env:
+          APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
+        run: |
+          bash scripts/msi-version.sh --self-test
+          msi="$(bash scripts/msi-version.sh "$APP_VERSION")"
+          echo "msi product version: ${msi:-none — a stable build, tauri derives its own}"
+          echo "MSI_VERSION=$msi" >> "$GITHUB_OUTPUT"
+
       - name: Build DNA + happ (migration release, vM.m.0)
         if: steps.kind.outputs.kind == 'migration'
         run: |
@@ -65,78 +80,73 @@ jobs:
 
       - name: Get Changelog Content
         id: changelog
+        # Through env, not interpolated into the script: a tag is attacker-shaped input
+        # and `${{ }}` would splice it into the shell before bash ever sees a quote.
+        env:
+          APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
         run: |
-          VERSION="${{ steps.version.outputs.APP_VERSION }}"
-          awk -v ver="$VERSION" '
+          awk -v ver="$APP_VERSION" '
             $0 ~ "^## \\[" ver "\\]" {p=1; next}
             p && /^## \[/ {exit}
             p {print}
           ' unyt/CHANGELOG.md > release_notes.txt
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          cat release_notes.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "notes<<EOF"
+            cat release_notes.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - id: create-release
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          # Fail the release if any declared artifact is missing — keeps the manifest honest so a
-          # declared-but-unbuilt artifact (e.g. a DNA the repo no longer produces) can't slip through.
           artifactErrorsFailBuild: true
           artifacts: |
             unyt/workdir/unyt.happ
             unyt/workdir/unyt.webhapp
             unyt/dnas/alliance/workdir/alliance.dna
           body: ${{ steps.changelog.outputs.notes }}
-          # Tag the release with the EXACT pushed tag so an -rc.* push stays an RC release (never the
-          # stable vM.m.p shape the router accepts); the version contract already asserts its core
-          # equals Cargo.toml. APP_VERSION (the stripped core) still names the changelog + assets.
+          # The pushed tag, not APP_VERSION: a -dev.* must not ship as stable.
           name: Unyt Sandbox ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: true
           draft: true
 
   release-tauri-app:
+    name: Stage 2 - release tauri apps (${{ matrix.config.label }})
     needs: publish-happ
     strategy:
       fail-fast: false
       matrix:
         config:
+          # macos-latest ON PURPOSE, and the one runner label in this repo that
+          # is meant to roll: the smoke's gates are pinned to macos-15 /
+          # macos-15-intel, so the artifact is BUILT on a newer macOS than it is
+          # installed on. Pinning these two legs changes what users install, so
+          # test-oracle.sh fails on a pin here.
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
             arc_factor: default
+            label: macos-arm64
           - platform: macos-latest
             args: "--target x86_64-apple-darwin"
             arc_factor: default
+            label: macos-x64
           - platform: ubuntu-22.04
             args: "--bundles deb,appimage"
             arc_factor: default
+            label: linux
           - platform: windows-latest
             args: ""
             arc_factor: default
-          # - platform: macos-latest
-          #   args: "--target aarch64-apple-darwin"
-          #   arc_factor: "zero"
-          # - platform: macos-latest
-          #   args: "--target x86_64-apple-darwin"
-          #   arc_factor: "zero"
-          # - platform: ubuntu-22.04
-          #   args: "--bundles deb,appimage"
-          #   arc_factor: "zero"
-          # - platform: windows-latest
-          #   args: ""
-          #   arc_factor: "zero"
+            label: windows
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
       HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
         matrix.config.arc_factor || '' }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       CARGO_PROFILE_RELEASE_LTO: "false"
-      # The base URL of the migration router the shipped app polls for BOTH update channels
-      # (mandatory migration banner + dismissible build-update notice). Vite embeds it at build
-      # time (VITE_ prefix → import.meta.env); empty → every check short-circuits to "unreachable"
-      # and neither channel can ever appear. Defined here so the guard step can assert it and the
-      # build step passes it through. A public HTTPS endpoint, not a credential.
+      # Empty means the shipped app can never check for updates. Not a secret.
       VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
     permissions: write-all
 
@@ -149,6 +159,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
           submodules: recursive
           fetch-depth: 1
 
@@ -157,10 +168,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: install Rust 1.95.0
+        # A floor: holochain 0.7.0 needs `cfg_select!`, stabilised in 1.95.
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: 1.89.0
+          toolchain: 1.95.0
 
       - name: install x86_64 target
         if: matrix.config.args == '--target x86_64-apple-darwin'
@@ -189,8 +201,10 @@ jobs:
 
       - name: Install and prepare
         working-directory: unyt
+        # --ignore-engines: hc-spin wants node >=24; yarn aborts the whole
+        # install otherwise. Node 22 is the app's floor, not an oversight.
         run: |
-          yarn install
+          yarn install --frozen-lockfile --ignore-engines
 
       - name: Download release of the .happ
         uses: robinraju/release-downloader@v1.10
@@ -209,6 +223,25 @@ jobs:
             echo "::error::VITE_MIGRATION_SERVICE_URL is empty — a shipped build without it can never check for updates (both channels short-circuit to 'unreachable')."
             exit 1
           }
+
+      - name: Pin the MSI product version
+        # Written here, never committed: a wix.version in tauri.conf.json would
+        # outlive the release that set it. Empty means a stable build, which
+        # tauri versions itself.
+        if: runner.os == 'Windows' && needs.publish-happ.outputs.msiVersion != ''
+        shell: bash
+        env:
+          MSI_VERSION: ${{ needs.publish-happ.outputs.msiVersion }}
+        run: |
+          conf=unyt/src-tauri/tauri.conf.json
+          jq --arg v "$MSI_VERSION" '.bundle.windows.wix.version = $v' "$conf" >"$conf.tmp"
+          mv "$conf.tmp" "$conf"
+
+      - name: Free disk before the build (linux)
+        # The number to size a fix from when this ENOSPCs. No RUSTFLAGS strip alongside it:
+        # that changes the binary users get, not just what CI costs.
+        if: matrix.config.platform == 'ubuntu-22.04'
+        run: df -h /
 
       - name: build (${{ matrix.config.arc_factor }} arc)
         uses: tauri-apps/tauri-action@v0
@@ -239,177 +272,30 @@ jobs:
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
 
-  # Install what was just built and prove the app starts — see release-smoke.yaml.
-  # Called directly (not via `workflow_run`, which only fires for workflow files
-  # on the DEFAULT branch and so would silently never run on a release branch),
-  # NON-BLOCKING BY STRUCTURE, not by a flag: this job goes red when a check
-  # fails, and nothing `needs` it, so its failure cannot stop or unpublish the
-  # release that produced the artifacts. Do not add it to another job's `needs`.
+      - name: Free disk when the job ends (linux)
+        if: always() && matrix.config.platform == 'ubuntu-22.04'
+        run: df -h /
+
+  # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
+  # human publishes it, so the run's colour is what tells them. Phase 2 keeps the
+  # advisory behaviour it has always had here.
+  #
+  # Nothing `needs` this job either way. Not `workflow_run` — that only fires on
+  # the default branch.
   smoke-test:
+    # JUST THE STAGE: GitHub prefixes every called job with this one, so anything
+    # said here is said again on all 16 lines of the Checks list.
+    name: Stage 3
     needs: [publish-happ, release-tauri-app]
-    # `needs` alone SKIPS this job if any matrix row failed, so a Windows build
-    # failure would suppress a perfectly good Linux check. Run whenever the happ
-    # job produced a release id — the Linux artifacts either exist or the
-    # download step says so plainly.
-    # `!cancelled()` rather than `always()`: a cancelled release run should take
-    # the smoke with it instead of starting a 30-minute container sweep nobody
-    # is waiting for.
+    # Not gated on the build job — one failed row would suppress every lane.
+    # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
     if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' }}
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}
-    # EXPLICIT, NOT `inherit`. This job sits above a build holding the Apple
-    # signing certificate, its password and the Tauri signing private key, and
-    # `secrets: inherit` would pass all of them to a workflow whose entire job is
-    # to download an already-published artifact and run shell scripts against it
-    # inside containers. Nothing in that path needs them, so a report-only
-    # post-release check would have become a signing-secret exposure path — every
-    # smoke script, every container image and every action they pull inside the
-    # blast radius. It needs exactly one secret, the PAT that can see a draft
-    # release, so it gets exactly that one.
+      # Only here, and only over phase 2: a hand-dispatched release-smoke must
+      # answer red for everything, and no switch may soften phase 1.
+      static-checks-advisory: true
+    # Explicit, not inherit: the caller holds Apple signing credentials.
     secrets:
       GIT_PAT: ${{ secrets.GIT_PAT }}
-
-  # release-tauri-android-app:
-  #   needs: publish-happ
-  #   permissions: write-all
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       app_variant: ${{ fromJson(needs.publish-happ.outputs.app_variants) }}
-  #   env:
-  #     PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
-  #     TAURI_PRODUCT_NAME: ${{ matrix.app_variant.product_name }}
-  #     TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
-  #     TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
-  #     TAURI_DEEP_LINK_SCHEME: ${{ matrix.app_variant.id }}
-  #     TAURI_SPLASHSCREEN_TITLE: ${{ matrix.app_variant.product_name }} Loading
-  #     TAURI_APP_VARIANT: ${{ matrix.app_variant.id }}
-  #   runs-on: ubuntu-22.04
-  #   steps:
-  #     - name: Maximize build space
-  #       uses: AdityaGarg8/remove-unwanted-software@v5
-  #       with:
-  #         remove-android: "true"
-  #         remove-dotnet: "true"
-  #         remove-haskell: "true"
-  #         remove-codeql: "true"
-  #         remove-docker-images: "true"
-  #         remove-large-packages: "true"
-  #         remove-cached-tools: "true"
-
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         token: ${{ secrets.GIT_PAT }}
-  #         submodules: recursive
-  #         fetch-depth: 0
-
-  #     - name: setup node
-  #       uses: actions/setup-node@v1
-  #       with:
-  #         node-version: 20
-
-  #     - name: Install and prepare
-  #       run: yarn install
-
-  #     - name: Prepare app variant (config + icons)
-  #       run: |
-  #         chmod +x scripts/generate-tauri-config.sh scripts/copy-app-icons.sh
-  #         bash scripts/generate-tauri-config.sh
-  #         bash scripts/copy-app-icons.sh
-
-  #     - name: Retrieve version
-  #       run: |
-  #         echo "APP_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
-  #       id: version
-
-  #     - name: Download release of the .happ
-  #       uses: robinraju/release-downloader@v1.10
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
-  #       with:
-  #         token: ${{ secrets.GIT_PAT }}
-  #         releaseId: ${{ needs.publish-happ.outputs.releaseId }}
-  #         fileName: "unyt.happ"
-  #         out-file-path: "workdir/"
-
-  #     - name: install Rust stable
-  #       uses: actions-rs/toolchain@v1
-  #       with:
-  #         override: true
-  #         toolchain: 1.89.0
-
-  #     - name: install Go stable
-  #       uses: actions/setup-go@v4
-  #       with:
-  #         go-version: "stable"
-
-  #     - name: Install nix
-  #       uses: cachix/install-nix-action@v27
-  #       with:
-  #         github_access_token: ${{ secrets.GIT_PAT }}
-  #         nix_path: nixpkgs=channel:nixos-24.05
-
-  #     - uses: cachix/cachix-action@v15
-  #       with:
-  #         name: holochain-ci
-
-  #     - uses: cachix/cachix-action@v15
-  #       with:
-  #         name: darksoil-studio
-
-  #     - name: Regenerate Android project for variant
-  #       run: |
-  #         rm -rf src-tauri/gen/android
-  #         nix develop --accept-flake-config .#androidDev --command bash -c "yarn tauri android init"
-
-  #     - name: Set usesCleartextTraffic to true
-  #       run: |
-  #         chmod +x scripts/android-uses-cleartext-traffic.sh
-  #         bash scripts/android-uses-cleartext-traffic.sh
-
-  #     - name: setup Android signing
-  #       run: |
-  #         cd src-tauri/gen/android
-  #         echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" > key.properties
-  #         echo "password=${{ secrets.ANDROID_KEY_PASSWORD }}" >> key.properties
-  #         base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > $RUNNER_TEMP/keystore.jks
-  #         echo "storeFile=$RUNNER_TEMP/keystore.jks" >> key.properties
-
-  #     - name: Install and Build (zero arc)
-  #       env:
-  #         VITE_COMMIT_SHA: ${{ env.PRODUCT_NAME }}-${{ steps.version.outputs.APP_VERSION }}-android
-  #         APP_VERSION: ${{ steps.version.outputs.APP_VERSION }}
-  #         HOLOCHAIN_ARC_FACTOR: "0"
-  #         TAURI_APP_IDENTIFIER: ${{ matrix.app_variant.identifier }}
-  #         TAURI_APP_ID_PREFIX: ${{ matrix.app_variant.id }}
-  #       run: |
-  #         nix develop --accept-flake-config .#androidDev --command bash -c "make build-android-release"
-
-  #     - name: Copy AAB for upload (variant-specific name)
-  #       run: |
-  #         mkdir -p upload
-  #         AAB="$(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' 2>/dev/null | head -1)"
-  #         [ -n "$AAB" ] && cp "$AAB" "upload/${{ matrix.app_variant.id }}-${{ steps.version.outputs.APP_VERSION }}.aab"
-
-  #     - name: Upload release aab
-  #       uses: AButler/upload-release-assets@v3.0
-  #       with:
-  #         files: upload/*.aab
-  #         repo-token: ${{ secrets.GIT_PAT }}
-  #         release-id: ${{ needs.publish-happ.outputs.releaseId }}
-
-  #     - name: Copy APK for upload (variant-specific names)
-  #       run: |
-  #         mkdir -p upload-apk
-  #         i=0
-  #         while IFS= read -r f; do
-  #           [ -f "$f" ] && cp "$f" "upload-apk/${{ matrix.app_variant.id }}-${{ steps.version.outputs.APP_VERSION }}-$i.apk" && i=$((i+1))
-  #         done < <(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" 2>/dev/null)
-
-  #     - name: Upload release apk
-  #       uses: AButler/upload-release-assets@v3.0
-  #       with:
-  #         files: upload-apk/*.apk
-  #         repo-token: ${{ secrets.GIT_PAT }}
-  #         release-id: ${{ needs.publish-happ.outputs.releaseId }}

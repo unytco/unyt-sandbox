@@ -1,0 +1,180 @@
+name: "ci"
+
+# Everything about the release smoke that can be proven wrong WITHOUT a release.
+# release-smoke.yaml runs only on a tag, so until this existed a renamed job or a
+# verdict step that stopped being read was discovered on the one run where being
+# wrong is most expensive.
+#
+# THE SUITES RUN WHERE THE LANES RUN: a POSIX-only assumption in the load-proving
+# suite reds a Windows release lane, and a Linux-only pull request check cannot
+# see that. Hence the windows job below.
+#
+# WHAT IS STILL ONLY PROVEN BY A RELEASE RUN: the capture paths on macOS and
+# Windows, and everything downstream of installing a real artifact.
+on:
+  pull_request:
+  # The long-lived branches only: a push to a branch with a pull request open is
+  # already covered above, and running both doubles every queue.
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: "lint — shell, workflows, powershell, python"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # -S warning: the info level is dominated by SC2329 on functions this
+      # codebase dispatches by name and SC1091 on /etc/os-release, which is only
+      # readable inside the containers these scripts run in.
+      - name: shellcheck
+        run: |
+          git ls-files -z '*.sh' | xargs -0 docker run --rm -i -v "$PWD:/w:ro" \
+            -w /w koalaman/shellcheck:v0.11.0 -x -S warning
+
+      # Pinned: `latest` would turn a new rule into a red pull request on a
+      # branch that changed nothing.
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" --workdir /repo \
+            rhysd/actionlint:1.7.7 -color
+
+      # PARSE ONLY, which is all a Linux runner can say: check-windows.ps1 needs
+      # the Windows registry and window-capture.ps1 needs .NET Framework.
+      - name: powershell parses
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($file in (Get-ChildItem -Path . -Recurse -Filter *.ps1)) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $bad += $file.FullName
+              foreach ($e in $errors) {
+                "::error file=$($file.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              }
+            } else { "parsed  $($file.FullName)" }
+          }
+          if ($bad.Count -gt 0) { exit 1 }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ruff
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check --only-binary=:all: 'ruff==0.15.14'
+          python3 -m ruff check scripts
+          python3 -m ruff format --check scripts
+
+  harness:
+    name: "the harnesses can still fail"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The same set the release lane installs, so the display tests below drive
+      # the same capture path a release does.
+      - name: Install a display, a screen grabber and the frame reader
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11-utils xdotool imagemagick
+          python3 -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
+
+      # Including the lane driven against a real Xvfb display, which is what
+      # proves the Linux capture path.
+      - name: "load proving"
+        run: python3 -m unittest discover -v -s scripts/smoke/load-proving -t scripts/smoke/load-proving
+
+      - name: "the smoke oracle"
+        run: bash scripts/smoke/test-oracle.sh
+
+      # BOTH WAYS, and the second is the one that matters: a bare run mints a temp
+      # directory per invocation, which is what hid a harness writing into the
+      # release's own state and results files.
+      # `shell: bash` for the pipefail it brings: the default shell would hand
+      # this step tee's exit status, and a failing suite would read green.
+      - name: "the macOS checks, as a bare run"
+        shell: bash
+        run: bash scripts/smoke/test-macos-checks.sh | tee "$RUNNER_TEMP/macos-bare.log"
+
+      - name: "the macOS checks, in the shape CI runs them"
+        shell: bash
+        env:
+          UNYT_SMOKE_STATE: ${{ runner.temp }}/smoke-state
+          UNYT_SMOKE_RESULTS: ${{ runner.temp }}/smoke-results
+        run: |
+          mkdir -p "$UNYT_SMOKE_STATE"
+          bash scripts/smoke/test-macos-checks.sh | tee "$RUNNER_TEMP/macos-ci.log"
+
+      # A truncated suite runs what was read and exits 0, so the tally is what
+      # says it reached the end.
+      - name: "and every suite ran to its tally"
+        run: |
+          for log in "$RUNNER_TEMP"/macos-*.log; do
+            grep -q 'macos check regression:' "$log" ||
+              { echo "::error::$log has no tally — the suite did not run to completion"; exit 1; }
+          done
+
+  # Only the Python: the bash harnesses never run on Windows, and the capture
+  # needs a released artifact. macOS is absent because it is POSIX like the Linux
+  # job — Windows is the only runner whose stdlib and code page differ.
+  windows:
+    name: "the load-proving suite on windows"
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: "load proving"
+        shell: bash
+        run: |
+          python -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
+          python -m unittest discover -v -s scripts/smoke/load-proving -t scripts/smoke/load-proving
+
+  bash32:
+    name: "the macOS-bound suites under bash 3.2"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # /bin/bash on a macOS runner is 3.2.57, and its parser differs from any
+      # bash on a laptop in ways `bash -n` cannot see: it finds the end of a $( )
+      # by scanning for the closing paren rather than by parsing, so a `case`
+      # pattern or a quote inside one truncates it. test-macos-checks.sh drives
+      # check-macos.sh, so both are covered.
+      - name: "test-macos-checks.sh, bare and in CI's shape"
+        run: |
+          docker run --rm -v "$PWD:/w:ro" -w /w bash:3.2 \
+            bash scripts/smoke/test-macos-checks.sh
+          docker run --rm -v "$PWD:/w:ro" -w /w \
+            -e UNYT_SMOKE_STATE=/tmp/state -e UNYT_SMOKE_RESULTS=/tmp/results bash:3.2 \
+            sh -c 'mkdir -p /tmp/state && bash scripts/smoke/test-macos-checks.sh'

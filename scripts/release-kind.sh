@@ -17,7 +17,7 @@ TAG="${1:?usage: release-kind.sh <git-tag>}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { echo "release-kind: $*" >&2; exit 1; }
 
-# vMAJOR.MINOR.PATCH, ignoring any -rc.* suffix (an rc of a .0 is still a migration build).
+# vMAJOR.MINOR.PATCH, ignoring any -dev.* suffix (a dev build of a .0 is still a migration build).
 core="${TAG#v}"; core="${core%%-*}"
 IFS=. read -r major minor patch <<<"$core"
 [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]] ||

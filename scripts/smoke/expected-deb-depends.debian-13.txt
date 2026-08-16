@@ -13,15 +13,14 @@
 #
 #   scripts/smoke/run-smoke.sh --print-computed-depends <artifact.deb> debian:13
 #
-# Captured from unyt_0.100.0_Unyt.Sandbox_default-arc_amd64_linux.deb.
+# Captured from unyt_0.101.0-dev.1_Unyt.Sandbox_default-arc_amd64_linux.deb.
+# Two entries left at the Holochain 0.7 cutover; the CHANGELOG says why.
 libc6 (>= 2.34)
-libcairo-gobject2 (>= 1.10.0)
 libcairo2 (>= 1.10.0)
 libgcc-s1 (>= 4.2)
 libgdk-pixbuf-2.0-0 (>= 2.36.9)
 libglib2.0-0t64 (>= 2.66.0)
 libgtk-3-0t64 (>= 3.21.5)
 libjavascriptcoregtk-4.1-0
-libpango-1.0-0 (>= 1.14.0)
 libsoup-3.0-0 (>= 3.0.3)
 libwebkit2gtk-4.1-0 (>= 2.41.90)

@@ -14,12 +14,16 @@ Application-level changes belong in
 
 ### Added
 
-- **Release pipeline: a post-release install smoke (UNYT-966/967/968).** Installs each shipped artifact in pristine distro containers and asserts the app boots to a healthy state; report-only, and runnable locally with Docker (`scripts/smoke/run-smoke.sh <artifact>`). New `scripts/smoke/`.
-  - **macOS and Windows lanes, static checks only** — signing, notarization, linkage and deployment target per architecture; silent install, Authenticode and imports on Windows. The one check a runner cannot do is documented for hand-running ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)).
-  - **Two findings, both gated red:** the `.deb` declared 2 of its 11 shared libraries (fixed in `unyt/`), and the Windows installers are unsigned, so users meet a SmartScreen "unknown publisher" block.
-- **Release pipeline: tag-derived release kinds + `.happ` inheritance (release-patterns UNYT-948).** `vM.m.0` builds the DNA; `vM.m.p` inherits it and repacks only the UI.
-- **Release pipeline: a version contract (release-patterns UNYT-946).** `unyt/src-tauri/Cargo.toml` is the single source of truth for the version; a pushed tag or a `tauri.conf.json` that disagrees fails the release before any artifact is built (new `scripts/check-version-contract.sh`). The shipped app build now receives `VITE_MIGRATION_SERVICE_URL` (the update router the app polls), with a guard step that fails an empty value — no more installers that can never check for updates.
+- **A release now proves its app opens (UNYT-966/967/968).** Every installer it ships is installed on a clean machine, launched, and photographed: the release passes only if the app reached a healthy state and a frame of its own window shows a drawn screen. It does not prove the screen is the *right* screen — nothing in the frame is read or identified.
+- **Static checks of what each artifact is:** install and uninstall, version, binary compatibility and declared dependencies in pristine distro containers; signing, notarization, architecture and deployment target on macOS. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
+- **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
 
 ### Changed
 
-- **Release pipeline: publish only artifacts the repo builds.** Drop the never-built `agent_details.dna` from the release, and set `artifactErrorsFailBuild` so a declared-but-missing artifact fails the release. The matrix job takes the version from the `publish-happ` job output instead of re-reading `tauri.conf.json`.
+- **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
+- **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
+- **Release kinds come from the tag, and the version from one file (UNYT-946/948).** `vM.m.0` builds the DNA, `vM.m.p` inherits it and repacks only the UI, and `unyt/src-tauri/Cargo.toml` is the single source of truth for the version — a tag or a config that disagrees fails the release before an artifact is built. Pre-releases ship on a `-dev.*` channel the update router ignores, so one is never offered to users as an update.
+
+### Fixed
+
+- **Several smoke checks could pass without testing anything:** a webview gate a cold install could never satisfy, a dependency check that misread a correctly-declared package, macOS scenarios sharing state with the release around them, and a handful of platform-specific parse and path faults. Each now fails when the thing it checks is broken.
