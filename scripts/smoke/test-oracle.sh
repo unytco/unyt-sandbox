@@ -893,6 +893,16 @@ EOF
     [ "$launch" -ne 0 ] || missing="a load-proving/prove.py launch"
     verdict="$(printf '%s\n' "$body" | grep -cF -- "load-proving/publish_verdict.py" || true)"
     [ "$verdict" -ne 0 ] || missing="${missing:+$missing }load-proving/publish_verdict.py"
+    # AND ITS OWN SUITE, BEFORE THE DOWNLOAD. A lane that launches an artifact
+    # without first showing that its thresholds and its verdict can still come
+    # out red is a lane whose green says nothing.
+    harness="$(printf '%s\n' "$body" | grep -n -- 'unittest discover' | head -1 | cut -d: -f1)"
+    download="$(printf '%s\n' "$body" | grep -n -- 'download-release-asset.sh' | head -1 | cut -d: -f1)"
+    if [ -z "$harness" ]; then
+      missing="${missing:+$missing }a step running the load-proving suite"
+    elif [ -n "$download" ] && [ "$harness" -gt "$download" ]; then
+      missing="${missing:+$missing }its suite runs after the download, not before"
+    fi
     # THE SECOND WAY TO SOFTEN A LANE. The phase check above reads the JOB key,
     # four spaces in; a step-level `continue-on-error: true` sits at eight and
     # turns one lane green just as completely. Comments are already stripped, so
@@ -1192,6 +1202,15 @@ EOF
   dematrix() { sed 's/\${{ *matrix\.[a-z]* *}}/deb/g'; }
   launch_step="$(step_run opens-linux 'Launch it and photograph' | dematrix)"
   verdict_step="$(step_run opens-linux 'The verdict' | dematrix)"
+  # The steps invoke python3, so driving them needs one. Every runner these
+  # steps run on has it; a bare container does not, and a SKIP says which of
+  # the two this is rather than reporting the missing interpreter as a lane
+  # that came out red.
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "SKIP  the phase-1 launch and verdict steps (no python3 to drive them)" >&2
+    launch_step=""
+    verdict_step=""
+  fi
   if [ -n "$launch_step" ] && [ -n "$verdict_step" ]; then
     # BOTH STEPS, in order, with $GITHUB_ENV carried between them exactly as the
     # runner carries it — that handoff is how the launch's exit code reaches the
@@ -1239,7 +1258,7 @@ EOF
 2|VERDICT linux deb: CANNOT PROVE — no capture path|launched|red|a lane that could not look must fail the job
 0|VERDICT linux deb: PROVEN — 1847 distinct, 50.0% dominant|skipped|red|a launch step that never ran must fail the job
 LAUNCHES
-  else
+  elif command -v python3 >/dev/null 2>&1; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the phase-1 launch or verdict step could not be extracted" \
       "a step name or its run: block moved" >&2

@@ -230,6 +230,17 @@ def assess(path):
     )
 
 
+def uniform_black(path):
+    """One flat black rectangle and nothing else. Its own function rather than a
+    substring of the line above, so a caller reading it is coupled to an answer
+    and not to a sentence."""
+    try:
+        _, _, counts = count_colours(path)
+    except Unreadable:
+        return False
+    return len(counts) == 1 and counts.most_common(1)[0][0] == (0, 0, 0)
+
+
 def report(paths, out=sys.stdout):
     """[(path, verdict, detail)], printed as it goes."""
     results = []

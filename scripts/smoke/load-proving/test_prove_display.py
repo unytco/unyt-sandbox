@@ -3,10 +3,11 @@
 
   python3 -m unittest discover -s scripts/smoke/load-proving
 
-Skipped unless Xvfb, xdotool and ImageMagick are here; ci.yaml installs them.
-The rest of the suite scripts the platform away, so this is the only thing that
-drives the real Xvfb start, the real window search and the real `import` — the
-half a release run used to be the first to exercise.
+The rest of the suite scripts the platform away; this is the only thing that
+drives the real Xvfb start, the real window search and the real `import`. It
+skips where those are absent and FAILS where CI says they should be there —
+ci.yaml installs them, and a job that skipped this silently would claim a
+capture path it never touched.
 
 The app is stood in for by `display` showing a frame we composed, which is
 enough to answer the two questions that matter about the capture path: is it
@@ -15,6 +16,7 @@ NOT PROVEN when the window is blank."""
 
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,18 +27,31 @@ import frames
 import prove
 import test_frames as build
 
-TOOLS = ("Xvfb", "xdotool", "xwininfo")
+# `display` is the stand-in app, and it is ImageMagick 6's: 7 ships `magick`
+# and no `display`, so it is checked for by name rather than assumed with the
+# rest of the toolkit.
+TOOLS = ("Xvfb", "xdotool", "xwininfo", "display")
 WINDOW = 800
 AWAITING = "Status update: Starting -> LairAwaitingPassword { is_initial_setup: true }"
 
 
-@unittest.skipUnless(
-    all(shutil.which(tool) for tool in TOOLS)
-    and (shutil.which("import") or shutil.which("magick")),
-    "needs Xvfb, xdotool and ImageMagick",
-)
+def absent_tools():
+    missing = [tool for tool in TOOLS if not shutil.which(tool)]
+    if not (shutil.which("import") or shutil.which("magick")):
+        missing.append("import")
+    return missing
+
+
 class ARealDisplay(unittest.TestCase):
     def setUp(self):
+        missing = absent_tools()
+        # Loud on the runner that installs them, quiet on the ones that cannot:
+        # the macOS and Windows lanes run this same discovery and have no Xvfb,
+        # and CI is set on all three.
+        if missing and os.environ.get("CI") and sys.platform == "linux":
+            self.fail("this runner is missing " + ", ".join(missing))
+        if missing:
+            self.skipTest("needs " + ", ".join(missing))
         self.dir = tempfile.mkdtemp()
         # Its own sandbox, so a test never clears a real run's data root.
         os.environ["UNYT_PROVE_SANDBOX"] = "/tmp/ut-prove-test"

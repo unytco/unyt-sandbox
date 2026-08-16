@@ -5,6 +5,9 @@
   prove.py macos   <artifact.dmg>                   <shots-dir>
   prove.py windows <installer.exe|installer.msi>    <shots-dir>
 
+Needs Pillow (`pip install pillow`); every other tool it reaches for is one the
+platform already has, and a missing one is answered rather than assumed.
+
 Installs the artifact the way a user would, launches it, and photographs the
 app's OWN WINDOW. The verdict is one `VERDICT <lane>: <WORD> — <why>` line on
 stdout and nothing else is; publish_verdict.py turns that line into the step's
@@ -20,6 +23,13 @@ THE VERDICT IS TWO INDEPENDENT FACTS, and PROVEN needs both:
 Before either, the capture path is tested against itself: a frame taken BEFORE
 the app is launched must not pass for the app. One that does would photograph
 the same thing after launch, so every verdict behind it would be void.
+
+WHAT THAT CONTROL CANNOT COVER, since a window-scoped capture has no window to
+aim at before launch: it photographs the SCREEN, while the verdict frames
+photograph the app's WINDOW. It answers "is this runner's screen mistakable for
+the app", not "is this window capture aimed properly". Windows narrows the gap
+with a second control at the splash's own footprint, and macOS with one of its
+own; nothing closes it before the app exists.
 
 The words, and what each is worth:
   PROVEN       both facts.                                            exit 0
@@ -175,18 +185,24 @@ def end_process(proc):
             proc.kill()
 
 
-def end_process_group(pid):
-    # The whole tree: an AppImage runs an inner binary, and ending the launcher
-    # alone would leave the app on the runner.
-    try:
-        group = os.getpgid(pid)
-    except OSError:
-        return
-    try:
-        os.killpg(group, signal.SIGTERM)
-        time.sleep(2)
-        os.killpg(group, signal.SIGKILL)
-    except OSError:
+def end_process_group(*pids):
+    """The whole tree: an AppImage runs an inner binary, and ending the launcher
+    alone would leave the app on the runner. The launcher is often reaped before
+    this runs — every poll of the watch reaps it — so the group is taken from
+    whichever pid still resolves to one."""
+    for pid in pids:
+        if pid is None:
+            continue
+        try:
+            group = os.getpgid(pid)
+        except OSError:
+            continue
+        try:
+            os.killpg(group, signal.SIGTERM)
+            time.sleep(2)
+            os.killpg(group, signal.SIGKILL)
+        except OSError:
+            pass
         return
 
 
@@ -371,32 +387,45 @@ class Lane:
         self.capture_failures += 1
         return None
 
+    def seek_frame(self, slug, force=False):
+        """The slug of a photograph of the app's own window that IS the app's
+        own screen, or None. NEVER OVERRIDDEN: this is the pixel question, and a
+        platform that can answer "on screen" some other way overrides
+        seek_evidence instead — so no override can hand this answer to something
+        that was never photographed."""
+        taken = self.shoot(slug, force)
+        if not taken:
+            return None
+        found = sorted(self.verdict_dir.glob(taken + "*.png"))
+        if frames.exit_code(frames.report(found, sys.stderr)) != 0:
+            return None
+        return taken
+
     def seek_evidence(self, slug, force=False):
         """What counts as the app being on screen — the one thing a platform
         overrides. A photograph of its window is the default."""
-        taken = self.shoot(slug, force)
+        taken = self.seek_frame(slug, force)
         if not taken:
-            return False
-        found = sorted(self.verdict_dir.glob(taken + "*.png"))
-        if frames.exit_code(frames.report(found, sys.stderr)) != 0:
             return False
         self.evidence = "frame " + taken
         return True
 
     def seek_paint(self, prefix, budget):
-        """A bounded hunt for a painted frame. It ends on the clock OR on the
-        frame ceiling: past the ceiling nothing is captured at all, so a loop
-        watching only the clock would poll out its seconds taking no frames, and
-        the caller would read those non-attempts as frames it had judged."""
+        """The slug of the first frame that is the app's own screen, or None.
+        Bounded by the clock AND by the frame ceiling: past the ceiling nothing
+        is captured at all, so a loop watching only the clock would poll out its
+        seconds taking no frames, and the caller would read those non-attempts
+        as frames it had judged."""
         started = time.monotonic()
         while True:
             taken = self.shot_count
-            if self.seek_evidence(
+            painted = self.seek_frame(
                 "%s-t%ds" % (prefix, time.monotonic() - started), True
-            ):
-                return True
+            )
+            if painted:
+                return painted
             if self.shot_count == taken or time.monotonic() - started >= budget:
-                return False
+                return None
             time.sleep(self.poll_seconds)
 
     # ── the watch ─────────────────────────────────────────────────────────────
@@ -768,9 +797,16 @@ class LinuxLane(Lane):
         # root's children, which needs nothing of the client — sound only
         # because this display is private to this run.
         found = []
-        for window in run(
-            ["xdotool", "search", "--onlyvisible", "--pid", str(self.app_pid)]
-        ).stdout.split():
+        search = run(["xdotool", "search", "--onlyvisible", "--pid", str(self.app_pid)])
+        # Exit 1 is "no window", which is an answer about the app. Anything else
+        # is the probe failing, and reading that as "the app mapped no window"
+        # would blame the artifact for our tooling.
+        if search.returncode > 1:
+            note(
+                "::warning::xdotool search exited %d: %s"
+                % (search.returncode, search.stderr.strip())
+            )
+        for window in search.stdout.split():
             shell = run(["xdotool", "getwindowgeometry", "--shell", window]).stdout
             size = dict(
                 line.split("=", 1) for line in shell.splitlines() if "=" in line
@@ -831,7 +867,7 @@ class LinuxLane(Lane):
 
     def stop(self):
         if self.app:
-            end_process_group(self.app.pid)
+            end_process_group(self.app.pid, self.app_pid)
             end_process(self.app)
         end_process(self.xvfb)
         super().stop()
@@ -853,8 +889,8 @@ class MacosLane(Lane):
     Both, because without the grant `screencapture` does not fail: it returns
     the desktop with every application window omitted, and a wallpaper is a rich
     gradient. So the lane measures whether it has the grant, tries, and falls
-    back — never red for a reason that used to be green, and never PROVEN off a
-    frame that is not the app's own window."""
+    back. It is never PROVEN off anything but a frame of the app's own window,
+    and never red for want of a photograph it could not take."""
 
     # Advisory, because this lane's verdict does not rest on pixels. Two of them:
     # the whole screen answers "is this runner's screen mistakable for the app",
@@ -924,6 +960,8 @@ class MacosLane(Lane):
         # is the least certain claim in it.
         probed = self.window_info(0)
         note(probed.stdout)
+        if probed.stderr.strip():
+            note(indent(probed.stderr))
         if probed.returncode == 3:
             raise Answer(
                 "CANNOT PROVE", "the window server returned no window list at all"
@@ -1005,7 +1043,15 @@ class MacosLane(Lane):
         shutil.rmtree(bundle, ignore_errors=True)
         # ditto, not cp -R: it preserves the xattrs and symlinks the signature
         # covers.
-        run_loud(["ditto", str(bundles[0]), str(bundle)])
+        copied = run_loud(["ditto", str(bundles[0]), str(bundle)])
+        if copied.returncode:
+            # CANNOT PROVE, not NOT PROVEN: a copy that failed on this runner
+            # would otherwise be reported as a bundle with no executable in it.
+            raise Answer(
+                "CANNOT PROVE",
+                "ditto exited %d copying %s into /Applications, so nothing was installed to launch"
+                % (copied.returncode, bundles[0].name),
+            )
         self.detach()
 
         executable = run(
@@ -1093,8 +1139,12 @@ class MacosLane(Lane):
         if not line:
             return False
         path = self.verdict_dir / (slug + "-window.png")
-        run(["screencapture", "-x", "-o", "-l", line.split()[1], str(path)])
+        shot = run(["screencapture", "-x", "-o", "-l", line.split()[1], str(path)])
         if not (path.exists() and path.stat().st_size > 0):
+            # Its own words: "not one capture succeeded" is a finding about the
+            # runner, and this is the only thing that says which runner fault.
+            if shot.stderr.strip():
+                note(indent(shot.stderr))
             return False
         # The window that was PHOTOGRAPHED, so the verdict's size describes the
         # frame: the splash is replaced by the main window mid-run.
@@ -1102,8 +1152,8 @@ class MacosLane(Lane):
         return True
 
     def seek_evidence(self, slug, force=False):
-        # The gate this lane has always used, and still its floor: the window
-        # list. The whole-screen frame is still taken, as context.
+        # This lane's floor: the window list. The whole-screen frame is still
+        # taken alongside it, as context.
         self.shoot(slug, force)
         line = self.largest_window()
         if not line:
@@ -1148,8 +1198,12 @@ class MacosLane(Lane):
         before = len(list(self.verdict_dir.glob("*.png")))
         failures = self.capture_failures
         self.capture = self.capture_window
-        if self.seek_paint("pixel", budget):
-            self.painted_frame = self.evidence
+        painted = self.seek_paint("pixel", budget)
+        if painted:
+            # The slug seek_frame returned, never self.evidence: that still
+            # holds the window-list line the watch put there, and PROVEN may
+            # only ever cite a photograph.
+            self.painted_frame = "frame " + painted
             note(
                 "OK: a window-scoped capture is the app's own screen (%s)"
                 % self.painted_frame
@@ -1245,11 +1299,18 @@ class MacosLane(Lane):
         )
 
     def detach(self):
-        if (
-            self.mount
-            and run(["hdiutil", "detach", "-quiet", str(self.mount)]).returncode
-        ):
-            run(["hdiutil", "detach", "-quiet", "-force", str(self.mount)])
+        if not self.mount:
+            return
+        if run(["hdiutil", "detach", "-quiet", str(self.mount)]).returncode:
+            forced = run(["hdiutil", "detach", "-quiet", "-force", str(self.mount)])
+            if forced.returncode:
+                # Said out loud, and the handle kept: a volume this lane has
+                # forgotten is one nothing will try to unmount again.
+                note(
+                    "::warning::%s is still mounted — hdiutil detach exited %d: %s"
+                    % (self.mount, forced.returncode, forced.stderr.strip())
+                )
+                return
         self.mount = None
 
     def stop(self):
@@ -1410,6 +1471,8 @@ class WindowsLane(Lane):
         result = run(argv)
         if result.stderr.strip():
             note(indent(result.stderr))
+        if result.returncode:
+            note("::error::window-capture.ps1 exited %d" % result.returncode)
         return result.stdout.splitlines()
 
     def preflight(self):
@@ -1440,6 +1503,12 @@ class WindowsLane(Lane):
         for line in self.helper():
             if line.startswith("STATION "):
                 station = line.split(None, 1)[1]
+        # No station line at all is the helper failing, not a station named "".
+        if not station:
+            raise Answer(
+                "CANNOT PROVE",
+                "window-capture.ps1 named no window station, so nothing here can photograph anything",
+            )
         note("window station: %s" % station)
         if station != "WinSta0":
             note(
@@ -1470,10 +1539,11 @@ class WindowsLane(Lane):
 
     def control_capture(self, slug, path):
         if slug.endswith("desktop"):
-            lines = self.helper(DesktopTo=path)
+            want, lines = "desktop", self.helper(DesktopTo=path)
         else:
+            want = "rect"
             lines = self.helper(RectTo=path, RectW=self.DECLARED, RectH=self.DECLARED)
-        return any(line.startswith("WROTE ") for line in lines) and path.exists()
+        return self.wrote(lines) == {want} and path.exists()
 
     def install(self):
         before = {entry.key for entry in uninstall_entries()}
@@ -1592,19 +1662,18 @@ class WindowsLane(Lane):
     def capture(self, slug):
         printed = self.verdict_dir / (slug + "-print.png")
         copied = self.context_dir / (slug + "-screen.png")
-        wrote = set()
-        for line in self.helper(
+        lines = self.helper(
             TargetPid=self.app.pid,
             PrintTo=printed,
             CopyTo=copied,
             DesktopTo=self.context_dir / (slug + "-desktop.png"),
-        ):
+        )
+        for line in lines:
             if line.startswith(("WINDOW ", "FAILED ")):
                 note("  " + line)
             if line.startswith("WINDOW "):
                 self.saw_window = True
-            if line.startswith("WROTE "):
-                wrote.add(line.split()[1])
+        wrote = self.wrote(lines)
         # PrintWindow asks the window to render itself, so what it returns is the
         # app's own content whatever is in front of it — that makes it the
         # evidence. CopyFromScreen reads the desktop at the window's coordinates,
@@ -1618,12 +1687,17 @@ class WindowsLane(Lane):
             return True
         return False
 
+    @staticmethod
+    def wrote(lines):
+        """Which frames the helper says it wrote: print | copy | desktop | rect."""
+        return {line.split()[1] for line in lines if line.startswith("WROTE ")}
+
     def unreadable_screen(self, results):
         # Every frame uniform black, with a window that existed, is a desktop we
         # were not shown rather than an app that drew nothing.
         if any(verdict == frames.PAINTED for _, verdict, _ in results):
             return None
-        if not all("distinct=1 dominant=#000000" in detail for _, _, detail in results):
+        if not all(frames.uniform_black(path) for path, _, _ in results):
             return None
         note(
             "::error title=Every Windows frame came back black::the window existed, so the desktop could not be read rather than the app being blank"

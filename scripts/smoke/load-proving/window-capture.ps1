@@ -155,15 +155,21 @@ public static class UnytShot {
 }
 '@
 
+# Each capture is reported on its own, and a throw is one capture's answer: the
+# CopyFromScreen frame is the evidence when PrintWindow gives us nothing, so one
+# GDI+ exception must not take the other with it.
 function Report {
-  param([string]$What, [string]$Path, [bool]$Taken)
-  if ($Taken) { "WROTE $What $Path" } else { "FAILED $What nothing was written" }
+  param([string]$What, [string]$Path, [scriptblock]$Capture)
+  try {
+    if (& $Capture) { "WROTE $What $Path" } else { "FAILED $What nothing was written" }
+  }
+  catch { "FAILED $What $($_.Exception.Message)" }
 }
 
 "STATION $([UnytShot]::WindowStation())"
 
-if ($DesktopTo) { Report 'desktop' $DesktopTo ([UnytShot]::CaptureVirtualScreen($DesktopTo)) }
-if ($RectTo) { Report 'rect' $RectTo ([UnytShot]::CaptureCentredRect($RectW, $RectH, $RectTo)) }
+if ($DesktopTo) { Report 'desktop' $DesktopTo { [UnytShot]::CaptureVirtualScreen($DesktopTo) } }
+if ($RectTo) { Report 'rect' $RectTo { [UnytShot]::CaptureCentredRect($RectW, $RectH, $RectTo) } }
 
 if ($TargetPid -gt 0) {
   # The largest, because a tooltip is also a window and a frame of one would be
@@ -179,7 +185,7 @@ if ($TargetPid -gt 0) {
   }
   if ($null -ne $best) {
     "LARGEST $best"
-    if ($PrintTo) { Report 'print' $PrintTo ([UnytShot]::CapturePrintWindow($best, $PrintTo)) }
-    if ($CopyTo) { Report 'copy' $CopyTo ([UnytShot]::CaptureWindowFromScreen($best, $CopyTo)) }
+    if ($PrintTo) { Report 'print' $PrintTo { [UnytShot]::CapturePrintWindow($best, $PrintTo) } }
+    if ($CopyTo) { Report 'copy' $CopyTo { [UnytShot]::CaptureWindowFromScreen($best, $CopyTo) } }
   }
 }

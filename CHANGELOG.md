@@ -14,17 +14,21 @@ Application-level changes belong in
 
 ### Added
 
-- **Every installer a release ships is installed, launched and photographed** — the `.deb`, the AppImage, both `.dmg`s, the NSIS `.exe` on windows-2022 and windows-2025, and the `.msi` (`scripts/smoke/load-proving/`, phase 1 of `release-smoke.yaml`).
+- **Every installer a release ships is installed, launched and photographed (UNYT-966/967/968)** — the `.deb`, the AppImage, both `.dmg`s, the NSIS `.exe` on windows-2022 and windows-2025, and the `.msi` (`scripts/smoke/load-proving/`, phase 1 of `release-smoke.yaml`).
 - **A green phase-1 lane means:** the artifact installed, the app reached a healthy backend state, and a frame of *its own window* is the app's own screen.
 - **The bars that frame clears:** at least 1000 distinct colours, and no single colour over 75% of it. A bare menu bar over a blank window clears neither.
 - **It does not mean the screen is the right screen.** No text is read and no element is identified.
-- **A lane that cannot launch, or cannot trust its capture, is red.** Each one photographs the screen before launching and answers `UNTRUSTED` if that frame already passes for the app. Nothing here skips, and nothing is quietly green.
+- **A lane that cannot launch, or cannot trust its capture, is red.** Nothing here skips, and nothing is quietly green.
+- **Every lane photographs the screen before it launches anything.** On Linux and Windows a frame that already passes for the app answers `UNTRUSTED`; on macOS it turns pixel mode off instead.
 - **macOS may answer `WINDOW-ONLY`:** the app put a real on-screen window up at a real size, and webview paint is unverified. Green with a warning, and never the word a photographed lane gets.
-- **Static checks of what the artifact is** (phase 2): install, version, binary compatibility and declared dependencies in pristine distro containers; macOS signing, notarization, architecture and deployment target; a Windows install/uninstall cycle with an import-table check.
+- **Static checks of what the artifact is** (phase 2): install, version, binary compatibility and declared dependencies in pristine distro containers; macOS signing, notarization, architecture and deployment target; a Windows install/uninstall cycle with an import-table check. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
+- **A lane that does not answer is red on every platform.** Each reads its verdict in a step of its own that runs whatever the launch did, so a launch that never happened reads as NO ANSWER.
+- **An installer the inventory cannot name fails the run.** The presence tests are exact suffixes, so a renamed artifact used to read as an absent one and its lane would quietly stop existing.
+- **Two findings on the first release smoked, both gated red:** the `.deb` declared 2 of its 11 shared libraries (fixed in `unyt/`), and **the Windows installers are unsigned**, so users meet a SmartScreen "unknown publisher" block.
 - **The phases run concurrently**, so a notarization finding still lands on a build whose window came up blank.
-- **The harnesses run on every pull request** (`.github/workflows/ci.yaml`): the smoke oracle, the macOS check harness bare and in CI's shape, both again under bash 3.2, the load-proving suite against an Xvfb display of its own, shellcheck, actionlint, a PowerShell parse check and ruff.
-- **Tag-derived release kinds and `.happ` inheritance.** `vM.m.0` builds the DNA; `vM.m.p` inherits it and repacks only the UI.
-- **A version contract.** `unyt/src-tauri/Cargo.toml` is the single source of truth for the version; a tag or a `tauri.conf.json` that disagrees fails the release before an artifact is built (`scripts/check-version-contract.sh`).
+- **The harnesses run on every pull request** (`.github/workflows/ci.yaml`): the smoke oracle, the macOS check harness bare and in CI's shape, both again under bash 3.2, the load-proving suite against an Xvfb display of its own, and four linters.
+- **Tag-derived release kinds and `.happ` inheritance (UNYT-948).** `vM.m.0` builds the DNA; `vM.m.p` inherits it and repacks only the UI.
+- **A version contract (UNYT-946).** `unyt/src-tauri/Cargo.toml` is the single source of truth for the version; a tag or a `tauri.conf.json` that disagrees fails the release before an artifact is built (`scripts/check-version-contract.sh`).
 - **The shipped build receives `VITE_MIGRATION_SERVICE_URL`** — the update router the app polls — and an empty value fails the run.
 - **What CI cannot cover, as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): SmartScreen's "unknown publisher" block, a missing WebView2 runtime, a missing Visual C++ redistributable.
 
