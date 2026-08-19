@@ -140,6 +140,27 @@ jobs:
             args: ""
             arc_factor: default
             label: windows
+          # THE SAME FOUR PLATFORMS AT ARC 0: a node that gossips and validates
+          # but stores no shard of the DHT. The arc factor is the only thing that
+          # differs, and `assetNamePattern` below is what keeps the two sets of
+          # installers apart on one release. Stage 3 smokes the default-arc set
+          # only, so these ship unsmoked. release-inventory.sh carries why.
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            arc_factor: zero
+            label: macos-arm64 zero-arc
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            arc_factor: zero
+            label: macos-x64 zero-arc
+          - platform: ubuntu-22.04
+            args: "--bundles deb,appimage"
+            arc_factor: zero
+            label: linux zero-arc
+          - platform: windows-latest
+            args: ""
+            arc_factor: zero
+            label: windows zero-arc
     env:
       MACOSX_DEPLOYMENT_TARGET: 10.13
       HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&

@@ -2,8 +2,8 @@
 # Download one asset of a release into <out-dir> and print its path.
 #
 #   download-release-asset.sh <release-id-or-tag> <asset-name-suffix> <out-dir>
-#   e.g. download-release-asset.sh 368727714 linux.deb ./artifacts
-#        download-release-asset.sh v0.100.0   linux.deb ./artifacts
+#   e.g. download-release-asset.sh 368727714 _default-arc_amd64_linux.deb ./out
+#        download-release-asset.sh v0.100.0   _default-arc_amd64_linux.deb ./out
 #
 # Everything goes through the REST API by release ID rather than
 # `gh release download <tag>`, because the release workflow publishes as a DRAFT
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REF="${1:?usage: download-release-asset.sh <release-id-or-tag> <asset-suffix> <out-dir>}"
-SUFFIX="${2:?asset name suffix required (e.g. linux.deb)}"
+SUFFIX="${2:?asset name suffix required (e.g. _default-arc_amd64_linux.deb)}"
 OUT_DIR="${3:?output directory required}"
 REPO="${UNYT_SMOKE_REPO:-${GITHUB_REPOSITORY:-unytco/unyt-sandbox}}"
 
@@ -30,8 +30,9 @@ else
   fi
 fi
 
-# Assets are matched by SUFFIX so the caller never has to know the version:
-# the release names them unyt_<version>_Unyt.Sandbox_default-arc_<arch>_<platform><ext>.
+# Assets are matched by SUFFIX so the caller never has to know the version: the
+# release names them unyt_<version>_Unyt.Sandbox_<arc>-arc_<arch>_<platform><ext>,
+# and it carries one set per arc factor, which is what the guard below is for.
 matches="$(gh api "repos/$REPO/releases/$release_id" \
   --jq "[.assets[] | select(.name | endswith(\"$SUFFIX\"))] | .[] | \"\(.id)\t\(.name)\t\(.size)\"")"
 match_count="$(printf '%s' "$matches" | grep -c . || true)"
