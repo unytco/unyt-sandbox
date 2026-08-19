@@ -17,7 +17,7 @@ Application-level changes belong in
 - **A release now proves its app opens (UNYT-966/967/968).** Every installer it ships is installed on a clean machine, launched, and photographed: the release passes only if the app reached a healthy state and a frame of its own window shows a drawn screen. It does not prove the screen is the *right* screen — nothing in the frame is read or identified.
 - **Static checks of what each artifact is:** install and uninstall, version, binary compatibility and declared dependencies in pristine distro containers; signing, notarization, architecture and deployment target on macOS. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
 - **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
-- **Zero-arc installers ship alongside the default-arc ones** on all four platforms, so a release now carries two sets of desktop installers that differ only in whether the node stores a shard of the DHT. The smoke still covers the default-arc set only, and every lane is pinned to it by name so neither variant can be tested in the other's place.
+- **Zero-arc installers ship alongside the default-arc ones** on all four platforms: the same app on a node that gossips and validates but stores no shard of the DHT. The smoke covers the default-arc set only.
 
 ### Changed
 
