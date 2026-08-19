@@ -146,9 +146,13 @@ fi
 unclaimed=""
 while IFS= read -r name; do
   # A zero-arc installer has no lane on purpose, so it is judged by the
-  # default-arc name it mirrors instead of reading as a rename. Every other token
-  # still has to match, and a default-arc asset is untouched by this.
+  # default-arc name it mirrors. Only while that twin is on the release, though:
+  # an orphan means the twin's build leg failed and its lane skipped, which is
+  # the silence this guard exists to break.
   probe="${name/_zero-arc_/_default-arc_}"
+  if [ "$probe" != "$name" ] && ! grep -qxF -- "$probe" <<<"$assets"; then
+    probe="$name"
+  fi
   case "$probe" in
     *"$DEB_SUFFIX" | *"$APPIMAGE_SUFFIX" | *"$EXE_SUFFIX" | *"$MSI_SUFFIX") continue ;;
     # Not an installer at all: the .happ, the .dna, the updater bundles and their

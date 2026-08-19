@@ -31,8 +31,7 @@ else
 fi
 
 # Assets are matched by SUFFIX so the caller never has to know the version: the
-# release names them unyt_<version>_Unyt.Sandbox_<arc>-arc_<arch>_<platform><ext>,
-# and it carries one set per arc factor, which is what the guard below is for.
+# release names them unyt_<version>_Unyt.Sandbox_<arc>-arc_<arch>_<platform><ext>.
 matches="$(gh api "repos/$REPO/releases/$release_id" \
   --jq "[.assets[] | select(.name | endswith(\"$SUFFIX\"))] | .[] | \"\(.id)\t\(.name)\t\(.size)\"")"
 match_count="$(printf '%s' "$matches" | grep -c . || true)"
@@ -42,8 +41,8 @@ if [ "$match_count" = "0" ]; then
   gh api "repos/$REPO/releases/$release_id" --jq '.assets[].name' >&2 || true
   exit 1
 fi
-# Picking one of several silently would mean smoke-testing an arbitrary variant
-# (e.g. once the zero-arc matrix rows are re-enabled and two Linux debs ship).
+# Picking one of several silently would mean smoke-testing an arbitrary variant,
+# and every release ships two Linux debs now: one per arc factor.
 if [ "$match_count" != "1" ]; then
   echo "::error::'$SUFFIX' matches $match_count assets on release $release_id — narrow the suffix:" >&2
   printf '%s\n' "$matches" | cut -f2 >&2

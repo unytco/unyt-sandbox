@@ -1434,8 +1434,13 @@ if [ -f "$rel" ]; then
   build_arcs="$(printf '%s\n' "$arcs" | sort -u)"
   n_arcs="$(printf '%s\n' "$arcs" | grep -c . || true)"
   n_labels="$(printf '%s\n' "$labels" | sort -u | grep -c . || true)"
-  if [ "$matrix_rows" -ge 8 ] && [ "$n_arcs" = "$matrix_rows" ] &&
-     [ "$n_labels" = "$matrix_rows" ]; then pass=$((pass + 1)); else
+  if [ "$matrix_rows" -ge 8 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the build matrix lost a row" \
+      "$matrix_rows row(s); expected 8, four platforms at each of two arc factors" >&2
+  fi
+  if [ "$n_arcs" = "$matrix_rows" ] && [ "$n_labels" = "$matrix_rows" ]; then
+    pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "a build row has no arc factor, or shares a label" \
       "$matrix_rows row(s), $n_arcs arc factor(s), $n_labels distinct label(s)" >&2
@@ -1748,6 +1753,24 @@ if inv_rc "$(printf '%s\n' "$shipped" | sed 's/zero-arc_aarch64_darwin/zero-arc_
   printf 'FAIL  %-58s %s\n' "the zero-arc exemption swallowed a renamed asset" \
     "anything under that token would pass as expected" >&2
 else pass=$((pass + 1)); fi
+# AND ONLY THE ZERO-ARC TOKEN. An exemption written against any `-arc_` token
+# would let a row that drifted to a third arc factor claim the lane's suffix,
+# leaving the lane skipped with nothing red to say so.
+if inv_rc "$shipped
+unyt_0.101.0_Unyt.Sandbox_full-arc_amd64_linux.deb"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "an installer under an unknown arc factor read as claimed" \
+    "the arc token is not a wildcard" >&2
+else pass=$((pass + 1)); fi
+# AND ONLY WHILE THE TWIN IS THERE. A default-arc leg that failed while its
+# zero-arc twin shipped leaves an installer nobody smokes and a lane that
+# skipped, which is the one-artifact-at-a-time silence this guard is for.
+if inv_rc "$(printf '%s\n' "$shipped" | grep -v 'default-arc_amd64_linux.deb')"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "an orphaned zero-arc installer read as claimed" \
+    "its default-arc twin's lane vanished with nothing red to say so" >&2
+else pass=$((pass + 1)); fi
+
 # The real drivers declare real checks. Cheap, and it is what the workflow's
 # `--only <id>` arguments are written against.
 for drv in container-checks.sh container-checks-appimage.sh; do
@@ -1766,11 +1789,11 @@ fi
 
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding cases.
-# DELIBERATELY 3 BELOW a full run of 244: the GLIBC-patch branch costs exactly 2
+# DELIBERATELY 3 BELOW a full run of 247: the GLIBC-patch branch costs exactly 2
 # on a machine that cannot patch a version, and the tie-break's en_US.UTF-8 leg
 # costs 1 where that locale is not generated. Do not "tidy" it up to match.
-if [ "$pass" -lt 241 ]; then
-  echo "::error::only $pass assertions ran; expected at least 241 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 244 ]; then
+  echo "::error::only $pass assertions ran; expected at least 244 — the test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]
