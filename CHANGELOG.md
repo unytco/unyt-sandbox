@@ -17,13 +17,12 @@ Application-level changes belong in
 - **A release now proves its app opens (UNYT-966/967/968).** Every installer it ships is installed on a clean machine, launched, and photographed: the release passes only if the app reached a healthy state and a frame of its own window shows a drawn screen. It does not prove the screen is the *right* screen — nothing in the frame is read or identified.
 - **Static checks of what each artifact is:** install and uninstall, version, binary compatibility and declared dependencies in pristine distro containers; signing, notarization, architecture and deployment target on macOS. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
 - **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
-- **Zero-arc installers ship alongside the default-arc ones** on all four platforms: the same app on a node that gossips and validates but stores no shard of the DHT. The smoke covers the default-arc set only.
+- Zero-arc installers ship alongside the default-arc ones, on all four platforms.
 
 ### Changed
 
 - **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
-- **The README's download page cannot go stale.** It points at the releases page instead of listing one release's files, explains what the default-arc and zero-arc choice means for a user, and shows how to read an installer's name. It also carries the Linux trap: both variants install the same package at the same version, so `apt install ./file.deb` changes nothing and exits 0, and swapping variants needs `dpkg -i` or `apt install --reinstall`.
 - **Release kinds come from the tag, and the version from one file (UNYT-946/948).** `vM.m.0` builds the DNA, `vM.m.p` inherits it and repacks only the UI, and `unyt/src-tauri/Cargo.toml` is the single source of truth for the version — a tag or a config that disagrees fails the release before an artifact is built. Pre-releases ship on a `-dev.*` channel the update router ignores, so one is never offered to users as an update.
 
 ### Fixed
