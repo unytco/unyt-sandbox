@@ -17,7 +17,7 @@ jobs:
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
@@ -26,18 +26,15 @@ jobs:
           fetch-depth: 0
 
       - name: Install nix
-        uses: cachix/install-nix-action@v27
+        uses: cachix/install-nix-action@v31
         with:
           github_access_token: ${{ secrets.GIT_PAT }}
-          nix_path: nixpkgs=channel:nixos-24.05
+          nix_path: nixpkgs=channel:nixos-26.05
 
-      - uses: cachix/cachix-action@v15
+      - uses: cachix/cachix-action@v17
         with:
           name: holochain-ci
-
-      - uses: cachix/cachix-action@v15
-        with:
-          name: darksoil-studio
+          extraPullNames: darksoil-studio
 
       - name: Assert version contract (tag == src-tauri Cargo.toml == tauri.conf.json)
         id: version
@@ -69,6 +66,12 @@ jobs:
         if: steps.kind.outputs.kind == 'migration'
         run: |
           cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
+
+      - name: Build unyt_cli
+        if: steps.kind.outputs.kind == 'migration'
+        run: |
+          cd unyt/
+          cargo build -p unyt_cli --release --locked
 
       - name: Inherit lineage happ + repack UI (UI release, vM.m.p)
         if: steps.kind.outputs.kind == 'ui'
@@ -105,6 +108,7 @@ jobs:
             unyt/workdir/unyt.happ
             unyt/workdir/unyt.webhapp
             unyt/dnas/alliance/workdir/alliance.dna
+            unyt/target/release/unyt_cli
           body: ${{ steps.changelog.outputs.notes }}
           # The pushed tag, not APP_VERSION: a -dev.* must not ship as stable.
           name: Unyt Sandbox ${{ github.ref_name }}
