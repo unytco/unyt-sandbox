@@ -68,6 +68,7 @@ jobs:
           cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
 
       - name: Build unyt_cli
+        if: steps.kind.outputs.kind == 'migration'
         run: |
           cd unyt/
           cargo build -p unyt_cli --release --locked
