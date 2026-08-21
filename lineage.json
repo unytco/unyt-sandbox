@@ -1,6 +1,6 @@
 {
   "_comment": "Per-lineage pin for UI (patch) releases. A vM.m.p build with p>0 inherits vM.m.0's unyt.happ byte-for-byte, verified against happ_sha256 (see documentation/specs/release-patterns/release-pipeline.md + scripts/inherit-ui-release.sh). CI asserts `lineage` equals the tag's major.minor. happ_sha256 is the sha256 of the PUBLISHED vX.Y.0 unyt.happ release asset (unytco/unyt-sandbox); update it when a new lineage's .0 is published.",
-  "lineage": "0.100",
-  "parent_tag": "v0.100.0",
-  "happ_sha256": "6f8fdeb96966d5a219c31adedfb7248226f6cbbd642a5f0ba585e5acd4e68a6f"
+  "lineage": "0.102",
+  "parent_tag": "v0.102.0",
+  "happ_sha256": "f029f0bb082c8fd55c1314abd6bfec9b257ebe4be3bdc5257909a18c9f5a85cb"
 }
