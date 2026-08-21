@@ -14,10 +14,15 @@ REPO="${UNYT_SMOKE_REPO:-${GITHUB_REPOSITORY:-unytco/unyt-sandbox}}"
 # download-release-asset.sh: a typo here silently skips a lane forever, which is
 # the failure this whole file exists to prevent. test-oracle.sh asserts each one
 # appears in the workflow.
-DEB_SUFFIX="linux.deb"
-APPIMAGE_SUFFIX="linux.AppImage"
-EXE_SUFFIX="x64_windows.exe"
-MSI_SUFFIX="x64_windows.msi"
+#
+# ARC-QUALIFIED, and not as decoration: the build ships a default-arc and a
+# zero-arc set whose names differ only in that token, so `linux.deb` matches two
+# assets and download-release-asset.sh refuses the lane rather than smoke an
+# arbitrary variant. The smoke covers default-arc only.
+DEB_SUFFIX="_default-arc_amd64_linux.deb"
+APPIMAGE_SUFFIX="_default-arc_amd64_linux.AppImage"
+EXE_SUFFIX="_default-arc_x64_windows.exe"
+MSI_SUFFIX="_default-arc_x64_windows.msi"
 
 # runner<TAB>arch<TAB>asset-suffix — the macOS matrix, filtered below to the DMGs
 # that exist. Each arch needs its own runner: a check runs the bundle it just
@@ -26,8 +31,8 @@ MSI_SUFFIX="x64_windows.msi"
 # PINNED IMAGES, never macos-latest: an image rollover would change what a
 # release gate tests with no commit to point at. The BUILD deliberately rides
 # macos-latest, so these lanes install on an older macOS than built the artifact.
-MACOS_ROWS="macos-15	aarch64	aarch64_darwin.dmg
-macos-15-intel	x86_64	x64_darwin.dmg"
+MACOS_ROWS="macos-15	aarch64	_default-arc_aarch64_darwin.dmg
+macos-15-intel	x86_64	_default-arc_x64_darwin.dmg"
 
 # kind<TAB>asset-suffix — phase 1's Linux lanes. ONE LANE PER INSTALLER: the .deb
 # and the AppImage install differently, so proving one proves nothing about the
@@ -140,7 +145,15 @@ fi
 # that no suffix claimed is treated as a rename.
 unclaimed=""
 while IFS= read -r name; do
-  case "$name" in
+  # A zero-arc installer has no lane on purpose, so it is judged by the
+  # default-arc name it mirrors. Only while that twin is on the release, though:
+  # an orphan means the twin's build leg failed and its lane skipped, which is
+  # the silence this guard exists to break.
+  probe="${name/_zero-arc_/_default-arc_}"
+  if [ "$probe" != "$name" ] && ! grep -qxF -- "$probe" <<<"$assets"; then
+    probe="$name"
+  fi
+  case "$probe" in
     *"$DEB_SUFFIX" | *"$APPIMAGE_SUFFIX" | *"$EXE_SUFFIX" | *"$MSI_SUFFIX") continue ;;
     # Not an installer at all: the .happ, the .dna, the updater bundles and their
     # signatures all end elsewhere.
@@ -150,7 +163,7 @@ while IFS= read -r name; do
   # The DMGs are claimed by MACOS_ROWS rather than by a constant of their own.
   claimed=false
   while IFS=$'\t' read -r _ _ suffix; do
-    case "$name" in *"$suffix") claimed=true ;; esac
+    case "$probe" in *"$suffix") claimed=true ;; esac
   done <<<"$MACOS_ROWS"
   [ "$claimed" = true ] || unclaimed="${unclaimed:+$unclaimed }$name"
 done <<<"$assets"

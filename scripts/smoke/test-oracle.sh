@@ -948,12 +948,12 @@ EOF
   # three rows over {runner, kind}: a name interpolating only `kind` holds the
   # substring and still renders windows-2022/nsis and windows-2025/nsis
   # identically. So the rows are RESOLVED and the rendered names compared.
-  full_assets='a_linux.deb
-a_linux.AppImage
-a_aarch64_darwin.dmg
-a_x64_darwin.dmg
-a_x64_windows.exe
-a_x64_windows.msi'
+  full_assets='a_default-arc_amd64_linux.deb
+a_default-arc_amd64_linux.AppImage
+a_default-arc_aarch64_darwin.dmg
+a_default-arc_x64_darwin.dmg
+a_default-arc_x64_windows.exe
+a_default-arc_x64_windows.msi'
   inv_out="$(UNYT_SMOKE_ASSETS="$full_assets" bash "$here/release-inventory.sh" 000 2>/dev/null)"
   # <json array> → one row per line, as `key=value;key=value;`
   #
@@ -1290,6 +1290,10 @@ fi
 # ── a tag the msi cannot carry must die in stage 1 ───────────────────────────
 # msi-version.sh is the only thing that rejects a tag the trigger admits: the
 # trigger is a glob, so it takes any `-dev.*`, numeric or not.
+#
+# The arc factors stage 2 builds, read out below and crossed with the real asset
+# names further down: a release carries one set of installers per one of them.
+build_arcs=""
 rel="$here/../../.github/workflows/release-tauri-app.yaml"
 if [ -f "$rel" ]; then
   stage1="$(sed -n '/^  publish-happ:/,/^  release-tauri-app:/p' "$rel")"
@@ -1418,6 +1422,144 @@ if [ -f "$rel" ]; then
     printf 'FAIL  %-58s %s\n' "the macOS build legs no longer roll" \
       "[$build_macos] — pinning what ships is its own decision, not a test change" >&2
   fi
+
+  # EVERY BUILD ROW NAMES ITS ARC FACTOR AND ITS LABEL. `assetNamePattern`
+  # interpolates the arc factor, so a row without one publishes `..._-arc_...`
+  # that no lane claims and the inventory then fails the release; a row without a
+  # label renders the job name its twin renders, and the Checks list stops saying
+  # which variant went red.
+  matrix_rows="$(printf '%s\n' "$stage2" | grep -c '^          - platform:' || true)"
+  arcs="$(printf '%s\n' "$stage2" | sed -n 's/^            arc_factor: *//p' | tr -d '"')"
+  labels="$(printf '%s\n' "$stage2" | sed -n 's/^            label: *//p' | tr -d '"')"
+  build_arcs="$(printf '%s\n' "$arcs" | sort -u)"
+  n_arcs="$(printf '%s\n' "$arcs" | grep -c . || true)"
+  n_labels="$(printf '%s\n' "$labels" | sort -u | grep -c . || true)"
+  if [ "$matrix_rows" -ge 8 ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the build matrix lost a row" \
+      "$matrix_rows row(s); expected 8, four platforms at each of two arc factors" >&2
+  fi
+  if [ "$n_arcs" = "$matrix_rows" ] && [ "$n_labels" = "$matrix_rows" ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a build row has no arc factor, or shares a label" \
+      "$matrix_rows row(s), $n_arcs arc factor(s), $n_labels distinct label(s)" >&2
+  fi
+
+  # THE STEP THAT BUILDS, not the whole job. `assetNamePattern` sitting in some
+  # other step's `with:` satisfies a job-wide search while tauri-action publishes
+  # its own default names, and an `if:` here can be written before `uses:`, so the
+  # slice has to be the step from its `- name:` line.
+  build_step="$(printf '%s\n' "$stage2" | awk '
+    function flush() { if (buf ~ /uses: tauri-apps\/tauri-action/) printf "%s", buf; buf = "" }
+    /^      - / { flush() }
+    { buf = buf $0 "\n" }
+    END { flush() }')"
+
+  # A folded value reads as one string, so rewrapping one cannot change what the
+  # assertions below see. Every occurrence of the key, not just the first.
+  folded_values() { # <slice> <key>
+    printf '%s\n' "$1" | awk -v key="$2" '
+      function flush() { if (buf != "") { print buf; buf = "" } }
+      $0 ~ "^ *" key ":" { flush(); indent = match($0, /[^ ]/); buf = $0; next }
+      buf != "" && match($0, /[^ ]/) > indent { buf = buf " " $0; next }
+      buf != "" { flush() }
+      END { flush() }'
+  }
+
+  # AND THE ASSET NAME CARRIES THAT ARC FACTOR. tauri-action deletes an asset of
+  # the same name before uploading its own, so one literal pattern across all
+  # eight rows leaves the release holding a single set of names whose contents
+  # came from whichever job uploaded each of them last. Nothing else here goes
+  # red for it: those names are exactly the ones every lane expects.
+  #
+  # THE WHOLE NAME IS PINNED, not just the factor in it. release-inventory.sh
+  # resolves every lane by an exact `_<factor>-arc_<arch>_<platform><ext>` suffix,
+  # the README documents the whole shape to the people downloading it, and the
+  # fixture below is the published names rather than anything derived from this
+  # pattern. So a reshaped name has nothing else here to go red.
+  #
+  # `format()` ignores an argument no placeholder uses, so looking only for
+  # `matrix.config.arc_factor` would pass a name hardcoded to `default-arc` that
+  # left the factor behind as an unused argument. Either spelling counts: the
+  # format placeholder, or the expression written straight into the string.
+  #
+  # Spaces come out first, because the expression is folded across three lines
+  # today and rewrapping it must not change this.
+  asset_pattern="$(folded_values "$build_step" assetNamePattern)"
+  squashed_name="$(printf '%s' "$asset_pattern" | tr -d ' ')"
+  if { printf '%s\n' "$squashed_name" |
+         grep -qF -- 'unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]' &&
+       printf '%s\n' "$squashed_name" | grep -qF -- 'matrix.config.arc_factor'; } ||
+     printf '%s\n' "$squashed_name" |
+       grep -qF -- 'unyt_[version]_[name]_${{matrix.config.arc_factor}}-arc_[arch]_[platform][ext]'; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the asset name does not carry the row's arc factor" \
+      "${asset_pattern:-<no assetNamePattern in the tauri-action step>}" >&2
+  fi
+
+  # AND THE CONDUCTOR IS BUILT AT THAT FACTOR. The name is only a label: hardcode
+  # HOLOCHAIN_ARC_FACTOR and the release ships four installers called zero-arc
+  # carrying full-arc nodes, which every check here and the inventory both read as
+  # correct. Every setting of it is checked, not a fixed number of them: the job
+  # env and the step env both carry one today, and dropping the duplicate is not
+  # the defect this is for.
+  arc_envs="$(folded_values "$stage2" HOLOCHAIN_ARC_FACTOR)"
+  n_arc_envs="$(printf '%s\n' "$arc_envs" | grep -c . || true)"
+  n_arc_wired="$(printf '%s\n' "$arc_envs" | grep -cF 'matrix.config.arc_factor' || true)"
+  if [ "$n_arc_envs" -ge 1 ] && [ "$n_arc_wired" = "$n_arc_envs" ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the conductor's arc factor is not read from the row" \
+      "$n_arc_envs HOLOCHAIN_ARC_FACTOR setting(s), $n_arc_wired reading the matrix" >&2
+  fi
+
+  # AND EVERY ROW REACHES IT. A skipped step is green, so an
+  # `if: matrix.config.arc_factor == 'default'` on the build leaves eight rows,
+  # eight labels and eight green jobs, four of which build nothing at all.
+  build_step_if="$(printf '%s\n' "$build_step" | grep -m1 -E '^ *if:' || true)"
+  if [ -n "$build_step" ] && [ -z "$build_step_if" ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "some rows can skip the build and still read green" \
+      "${build_step_if:-<no tauri-action build step found>}" >&2
+  fi
+
+  # THE EXACT SET OF ROWS, not a count of them. A matrix that swapped a zero-arc
+  # row for a second default-arc one satisfies every check above: eight rows,
+  # each with an arc factor, each with its own label. The fixture further down
+  # then synthesises the missing installer out of `build_arcs`, so the inventory
+  # passes too, and a variant just stops being built with nothing red.
+  #
+  # A row is its platform AND its args: two rows run on macos-latest and differ
+  # only by target triple. Bounded to the matrix block, because `args:` is also
+  # the name of the key that hands `matrix.config.args` to the build step. The
+  # bound is the next job-level key of any name, so moving `env:` out from under
+  # the matrix cannot quietly widen the slice into the steps.
+  matrix_targets="$(printf '%s\n' "$stage2" |
+    sed -n '/^      matrix:/,/^    [a-z]/p' | grep -v '^ *#' | awk '
+      /^ *- platform: / { if (p != "") print p "|" a "|" f; p = $3; a = ""; f = ""; next }
+      /^ *args: /       { a = $0; sub(/^ *args: */, "", a); next }
+      /^ *arc_factor: / { f = $2; next }
+      END { if (p != "") print p "|" a "|" f }' | tr -d '"' | LC_ALL=C sort)"
+  want_targets='macos-latest|--target aarch64-apple-darwin|default
+macos-latest|--target aarch64-apple-darwin|zero
+macos-latest|--target x86_64-apple-darwin|default
+macos-latest|--target x86_64-apple-darwin|zero
+ubuntu-22.04|--bundles deb,appimage|default
+ubuntu-22.04|--bundles deb,appimage|zero
+windows-latest||default
+windows-latest||zero'
+  if [ "$matrix_targets" = "$want_targets" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    absent_rows="$(LC_ALL=C comm -13 <(printf '%s\n' "$matrix_targets") \
+      <(printf '%s\n' "$want_targets") | grep -v '^$' | tr '\n' ';')"
+    extra_rows="$(LC_ALL=C comm -23 <(printf '%s\n' "$matrix_targets") \
+      <(printf '%s\n' "$want_targets") | grep -v '^$' | tr '\n' ';')"
+    printf 'FAIL  %-58s %s\n' "the matrix is not four targets at both arc factors" \
+      "missing [${absent_rows:-none}] unexpected [${extra_rows:-none}]; changing what ships is its own decision, so update this list with it" >&2
+  fi
 else
   echo "SKIP  release-tauri-app stage-1 checks (no release-tauri-app.yaml)" >&2
 fi
@@ -1499,12 +1641,12 @@ fi
 inv() { UNYT_SMOKE_ASSETS="$1" bash "$here/release-inventory.sh" 000 2>/dev/null; }
 inv_rc() { UNYT_SMOKE_ASSETS="$1" bash "$here/release-inventory.sh" 000 >/dev/null 2>&1; }
 
-full='x_linux.deb
-x_linux.AppImage
-x_aarch64_darwin.dmg
-x_x64_darwin.dmg
-x_x64_windows.exe
-x_x64_windows.msi'
+full='x_default-arc_amd64_linux.deb
+x_default-arc_amd64_linux.AppImage
+x_default-arc_aarch64_darwin.dmg
+x_default-arc_x64_darwin.dmg
+x_default-arc_x64_windows.exe
+x_default-arc_x64_windows.msi'
 
 got="$(inv "$full")"
 for want in 'deb=true' 'appimage=true' 'exe=true' 'msi=true'; do
@@ -1621,9 +1763,9 @@ x64_windows.exe|exe
 x64_windows.msi|msi
 DROPS
 
-got="$(inv 'x_linuxXdeb
-x_linux.AppImage
-x_x64_windows.exe')"
+got="$(inv 'x_default-arc_amd64_linuxXdeb
+x_default-arc_amd64_linux.AppImage
+x_default-arc_x64_windows.exe')"
 if printf '%s\n' "$got" | grep -qx 'deb=false'; then pass=$((pass + 1)); else
   fail=$((fail + 1))
   printf 'FAIL  %-58s %s\n' "a suffix must match literally, not as a regex" "$got" >&2
@@ -1648,6 +1790,103 @@ if inv_rc ''; then
   printf 'FAIL  %s\n' "an empty asset list must not report a clean inventory" >&2
 else pass=$((pass + 1)); fi
 
+# ── the release the arc-factor matrix actually produces ──────────────────────
+# THE ASSET NAMES ARE THE PUBLISHED ONES, verbatim from v0.101.0, crossed with
+# the arc factors stage 2 builds, which is all `assetNamePattern` varies between
+# two rows. So a fifth matrix row on a new arc factor lands in this fixture on
+# its own, though adding one is still a deliberate change: `want_targets` above
+# names the rows that ship.
+release_extras='alliance.dna
+unyt.happ
+unyt.webhapp'
+release_installers='unyt_0.101.0_Unyt.Sandbox_default-arc_aarch64_darwin.app.tar.gz
+unyt_0.101.0_Unyt.Sandbox_default-arc_aarch64_darwin.dmg
+unyt_0.101.0_Unyt.Sandbox_default-arc_amd64_linux.AppImage
+unyt_0.101.0_Unyt.Sandbox_default-arc_amd64_linux.deb
+unyt_0.101.0_Unyt.Sandbox_default-arc_x64_darwin.app.tar.gz
+unyt_0.101.0_Unyt.Sandbox_default-arc_x64_darwin.dmg
+unyt_0.101.0_Unyt.Sandbox_default-arc_x64_windows.exe
+unyt_0.101.0_Unyt.Sandbox_default-arc_x64_windows.msi'
+shipped="$release_extras"
+for arc in $build_arcs; do
+  shipped="$shipped
+$(printf '%s\n' "$release_installers" | sed "s/default-arc/$arc-arc/g")"
+done
+n_shipped_arcs="$(printf '%s\n' "$shipped" | grep -oE '_[a-z0-9]+-arc_' | sort -u | grep -c . || true)"
+
+# A ONE-VARIANT LIST WOULD PASS EVERY ASSERTION BELOW while proving none of them:
+# it is the release we already had.
+if [ "$n_shipped_arcs" -ge 2 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "the shipped-release fixture carries one arc factor" \
+    "[$(printf '%s' "$build_arcs" | tr '\n' ' ')]: stage 2's matrix was not read" >&2
+fi
+
+if got="$(inv "$shipped")"; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a release carrying every arc factor failed the inventory" \
+    "$(UNYT_SMOKE_ASSETS="$shipped" bash "$here/release-inventory.sh" 000 2>&1 | tail -1)" >&2
+fi
+
+# AND EVERY LANE RESOLVES TO EXACTLY ONE DEFAULT-ARC ASSET. Two matches and
+# download-release-asset.sh refuses the lane by design, so an unqualified suffix
+# is a lane that never runs again on any release. `case`, because this is the
+# `endswith` the downloader itself does.
+lanes="$(printf '%s\n' "$got" | grep -oE '"(asset|suffix)":"[^"]+"' | cut -d'"' -f4 | sort -u)"
+n_lanes="$(printf '%s\n' "$lanes" | grep -c . || true)"
+misresolved=""
+while IFS= read -r suffix; do
+  [ -n "$suffix" ] || continue
+  hits=""
+  while IFS= read -r name; do
+    case "$name" in *"$suffix") hits="${hits:+$hits }$name" ;; esac
+  done <<EOF
+$shipped
+EOF
+  case "$hits" in
+    '' | *' '* | *zero-arc*) misresolved="${misresolved:+$misresolved }$suffix→[${hits:-nothing}]" ;;
+  esac
+done <<EOF
+$lanes
+EOF
+if [ "$n_lanes" -ge 6 ] && [ -z "$misresolved" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a lane does not resolve to one default-arc asset" \
+    "$n_lanes lane suffix(es); ${misresolved:-none misresolved}" >&2
+fi
+
+# THE EXEMPTION IS FOR THE ZERO-ARC NAME, NOT FOR THE ARC TOKEN. A default-arc
+# installer whose arch drifted is still a rename, and its zero-arc twin sitting
+# alongside it must not make it look accounted for.
+if inv_rc "$(printf '%s\n' "$shipped" | sed 's/default-arc_aarch64_darwin/default-arc_arm64_darwin/')"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a renamed default-arc installer read as claimed" \
+    "its lane would silently stop running while the zero-arc twin covered for it" >&2
+else pass=$((pass + 1)); fi
+# And an unsmoked variant is exempt by NAME: only its arc token may differ.
+if inv_rc "$(printf '%s\n' "$shipped" | sed 's/zero-arc_aarch64_darwin/zero-arc_arm64_darwin/')"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "the zero-arc exemption swallowed a renamed asset" \
+    "anything under that token would pass as expected" >&2
+else pass=$((pass + 1)); fi
+# AND ONLY THE ZERO-ARC TOKEN. An exemption written against any `-arc_` token
+# would let a row that drifted to a third arc factor claim the lane's suffix,
+# leaving the lane skipped with nothing red to say so.
+if inv_rc "$shipped
+unyt_0.101.0_Unyt.Sandbox_full-arc_amd64_linux.deb"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "an installer under an unknown arc factor read as claimed" \
+    "the arc token is not a wildcard" >&2
+else pass=$((pass + 1)); fi
+# AND ONLY WHILE THE TWIN IS THERE. A default-arc leg that failed while its
+# zero-arc twin shipped leaves an installer nobody smokes and a lane that
+# skipped, which is the one-artifact-at-a-time silence this guard is for.
+if inv_rc "$(printf '%s\n' "$shipped" | grep -v 'default-arc_amd64_linux.deb')"; then
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "an orphaned zero-arc installer read as claimed" \
+    "its default-arc twin's lane vanished with nothing red to say so" >&2
+else pass=$((pass + 1)); fi
+
 # The real drivers declare real checks. Cheap, and it is what the workflow's
 # `--only <id>` arguments are written against.
 for drv in container-checks.sh container-checks-appimage.sh; do
@@ -1666,11 +1905,11 @@ fi
 
 # A floor on the COUNT, not just on failures: truncate this file and it would
 # otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding cases.
-# DELIBERATELY 3 BELOW a full run of 238: the GLIBC-patch branch costs exactly 2
+# DELIBERATELY 3 BELOW a full run of 251: the GLIBC-patch branch costs exactly 2
 # on a machine that cannot patch a version, and the tie-break's en_US.UTF-8 leg
 # costs 1 where that locale is not generated. Do not "tidy" it up to match.
-if [ "$pass" -lt 235 ]; then
-  echo "::error::only $pass assertions ran; expected at least 235 — the test file is truncated or a block was skipped"
+if [ "$pass" -lt 248 ]; then
+  echo "::error::only $pass assertions ran; expected at least 248. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

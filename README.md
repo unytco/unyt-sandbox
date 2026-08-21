@@ -15,213 +15,49 @@ This repository is the Unyt Sandbox — a starting point on your journey to buil
 
 For full documentation, visit [unyt.co/docs](https://unyt.co/docs/).
 
-## Current Release — Oracles (v0.55.0)
+## Downloads
 
-This release brings **configurable pricing oracles** to Unyt apps, allowing communities to securely bring external pricing data — both crypto and fiat — into their peer-to-peer accounting environments. Participants can view price estimates converted to their preferred currency, and dynamic smart agreements can react to external market data.
+Take your installer from the [latest release](https://github.com/unytco/unyt-sandbox/releases/latest). Every build, including the older ones, is on the [Releases page](https://github.com/unytco/unyt-sandbox/releases).
 
-For full details, see the [Oracles Release Documentation](./release_docs/oracles_v0.55.0.md).
+Each release ships the same app in two variants. You can run either.
 
-Also check out the [Oracles blog post](https://unyt.co/blog/oracles:-blockchain-token-and-forex-pricing-in-unyt-apps/).
+1. The **default-arc** version is a full arc node: it holds a full copy of the DHT locally, synchronizing all data being published.
+2. The **zero-arc** version is lighter weight to run (which will be good for mobile phones, for example) because it only holds your own history, and caches some other network data, but some actions will be slower because you'll need to fetch data from peers on the network. It gossips and validates like any other node. It simply stores no shard of the DHT.
 
-## Downloads — v0.55.0
+Take default-arc unless you want the lighter one.
 
-The current release ships two pre-configured apps. You can run either or both.
+### Reading an installer's name
 
-- **Holo Hosting** — Configured to demonstrate what a Holo Hosting Unyt app might look like. Includes smart agreements for proof-of-service billing, invoicing, and service unit accounting. Also demonstrates bridging to the Infrastructure Marketplace Unyt app, blockchain bridging with HOT (EVM) tokens, multi-currency atomic trades, and cross-network value exchange.
-- **Infrastructure Marketplace** — Configured for trading between monetary currencies from multiple external sources. Bridges to the Holo Hosting Unyt app.
+Every installer is named for what it is, so you can pick yours from the filename alone:
 
-Select from two versions of each app to download.
+```
+unyt_<version>_Unyt.Sandbox_<variant>_<architecture>_<platform><extension>
+```
 
-1. The **Full-Arc** version holds a full copy of the DHT locally, synchronizing all data being published.
-2. The **Zero-Arc** version is lighter weight to run (which will be good for mobile phones, for example) because it only holds your own history, and caches some other network data, but some actions will be slower because you'll need to fetch data from peers on the network.
+| Part | Values |
+| --- | --- |
+| `<variant>` | `default-arc`, `zero-arc` |
+| `<architecture>` | `aarch64` for Apple Silicon, `x64` for 64-bit Intel or AMD on macOS and Windows, `amd64` for the same on Linux |
+| `<platform>` | `darwin` for macOS, `linux`, `windows` |
+| `<extension>` | macOS `.dmg`, Linux `.deb` or `.AppImage`, Windows `.exe` (setup) or `.msi` |
 
----
+A release also carries assets that are not installers: the `.app.tar.gz` bundles, which the app's own updater uses, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. Installing Unyt needs none of them.
 
-### Holo Hosting
+### On Linux, swapping between the two variants
 
-#### Zero-Arc Releases
+Both variants install as the package `unyt-sandbox` at the same version. With either one already installed, `apt install ./unyt_..._linux.deb` finds that version present, changes nothing and exits 0. A graphical software centre installs through the same package manager, so it does nothing either. To actually swap, install the .deb directly:
 
-<div align="center">
+```sh
+sudo dpkg -i ./unyt_*_zero-arc_amd64_linux.deb
+```
 
-<table>
-<tr>
-<td width="33%" align="center">
+or make apt reinstall it:
 
-##### **Windows**
+```sh
+sudo apt install --reinstall ./unyt_*_zero-arc_amd64_linux.deb
+```
 
----
-
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_0-arc_x64_windows.msi)
-
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_0-arc_x64_windows.exe)
-
-</td>
-<td width="25%" align="center">
-
-##### **MacOS**
-
----
-
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_0-arc_aarch64_darwin.dmg)
-
-[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_0-arc_x64_darwin.dmg)
-
-</td>
-<td width="25%" align="center">
-
-##### **Linux**
-
----
-
-[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_0-arc_amd64_linux.AppImage)
-
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_0-arc_amd64_linux.deb)
-
-</td>
-</tr>
-</table>
-
-</div>
-
-#### Full-Arc Releases
-
-<div align="center">
-
-<table>
-<tr>
-<td width="33%" align="center">
-
-##### **Windows**
-
----
-
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_default-arc_x64_windows.msi)
-
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_default-arc_x64_windows.exe)
-
-</td>
-<td width="25%" align="center">
-
-##### **MacOS**
-
----
-
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_default-arc_aarch64_darwin.dmg)
-
-[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_default-arc_x64_darwin.dmg)
-
-</td>
-<td width="25%" align="center">
-
-##### **Linux**
-
----
-
-[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_default-arc_amd64_linux.AppImage)
-
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Holo.Hosting_default-arc_amd64_linux.deb)
-
-</td>
-</tr>
-</table>
-
-</div>
-
----
-
-### Infrastructure Marketplace
-
-#### Zero-Arc Releases
-
-<div align="center">
-
-<table>
-<tr>
-<td width="33%" align="center">
-
-##### **Windows**
-
----
-
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_0-arc_x64_windows.msi)
-
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_0-arc_x64_windows.exe)
-
-</td>
-<td width="25%" align="center">
-
-##### **MacOS**
-
----
-
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_0-arc_aarch64_darwin.dmg)
-
-[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_0-arc_x64_darwin.dmg)
-
-</td>
-<td width="25%" align="center">
-
-##### **Linux**
-
----
-
-[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_0-arc_amd64_linux.AppImage)
-
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_0-arc_amd64_linux.deb)
-
-</td>
-</tr>
-</table>
-
-</div>
-
-#### Full-Arc Releases
-
-<div align="center">
-
-<table>
-<tr>
-<td width="33%" align="center">
-
-##### **Windows**
-
----
-
-[MSI Installer (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_default-arc_x64_windows.msi)
-
-[EXE Setup (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_default-arc_x64_windows.exe)
-
-</td>
-<td width="25%" align="center">
-
-##### **MacOS**
-
----
-
-[Silicon (arm64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_default-arc_aarch64_darwin.dmg)
-
-[Intel (x64)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_default-arc_x64_darwin.dmg)
-
-</td>
-<td width="25%" align="center">
-
-##### **Linux**
-
----
-
-[AppImage](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_default-arc_amd64_linux.AppImage)
-
-[Debian (.deb)](https://github.com/unytco/unyt-sandbox/releases/download/v0.55.0/unyt_0.55.0_Infrastructure.Marketplace_default-arc_amd64_linux.deb)
-
-</td>
-</tr>
-</table>
-
-</div>
-
----
-
-All available versions can be found in the [Releases](https://github.com/unytco/unyt-sandbox/releases/)
+The AppImage has none of this. Each file runs on its own.
 
 Once installed, the Unyt software will run locally on your device and connect with others also running the software to operate as a peer-to-peer application.
 
@@ -235,10 +71,13 @@ When you open Unyt on your operating system for the first time, it will create a
 
 ## Past Releases
 
-- [Blockchain Bridging — v0.54.0](./release_docs/blockchain_bridging_v0.54.0.md) — Bridge EVM blockchain tokens into Unyt. Lock ERC-20 tokens on-chain and mirror them into a peer-to-peer environment with smart agreements, customizable fees, and direct trading.
-- [Unyt Bridging — v0.50.0](./release_docs/unyt_bridging_v0.50.0.md) — Cross-application bridging and mirroring between independent Unyt Accounting Apps, plus bi-directional multi-unit payments.
-- [Rideshare — v0.42.0](./release_docs/rideshare_v0.42.0.md) — Multi-unit accounting demonstrated through regional rideshare groups with custom price sheets and service unit accounting.
-- [Smart Agreements — v0.40.0](./release_docs/smart_agreements_v0.40.0.md) — Introduction to Unyt's programmable Smart Agreements for automating economic logic.
+Each of these describes one release, and its download links stay pinned to that version.
+
+- [Oracles v0.55.0](./release_docs/oracles_v0.55.0.md): configurable pricing oracles, bringing external crypto and fiat pricing data into a Unyt app. Participants see price estimates in their preferred currency, and dynamic smart agreements can react to market data. There is also an [Oracles blog post](https://unyt.co/blog/oracles:-blockchain-token-and-forex-pricing-in-unyt-apps/).
+- [Blockchain Bridging v0.54.0](./release_docs/blockchain_bridging_v0.54.0.md): bridge EVM blockchain tokens into Unyt. Lock ERC-20 tokens on-chain and mirror them into a peer-to-peer environment with smart agreements, customizable fees, and direct trading.
+- [Unyt Bridging v0.50.0](./release_docs/unyt_bridging_v0.50.0.md): cross-application bridging and mirroring between independent Unyt Accounting Apps, plus bi-directional multi-unit payments.
+- [Rideshare v0.42.0](./release_docs/rideshare_v0.42.0.md): multi-unit accounting demonstrated through regional rideshare groups with custom price sheets and service unit accounting.
+- [Smart Agreements v0.40.0](./release_docs/smart_agreements_v0.40.0.md): introduction to Unyt's programmable Smart Agreements for automating economic logic.
 
 ## Related Resources
 

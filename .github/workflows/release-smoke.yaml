@@ -429,7 +429,7 @@ jobs:
           RELEASE: ${{ inputs.release }}
         run: |
           deb="$(bash scripts/smoke/download-release-asset.sh \
-            "$RELEASE" linux.deb "$RUNNER_TEMP/artifacts")"
+            "$RELEASE" _default-arc_amd64_linux.deb "$RUNNER_TEMP/artifacts")"
           echo "DEB=$deb" >> "$GITHUB_ENV"
 
       - name: Download the released AppImage
@@ -440,7 +440,7 @@ jobs:
           RELEASE: ${{ inputs.release }}
         run: |
           appimage="$(bash scripts/smoke/download-release-asset.sh \
-            "$RELEASE" linux.AppImage "$RUNNER_TEMP/artifacts")"
+            "$RELEASE" _default-arc_amd64_linux.AppImage "$RUNNER_TEMP/artifacts")"
           echo "APPIMAGE=$appimage" >> "$GITHUB_ENV"
 
       # ── the .deb ────────────────────────────────────────────────────────────
@@ -762,7 +762,7 @@ jobs:
           # Git Bash: `mkdir -p 'D:\a\_temp/x'` makes ONE dir with backslashes.
           out="${RUNNER_TEMP//\\//}/artifacts"
           exe="$(bash scripts/smoke/download-release-asset.sh \
-            "$RELEASE" x64_windows.exe "$out")"
+            "$RELEASE" _default-arc_x64_windows.exe "$out")"
           echo "EXE=$exe" >> "$GITHUB_ENV"
 
       - name: Download the released MSI
@@ -775,7 +775,7 @@ jobs:
         run: |
           out="${RUNNER_TEMP//\\//}/artifacts"
           msi="$(bash scripts/smoke/download-release-asset.sh \
-            "$RELEASE" x64_windows.msi "$out")"
+            "$RELEASE" _default-arc_x64_windows.msi "$out")"
           echo "MSI=$msi" >> "$GITHUB_ENV"
 
       # `pwsh -File`: the only form whose exit status is the script's own.
