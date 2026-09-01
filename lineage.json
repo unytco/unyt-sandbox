@@ -1,6 +1,6 @@
 {
   "_comment": "Per-lineage pin for UI (patch) releases. A vM.m.p build with p>0 inherits vM.m.0's unyt.happ and unyt_cli byte-for-byte, verified against happ_sha256 / cli_sha256 (see documentation/specs/release-patterns/release-pipeline.md + scripts/inherit-ui-release.sh). CI asserts `lineage` equals the tag's major.minor. Both digests are of the PUBLISHED vX.Y.0 release assets (unytco/unyt-sandbox); update them when a new lineage's .0 is published. unyt_cli is pinned because it compiles the rave_engine payload types and the smart_agreement_library templates into the binary, so it is only valid against its own lineage's DNA.",
-  "lineage": "0.103",
-  "parent_tag": "v0.103.0",
-  "happ_sha256": "5a28dbe21e5e4194b6dee41c722dd920280b953ba2087d150b9115d2c36dfd08"
+  "lineage": "0.104",
+  "parent_tag": "v0.104.0",
+  "happ_sha256": "6f03f9416b0279e52f673968faf188a16dde620ae9c0425049397e8eb0e890a5"
 }
