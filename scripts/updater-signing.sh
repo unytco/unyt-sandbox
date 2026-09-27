@@ -20,12 +20,19 @@ if [ -z "$updater" ]; then
   exit 0
 fi
 
+# Base64 over a minisign public key file: a comment line, then base64 of "Ed", an 8-byte key id and
+# the 32-byte key.
+is_minisign_pubkey() {
+  local text key
+  text="$(printf '%s' "$1" | base64 -d 2>/dev/null)" || return 1
+  [[ "$(sed -n 1p <<<"$text")" == "untrusted comment: "* ]] || return 1
+  key="$(sed -n 2p <<<"$text" | base64 -d 2>/dev/null | od -An -tx1 | tr -d ' \n')" || return 1
+  [ "${#key}" -eq 84 ] && [ "${key:0:4}" = 4564 ]
+}
+
 pubkey="$(jq -r '.pubkey // empty' <<<"$updater")"
-decoded="$(printf '%s' "$pubkey" | base64 -d 2>/dev/null || true)"
-case "$decoded" in
-  "untrusted comment: minisign public key"*) ;;
-  *) fail "plugins.updater.pubkey in $CONF is not a minisign public key: pin the one \`cargo tauri signer generate\` printed" ;;
-esac
+is_minisign_pubkey "$pubkey" ||
+  fail "plugins.updater.pubkey in $CONF is not a minisign public key: pin the one \`cargo tauri signer generate\` printed"
 [ "${HAS_SIGNING_KEY:-}" = true ] ||
   fail "$CONF pins an updater public key but the TAURI_SIGNING_PRIVATE_KEY secret is not set"
 

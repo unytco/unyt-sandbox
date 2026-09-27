@@ -18,7 +18,7 @@ Application-level changes belong in
 - **Static checks of what each artifact is:** install and uninstall, version, binary compatibility and declared dependencies in pristine distro containers; signing, notarization, architecture and deployment target on macOS. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
 - **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
 - Zero-arc installers ship alongside the default-arc ones, on all four platforms.
-- **A release signs its desktop installers for the app's Update now, with one update manifest per arc factor.**
+- **When the pinned app declares an updater, a release carries updater signatures and one update manifest per arc factor for the app's Update now.** The installers themselves are signed no differently.
 
 ### Changed
 
