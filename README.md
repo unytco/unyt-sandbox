@@ -41,7 +41,7 @@ unyt_<version>_Unyt.Sandbox_<variant>_<architecture>_<platform><extension>
 | `<platform>` | `darwin` for macOS, `linux`, `windows` |
 | `<extension>` | macOS `.dmg`, Linux `.deb` or `.AppImage`, Windows `.exe` (setup) or `.msi` |
 
-A release also carries assets that are not installers: the `.app.tar.gz` bundles, which the app's own updater uses, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. Installing Unyt needs none of them.
+A release also carries assets that are not installers: the `.app.tar.gz` bundles, the `.sig` signatures and the `updater-default-arc.json` and `updater-zero-arc.json` manifests, which the app's Update now uses, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. Installing Unyt needs none of them.
 
 ### On Linux, swapping between the two variants
 

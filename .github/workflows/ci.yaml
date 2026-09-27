@@ -108,6 +108,9 @@ jobs:
       - name: "the smoke oracle"
         run: bash scripts/smoke/test-oracle.sh
 
+      - name: "the updater scripts"
+        run: bash scripts/test-updater.sh
+
       # BOTH WAYS, and the second is the one that matters: a bare run mints a temp
       # directory per invocation, which is what hid a harness writing into the
       # release's own state and results files.
