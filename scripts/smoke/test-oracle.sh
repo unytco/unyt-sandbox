@@ -1585,7 +1585,7 @@ for f in "$here"/../../.github/workflows/*.y*ml; do
       movable) movable="${movable:+$movable }$where" ;;
       pinned) pinned=$((pinned + 1)) ;;
     esac
-  done < <(awk -v file="$(basename "$f")" -v sq="'" '
+  done < <(awk -v file="$(basename "$f")" -v secrets="$(grep -c 'secrets\.' "$f" || true)" -v sq="'" '
     # THE PAT MUST NOT OUTLIVE THE CHECKOUT: actions/checkout writes the token it
     # is handed into .git/config and leaves it readable there for every later
     # step of the job. Steps, not lines — a file-wide grep would pair the
@@ -1600,13 +1600,14 @@ for f in "$here"/../../.github/workflows/*.y*ml; do
     line ~ /^[[:space:]]*- / { flush(); start = NR }
     { buf = buf line "\n" }
     line ~ /uses:[[:space:]]*actions\/checkout@/ { checkout = 1 }
-    # AND WHAT THE RELEASE RUNS COMES FROM A COMMIT: every action there holds the
-    # PAT that edits the release or the key that signs its updates, and a tag
-    # can be moved under us. The rust toolchain is pinned wherever it runs, as a
-    # ref that moves changes which compiler builds what users install.
+    # AND WHAT A WORKFLOW HOLDING A SECRET RUNS COMES FROM A COMMIT: the release
+    # workflows hold the PAT that edits a release and the key that signs its
+    # updates, and a tag can be moved under us. The rust toolchain is pinned
+    # wherever it runs, as a ref that moves changes which compiler builds what
+    # users install.
     # Length and charset, never a {40} interval — mawk 1.3.3 has no intervals.
     line ~ /uses:[[:space:]]*[^.[:space:]]/ &&
-      (file == "release-tauri-app.yaml" || line ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) {
+      (secrets > 0 || line ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) {
       ref = line
       sub(/.*@/, "", ref)
       sub(/[[:space:]].*$/, "", ref)
@@ -1632,7 +1633,7 @@ fi
 # Both directions: an unpinned ref anywhere, and the pinned step having gone.
 if [ -z "$movable" ] && [ "$pinned" -gt 0 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1))
-  printf 'FAIL  %-58s %s\n' "an action the release runs rides a ref that can move" \
+  printf 'FAIL  %-58s %s\n' "an action beside a secret rides a ref that can move" \
     "${movable:-no action is pinned to a commit any more}" >&2
 fi
 
