@@ -16,6 +16,8 @@ jobs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
+      signedUpdates: ${{ steps.updater.outputs.enabled }}
+      updaterPubkey: ${{ steps.updater.outputs.pubkey }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,6 +45,12 @@ jobs:
         run: |
           APP_VERSION="$(bash scripts/check-version-contract.sh "$TAG")"
           echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether this release signs its updates
+        id: updater
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: bash scripts/updater-signing.sh unyt/src-tauri/tauri.conf.json >> "$GITHUB_OUTPUT"
 
       - name: Resolve release kind (tag patch → migration | UI)
         id: kind
@@ -260,6 +268,16 @@ jobs:
           jq --arg v "$MSI_VERSION" '.bundle.windows.wix.version = $v' "$conf" >"$conf.tmp"
           mv "$conf.tmp" "$conf"
 
+      - name: Turn on signed updater artifacts
+        # Written here, never committed: the bundler refuses to build without the signing key once
+        # this is on, and no local build holds it.
+        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        shell: bash
+        run: |
+          conf=unyt/src-tauri/tauri.conf.json
+          jq '.bundle.createUpdaterArtifacts = true' "$conf" >"$conf.tmp"
+          mv "$conf.tmp" "$conf"
+
       - name: Free disk before the build (linux)
         # The number to size a fix from when this ENOSPCs. No RUSTFLAGS strip alongside it:
         # that changes the binary users get, not just what CI costs.
@@ -276,6 +294,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
           VITE_COMMIT_SHA: Unyt-Sandbox-${{ needs.publish-happ.outputs.appVersion }}-${{
             matrix.config.arc_factor }}-arc
@@ -290,6 +309,8 @@ jobs:
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.config.args }}
+          # updater-manifests below writes one per arc factor instead.
+          includeUpdaterJson: false
           assetNamePattern: ${{
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
@@ -297,6 +318,38 @@ jobs:
       - name: Free disk when the job ends (linux)
         if: always() && matrix.config.platform == 'ubuntu-22.04'
         run: df -h /
+
+  updater-manifests:
+    name: "Stage 2: updater manifests"
+    needs: [publish-happ, release-tauri-app]
+    # Past a failed build too, so the platform it left unsigned is named rather than skipped.
+    if: ${{ !cancelled() && needs.publish-happ.outputs.signedUpdates == 'true' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install minisign
+        run: bash scripts/install-minisign.sh
+
+      - name: Publish one manifest per arc factor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
+          PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
+        run: |
+          mkdir assets manifests
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir assets
+          for sig in assets/*.sig; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
+              --pattern "$(basename "$sig" .sig)"
+          done
+          bash scripts/updater-manifests.sh "$TAG" "$APP_VERSION" "$PUBKEY" assets manifests
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber manifests/*.json
 
   # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
   # human publishes it, so the run's colour is what tells them. Phase 2 keeps the
