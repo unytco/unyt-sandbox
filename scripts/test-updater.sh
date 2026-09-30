@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# updater-signing.sh and updater-manifests.sh against fixtures signed with throwaway minisign keys.
-# Needs minisign on PATH (install-minisign.sh).
+# updater-signing.sh, updater-sign.sh and updater-manifests.sh against fixtures signed with throwaway
+# keys. Needs minisign on PATH (install-minisign.sh), and npx for the Tauri signer.
 set -euo pipefail
 
 command -v minisign >/dev/null || {
@@ -73,7 +73,7 @@ check "a pinned key with its secret signs, and hands the key on" \
 targets="linux-x86_64-deb:amd64_linux.deb linux-x86_64-appimage:amd64_linux.AppImage
 darwin-aarch64-app:aarch64_darwin.app.tar.gz darwin-x86_64-app:x64_darwin.app.tar.gz
 windows-x86_64-msi:x64_windows.msi windows-x86_64-nsis:x64_windows.exe"
-asset() { echo "unyt_1.2.3_Unyt.Sandbox_$1-arc_$2"; } # <arc> <suffix>
+asset() { echo "unyt_1.2.3_Unyt_$1-arc_$2"; } # <arc> <suffix>
 sign() { # <dir> <asset> [<key> [<trusted comment>]]
   local name="$2"
   [ -f "$1/$name" ] || printf 'the %s artifact' "$name" >"$1/$name"
@@ -88,9 +88,9 @@ release() { # <dir>
     for t in $targets; do sign "$1" "$(asset "$arc" "${t#*:}")"; done
   done
 }
-manifests() { # <asset-dir> <out-dir>
+manifests() { # <asset-dir> <out-dir> [<pubkey>]
   mkdir -p "$2"
-  env -u GITHUB_REPOSITORY bash "$here/updater-manifests.sh" v1.2.3 1.2.3 "$(pubkey ours)" "$1" "$2"
+  env -u GITHUB_REPOSITORY bash "$here/updater-manifests.sh" v1.2.3 1.2.3 "${3:-$(pubkey ours)}" "$1" "$2"
 }
 
 release "$tmp/full"
@@ -110,32 +110,93 @@ for arc in default zero; do
   done
 done
 
-refused() { # <description> <error text> <setup...>
+# Stands in for npx, so a refusal is proven to come before anything is signed.
+mkdir "$tmp/stub"
+printf '#!/bin/sh\ntouch "$0.called"\nexit 1\n' >"$tmp/stub/npx"
+chmod +x "$tmp/stub/npx"
+signs_nothing() { # <error text> <asset-dir>
+  rm -f "$tmp/stub/npx.called"
+  refuses "$1" env PATH="$tmp/stub:$PATH" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$2" &&
+    [ ! -e "$tmp/stub/npx.called" ]
+}
+refused() { # <description> <error text> <setup> [signing]
   local what="$1" want="$2" dir="$tmp/case$((pass + fail))"
-  shift 2
   release "$dir"
-  "$@" "$dir"
+  "$3" "$dir"
   check "$what" refuses "$want" manifests "$dir" "$dir.out"
+  [ "${4:-}" != signing ] || check "$what, and nothing is signed" signs_nothing "$want" "$dir"
 }
 drop_sig() { rm "$1/$(asset zero x64_windows.msi).sig"; }
 drop_artifact() { rm "$1/$(asset default x64_darwin.app.tar.gz)"; }
 other_key() { sign "$1" "$(asset default amd64_linux.deb)" other; }
 tampered() { printf 'x' >>"$1/$(asset zero amd64_linux.AppImage)"; }
 swapped() { cp "$1/$(asset default amd64_linux.deb).sig" "$1/$(asset default amd64_linux.AppImage).sig"; }
-stale() { sign "$1" "$(asset zero x64_windows.msi)" ours "timestamp:0	file:x	version:1.2.2"; }
-unversioned() { sign "$1" "$(asset default x64_windows.exe)" ours "timestamp:0	file:x"; }
+stale() { sign "$1" "$(asset zero x64_windows.msi)" ours "timestamp:0	file:$(asset zero x64_windows.msi)	version:1.2.2"; }
+unversioned() { sign "$1" "$(asset default x64_windows.exe)" ours "timestamp:0	file:$(asset default x64_windows.exe)"; }
 doubled() { sign "$1" "unyt_1.2.3_Other.Name_default-arc_amd64_linux.deb"; }
+legacy() {
+  local name; name="$(asset default amd64_linux.AppImage)"
+  minisign -S -l -s "$tmp/ours.key" -m "$1/$name" -x "$tmp/sig" -t "timestamp:0	file:$name	version:1.2.3" >/dev/null
+  base64 -w0 <"$tmp/sig" >"$1/$name.sig"
+}
+garbled() { printf '*' >>"$1/$(asset zero amd64_linux.deb).sig"; }
+published_as() { cp "$1" "$2" && cp "$1.sig" "$2.sig"; } # <signed artifact> <asset path>
+bundler_named() {
+  sign "$tmp" Unyt_1.2.3_amd64.AppImage
+  published_as "$tmp/Unyt_1.2.3_amd64.AppImage" "$1/$(asset default amd64_linux.AppImage)"
+}
+other_arc() { published_as "$1/$(asset zero amd64_linux.AppImage)" "$1/$(asset default amd64_linux.AppImage)"; }
+other_installer() { published_as "$1/$(asset default amd64_linux.deb)" "$1/$(asset default amd64_linux.AppImage)"; }
 
 refused "a missing signature fails rather than drop a platform" \
   "no zero-arc signature ending in x64_windows.msi.sig" drop_sig
-refused "a signature whose artifact is not on the release fails" "is not on the release" drop_artifact
-refused "a signature by a key the app does not pin fails" "with the key the app pins" other_key
-refused "an artifact changed after signing fails" "with the key the app pins" tampered
-refused "a signature paired with another artifact fails" "with the key the app pins" swapped
-refused "a signature for another version fails" "is not signed for 1.2.3" stale
-refused "a signature that names no version fails" "is not signed for 1.2.3" unversioned
+refused "a signature whose artifact is not on the release fails" "is not on the release" \
+  drop_artifact signing
+refused "a signature by a key the app does not pin fails" "with the key the app pins" other_key signing
+refused "an artifact changed after signing fails" "with the key the app pins" tampered signing
+refused "a signature paired with another artifact fails" "with the key the app pins" swapped signing
+refused "a signature for another version fails" "is not signed for 1.2.3" stale signing
+refused "a signature that names no version fails" "is not signed for 1.2.3" unversioned signing
 refused "two signatures for one platform fail" \
   "2 default-arc signatures end in amd64_linux.deb.sig" doubled
+refused "a signature in minisign's legacy mode fails" "Legacy (non-prehashed) signature found" \
+  legacy signing
+refused "a signature that is not base64 fails" "is not base64" garbled signing
+check "a pinned key that is not base64 fails the release" \
+  refuses "the pinned public key is not base64" manifests "$tmp/full" "$tmp/badkey.out" "*"
+refused "a signature under the bundler's name fails the manifests" "is signed for another file" \
+  bundler_named
+refused "a signature naming the other arc's asset fails the manifests" \
+  "is signed for another file" other_arc
+refused "a signature naming another installer's asset fails the manifests" \
+  "is signed for another file" other_installer
+
+mkdir -p "$tmp/unsigned"
+check "signing a release with no signatures fails" \
+  refuses "no signatures in" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$tmp/unsigned"
+
+# A release as tauri-action publishes it: the bundler signs both arc factors' builds under one file
+# name, and the upload renames them.
+tauri() { npx --yes @tauri-apps/cli@2.11.5 "$@"; }
+tauri signer generate --ci -p test -w "$tmp/tauri.key" >/dev/null
+with_key() { TAURI_SIGNING_PRIVATE_KEY="$(cat "$tmp/tauri.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=test "$@"; }
+mkdir -p "$tmp/bundle" "$tmp/bundled"
+for arc in default zero; do
+  for t in $targets; do
+    built="$tmp/bundle/Unyt_1.2.3_${t#*:}"
+    printf 'the %s-arc %s build' "$arc" "${t#*:}" >"$built"
+    with_key tauri signer sign --app-version 1.2.3 "$built" >/dev/null
+    published_as "$built" "$tmp/bundled/$(asset "$arc" "${t#*:}")"
+  done
+done
+check "a release as tauri-action publishes it fails" refuses "is signed for another file" \
+  manifests "$tmp/bundled" "$tmp/bundled.out" "$(cat "$tmp/tauri.key.pub")"
+signed_and_published() { # <pubkey>
+  with_key bash "$here/updater-sign.sh" 1.2.3 "$1" "$tmp/bundled" &&
+    manifests "$tmp/bundled" "$tmp/bundled.out" "$1"
+}
+check "signed by the Tauri signer under its asset names, it publishes its manifests" \
+  signed_and_published "$(cat "$tmp/tauri.key.pub")"
 
 echo "updater scripts: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

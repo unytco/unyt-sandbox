@@ -335,12 +335,18 @@ jobs:
       - name: Install minisign
         run: bash scripts/install-minisign.sh
 
-      - name: Publish one manifest per arc factor
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Sign under the asset names and publish one manifest per arc factor
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
           PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           mkdir assets manifests
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir assets
@@ -348,8 +354,9 @@ jobs:
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
               --pattern "$(basename "$sig" .sig)"
           done
+          bash scripts/updater-sign.sh "$APP_VERSION" "$PUBKEY" assets
           bash scripts/updater-manifests.sh "$TAG" "$APP_VERSION" "$PUBKEY" assets manifests
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber manifests/*.json
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.sig manifests/*.json
 
   # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
   # human publishes it, so the run's colour is what tells them. Phase 2 keeps the

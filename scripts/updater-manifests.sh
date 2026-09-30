@@ -8,6 +8,9 @@
 # One per arc factor so a build is only ever offered its own variant: tauri-action's single
 # latest.json keeps whichever arc's build uploaded last.
 set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=updater-verify.sh
+. "$here/updater-verify.sh"
 
 usage="usage: updater-manifests.sh <tag> <version> <pubkey> <asset-dir> <out-dir>"
 TAG="${1:?$usage}"
@@ -27,28 +30,15 @@ _x64_darwin.app.tar.gz.sig	darwin-x86_64-app
 _x64_windows.msi.sig	windows-x86_64-msi
 _x64_windows.exe.sig	windows-x86_64-nsis"
 
-fail() {
-  echo "::error::$*" >&2
-  exit 1
-}
-
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-printf '%s' "$PUBKEY" | base64 -d >"$tmp/pinned.pub" 2>/dev/null ||
-  fail "the pinned public key is not base64"
-
-# The app refuses an artifact the pinned key did not sign, or signed for another version, while the
-# bundler at most warns about either, so the release would go green with every update refused.
+# The app refuses an artifact unless the pinned key signed it for this version under its asset name.
+# Neither the bundler nor the Tauri signer checks any of that, so the release would otherwise go green
+# with updates the app refuses.
 for sig in "$ASSETS"/*.sig; do
   [ -e "$sig" ] || fail "no signatures in $ASSETS"
   name="$(basename "$sig" .sig)"
-  [ -f "$ASSETS/$name" ] || fail "$name, which $name.sig signs, is not on the release"
-  base64 -d <"$sig" >"$tmp/minisig" 2>/dev/null || fail "$name.sig is not base64"
-  verified="$(minisign -Vm "$ASSETS/$name" -x "$tmp/minisig" -p "$tmp/pinned.pub" 2>&1)" ||
-    fail "$name.sig does not verify $name with the key the app pins: $(tr '\n' ' ' <<<"$verified")"
-  comment="$(sed -n 's/^Trusted comment: //p' <<<"$verified")"
-  [ "$(tr '\t' '\n' <<<"$comment" | sed -n 's/^version://p')" = "$VERSION" ] ||
-    fail "$name.sig is not signed for $VERSION, so the app would refuse it"
+  fields="$(signed_fields "$ASSETS" "$name" "$PUBKEY" "$VERSION")"
+  [ "$(sed -n 's/^file://p' <<<"$fields")" = "$name" ] ||
+    fail "$name.sig is signed for another file, so the app would refuse it"
 done
 
 for arc in default zero; do

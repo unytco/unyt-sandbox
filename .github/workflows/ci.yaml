@@ -111,6 +111,10 @@ jobs:
       - name: Install minisign
         run: bash scripts/install-minisign.sh
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: "the updater scripts"
         run: bash scripts/test-updater.sh
 
