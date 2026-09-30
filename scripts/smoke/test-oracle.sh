@@ -1791,11 +1791,11 @@ if inv_rc ''; then
 else pass=$((pass + 1)); fi
 
 # ── the release the arc-factor matrix actually produces ──────────────────────
-# THE ASSET NAMES ARE THE PUBLISHED ONES, verbatim from v0.101.0, crossed with
-# the arc factors stage 2 builds, which is all `assetNamePattern` varies between
-# two rows. So a fifth matrix row on a new arc factor lands in this fixture on
-# its own, though adding one is still a deliberate change: `want_targets` above
-# names the rows that ship.
+# THE ASSET NAMES ARE THE PUBLISHED ONES, v0.101.0's under today's product name,
+# crossed with the arc factors stage 2 builds, which is all `assetNamePattern`
+# varies between two rows. So a fifth matrix row on a new arc factor lands in
+# this fixture on its own, though adding one is still a deliberate change:
+# `want_targets` above names the rows that ship.
 release_extras='alliance.dna
 unyt.happ
 unyt.webhapp'

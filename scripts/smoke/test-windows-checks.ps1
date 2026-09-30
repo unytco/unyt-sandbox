@@ -569,7 +569,7 @@ try {
   # so a lossy serialisation reports a perfectly good install as broken.
   $stateRound = Join-Path $root 'state-roundtrip'
   # The shape a real registry read produces: every field present, some of them
-  # $null, and a path with a space in it (a profile folder named with one).
+  # $null, and a path with a space in it (a user profile folder with a space in its name).
   $spaced = [PSCustomObject]@{
     KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt'
     DisplayName          = 'Unyt'
@@ -678,7 +678,7 @@ try {
 
   # The real call site is TWO processes: what check 3 writes, check 5 reads
   # having never seen it. The whole handoff minus the install itself.
-  $installed = Join-Path $root 'handoff/Unyt'
+  $installed = Join-Path $root 'handoff/Program Files/Unyt'
   New-Item -ItemType Directory -Path $installed -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $installed 'unyt-app.exe') -Value 'x'
   # Named like a release asset and never executed: -Only executable reads the

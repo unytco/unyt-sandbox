@@ -125,8 +125,7 @@ case "${1:-}" in
     mkdir -p "$mp"
     if [ "${STUB_BREAK:-}" = noapp ]; then echo "read me" >"$mp/README.txt"; exit 0; fi
     # A glob, not `mnt/.`: BSD cp does not treat a trailing `/.` as "the
-    # contents of" the way GNU cp does. Glob matches are not word-split, so a
-    # space in a bundle name is safe.
+    # contents of" the way GNU cp does.
     cp -a "$STUB_FIXTURE/mnt/"* "$mp/"
     exit 0 ;;
   detach) exit 0 ;;

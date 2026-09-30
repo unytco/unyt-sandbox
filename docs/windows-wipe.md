@@ -1,4 +1,4 @@
-# Unyt — Windows Data Locations & Full Wipe
+# Unyt on Windows: Data Locations & Full Wipe
 
 Identifier: `co.unyt.unyt-app` · Product: `Unyt` · Version segment: `0.88` (major.minor of `CARGO_PKG_VERSION`).
 
