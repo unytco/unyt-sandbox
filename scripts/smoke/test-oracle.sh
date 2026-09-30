@@ -1600,14 +1600,15 @@ for f in "$here"/../../.github/workflows/*.y*ml; do
     line ~ /^[[:space:]]*- / { flush(); start = NR }
     { buf = buf line "\n" }
     line ~ /uses:[[:space:]]*actions\/checkout@/ { checkout = 1 }
-    # AND THE COMPILER FOR WHAT USERS INSTALL COMES FROM A COMMIT: a ref that
-    # moves changes which compiler builds the binaries we sign and ship, on a
-    # run nobody re-reads. Which toolchain it installs is set by the `with:`
-    # line, not by the ref — this is about the action, not the version.
+    # AND WHAT THE RELEASE RUNS COMES FROM A COMMIT: every action there holds the
+    # PAT that edits the release or the key that signs its updates, and a tag
+    # can be moved under us. The rust toolchain is pinned wherever it runs, as a
+    # ref that moves changes which compiler builds what users install.
     # Length and charset, never a {40} interval — mawk 1.3.3 has no intervals.
-    line ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/ {
+    line ~ /uses:[[:space:]]*[^.[:space:]]/ &&
+      (file == "release-tauri-app.yaml" || line ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) {
       ref = line
-      sub(/.*rust-toolchain@/, "", ref)
+      sub(/.*@/, "", ref)
       sub(/[[:space:]].*$/, "", ref)
       if (length(ref) == 40 && ref !~ /[^0-9a-f]/) printf "pinned %s:%d\n", file, NR
       else printf "movable %s:%d (%s)\n", file, NR, ref
@@ -1631,8 +1632,8 @@ fi
 # Both directions: an unpinned ref anywhere, and the pinned step having gone.
 if [ -z "$movable" ] && [ "$pinned" -gt 0 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1))
-  printf 'FAIL  %-58s %s\n' "the rust toolchain rides a ref that can move" \
-    "${movable:-no dtolnay/rust-toolchain step is pinned to a commit any more}" >&2
+  printf 'FAIL  %-58s %s\n' "an action the release runs rides a ref that can move" \
+    "${movable:-no action is pinned to a commit any more}" >&2
 fi
 
 # ── the inventory decides which lanes run, so it must not be able to lie ─────
