@@ -15,6 +15,7 @@ jobs:
     outputs:
       releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
+      productName: ${{ steps.product.outputs.name }}
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
       signedUpdates: ${{ steps.updater.outputs.enabled }}
       updaterPubkey: ${{ steps.updater.outputs.pubkey }}
@@ -45,6 +46,12 @@ jobs:
         run: |
           APP_VERSION="$(bash scripts/check-version-contract.sh "$TAG")"
           echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Read the product name
+        id: product
+        run: |
+          name="$(jq -er .productName unyt/src-tauri/tauri.conf.json)"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Decide whether this release signs its updates
         id: updater
@@ -119,7 +126,7 @@ jobs:
             unyt/target/release/unyt_cli
           body: ${{ steps.changelog.outputs.notes }}
           # The pushed tag, not APP_VERSION: a -dev.* must not ship as stable.
-          name: Unyt Sandbox ${{ github.ref_name }}
+          name: ${{ steps.product.outputs.name }} ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: true
           draft: true
@@ -296,8 +303,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
-          VITE_COMMIT_SHA: Unyt-Sandbox-${{ needs.publish-happ.outputs.appVersion }}-${{
-            matrix.config.arc_factor }}-arc
+          VITE_COMMIT_SHA: ${{ needs.publish-happ.outputs.productName }}-${{
+            needs.publish-happ.outputs.appVersion }}-${{ matrix.config.arc_factor }}-arc
           APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
             matrix.config.arc_factor || '' }}

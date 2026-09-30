@@ -147,7 +147,7 @@ MACHOS=""
 find_machos() {
   MACHOS="$WORK/machos.list"
   : >"$MACHOS"
-  # The bundle is "Unyt Sandbox.app", so a path with a space is the normal case.
+  # A caller's state directory can hold a space, so a path is read whole.
   while IFS= read -r f; do
     is_macho "$f" && printf '%s\n' "$f" >>"$MACHOS"
   done < <(find "$APP" -type f -print)
@@ -244,7 +244,7 @@ cleanup() {
   if [ -n "$STATE_OWNED" ]; then remove_work; fi
 }
 
-# %q and sourced back, because the bundle is "Unyt Sandbox.app".
+# %q and sourced back, because a caller's state directory can hold a space.
 save_state() {
   {
     printf 'APP=%q\n' "$APP"

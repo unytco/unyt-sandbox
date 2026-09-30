@@ -53,9 +53,9 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/debian"
 cat >"$work/debian/control" <<'CONTROL'
-Source: unyt-sandbox
+Source: unyt
 
-Package: unyt-sandbox
+Package: unyt
 Architecture: amd64
 Depends: ${shlibs:Depends}
 Description: placeholder so dpkg-shlibdeps will run standalone

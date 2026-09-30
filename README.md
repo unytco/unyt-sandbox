@@ -31,7 +31,7 @@ Take default-arc unless you want the lighter one.
 Every installer is named for what it is, so you can pick yours from the filename alone:
 
 ```
-unyt_<version>_Unyt.Sandbox_<variant>_<architecture>_<platform><extension>
+unyt_<version>_Unyt_<variant>_<architecture>_<platform><extension>
 ```
 
 | Part | Values |
@@ -45,7 +45,7 @@ A release also carries assets that are not installers: the `.app.tar.gz` bundles
 
 ### On Linux, swapping between the two variants
 
-Both variants install as the package `unyt-sandbox` at the same version. With either one already installed, `apt install ./unyt_..._linux.deb` finds that version present, changes nothing and exits 0. A graphical software centre installs through the same package manager, so it does nothing either. To actually swap, install the .deb directly:
+Both variants install as the package `unyt` at the same version. With either one already installed, `apt install ./unyt_..._linux.deb` finds that version present, changes nothing and exits 0. A graphical software centre installs through the same package manager, so it does nothing either. To actually swap, install the .deb directly:
 
 ```sh
 sudo dpkg -i ./unyt_*_zero-arc_amd64_linux.deb
@@ -65,7 +65,7 @@ Once installed, the Unyt software will run locally on your device and connect wi
 
 Note: In Mac, because you downloaded the software directly and not through Apple's App Store, you may need to open the System Settings and go to Privacy and Security, scroll down to Security and give Unyt permission to run.
 
-To reset completely and start over with a new account: uninstall the app, delete local data (`~/Library/Application Support/co.unyt.unyt` on macOS), and reinstall. You'll get a new key pair and a fresh identity.
+To reset completely and start over with a new account: uninstall the app, delete local data (`~/Library/Application Support/co.unyt.unyt-app` on macOS), and reinstall. You'll get a new key pair and a fresh identity.
 
 When you open Unyt on your operating system for the first time, it will create a set of public and private keys for you that you can use to interact with others. These are stored in a private keystore (Lair) on your own machine and are used during future uses. In Unyt we often refer to this public key as "your address" as it is how others can refer to you when sending, receiving or authorizing you to perform particular roles.
 

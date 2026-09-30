@@ -73,7 +73,7 @@ check "a pinned key with its secret signs, and hands the key on" \
 targets="linux-x86_64-deb:amd64_linux.deb linux-x86_64-appimage:amd64_linux.AppImage
 darwin-aarch64-app:aarch64_darwin.app.tar.gz darwin-x86_64-app:x64_darwin.app.tar.gz
 windows-x86_64-msi:x64_windows.msi windows-x86_64-nsis:x64_windows.exe"
-asset() { echo "unyt_1.2.3_Unyt.Sandbox_$1-arc_$2"; } # <arc> <suffix>
+asset() { echo "unyt_1.2.3_Unyt_$1-arc_$2"; } # <arc> <suffix>
 sign() { # <dir> <asset> [<key> [<trusted comment>]]
   local name="$2"
   [ -f "$1/$name" ] || printf 'the %s artifact' "$name" >"$1/$name"
