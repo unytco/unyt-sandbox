@@ -1,6 +1,6 @@
 # Unyt on Windows: Data Locations & Full Wipe
 
-Identifier: `co.unyt.unyt-app` · Product: `Unyt` · Version segment: `0.88` (major.minor of `CARGO_PKG_VERSION`).
+Identifier: `co.unyt.unyt-app` · Product: `Unyt` · Version segment: the major.minor of `CARGO_PKG_VERSION`, shown below as `<major.minor>` (for example `0.109`).
 
 ## Where data lives on Windows
 
@@ -10,7 +10,7 @@ Identifier: `co.unyt.unyt-app` · Product: `Unyt` · Version segment: `0.88` (ma
 | 2 | `C:\Program Files\Unyt\` | App binaries (MSI install only) | Yes (MSI) |
 | 3 | `%APPDATA%\co.unyt.unyt-app\` | `network_metadata.json`, `log-config.json`, Stronghold `.hold` | No |
 | 4 | `%LOCALAPPDATA%\co.unyt.unyt-app\logs\` | Rotated `unyt.v*.log.*` | No |
-| 5 | `%APPDATA%\zo-el <joelulahanna@gmail.com>\co.unyt.unyt-app\0.88\holochain\` | Conductor DBs, Lair keystore, happ bundles, UIs | No |
+| 5 | `%APPDATA%\zo-el <joelulahanna@gmail.com>\co.unyt.unyt-app\<major.minor>\holochain\` | Conductor DBs, Lair keystore, happ bundles, UIs | No |
 | 6 | `%LOCALAPPDATA%\Temp\co.unyt.unyt-app*` | Dev-mode temp dirs | No |
 | 7 | Windows Credential Manager → target `co.unyt.unyt-app`, user `lair-salt` | Lair password salt | No |
 
