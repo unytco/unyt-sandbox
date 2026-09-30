@@ -6,6 +6,11 @@ on:
       # A throwaway build that proves the pipeline. Never something a user installs.
       - "v[0-9]+.[0-9]+.[0-9]+-dev.*"
 
+# One run per tag at a time: updater-sign.sh takes a build signed after this run started as this run's.
+concurrency:
+  group: release-tauri-app-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish-happ:
     name: Stage 1 - publish happ
@@ -18,7 +23,12 @@ jobs:
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
       signedUpdates: ${{ steps.updater.outputs.enabled }}
       updaterPubkey: ${{ steps.updater.outputs.pubkey }}
+      startedAt: ${{ steps.start.outputs.at }}
     steps:
+      - name: Note when this run started
+        id: start
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GIT_PAT }}
@@ -339,22 +349,35 @@ jobs:
         with:
           node-version: 22
 
-      - name: Sign under the asset names and publish one manifest per arc factor
+      - name: Download the updater artifacts and their build signatures
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
-          PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          mkdir assets manifests
+          mkdir assets
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir assets
           for sig in assets/*.sig; do
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
               --pattern "$(basename "$sig" .sig)"
           done
-          bash scripts/updater-sign.sh "$APP_VERSION" "$PUBKEY" assets
+
+      - name: Sign them under their asset names
+        env:
+          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
+          PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
+          STARTED_AT: ${{ needs.publish-happ.outputs.startedAt }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/updater-sign.sh "$APP_VERSION" "$PUBKEY" assets "$STARTED_AT"
+
+      - name: Publish them with one manifest per arc factor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
+          PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
+        run: |
+          mkdir manifests
           bash scripts/updater-manifests.sh "$TAG" "$APP_VERSION" "$PUBKEY" assets manifests
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.sig manifests/*.json
 

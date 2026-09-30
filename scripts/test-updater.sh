@@ -78,7 +78,7 @@ sign() { # <dir> <asset> [<key> [<trusted comment>]]
   local name="$2"
   [ -f "$1/$name" ] || printf 'the %s artifact' "$name" >"$1/$name"
   minisign -S -s "$tmp/${3:-ours}.key" -m "$1/$name" -x "$tmp/sig" \
-    -t "${4:-timestamp:0	file:$name	version:1.2.3}" >/dev/null
+    -t "${4:-timestamp:1	file:$name	version:1.2.3}" >/dev/null
   base64 -w0 <"$tmp/sig" >"$1/$name.sig"
 }
 release() { # <dir>
@@ -114,17 +114,27 @@ done
 mkdir "$tmp/stub"
 printf '#!/bin/sh\ntouch "$0.called"\nexit 1\n' >"$tmp/stub/npx"
 chmod +x "$tmp/stub/npx"
-signs_nothing() { # <error text> <asset-dir>
+signs_nothing() { # <error text> <asset-dir> [<started>]
   rm -f "$tmp/stub/npx.called"
-  refuses "$1" env PATH="$tmp/stub:$PATH" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$2" &&
+  refuses "$1" env PATH="$tmp/stub:$PATH" \
+    bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$2" "${3-0}" &&
     [ ! -e "$tmp/stub/npx.called" ]
 }
-refused() { # <description> <error text> <setup> [signing]
-  local what="$1" want="$2" dir="$tmp/case$((pass + fail))"
+case_with() { # <setup>: sets $dir to a new release with <setup> applied
+  dir="$tmp/case$((pass + fail))"
   release "$dir"
-  "$3" "$dir"
+  "$1" "$dir"
+}
+refused() { # <description> <error text> <setup> [signing]
+  local what="$1" want="$2" dir
+  case_with "$3"
   check "$what" refuses "$want" manifests "$dir" "$dir.out"
   [ "${4:-}" != signing ] || check "$what, and nothing is signed" signs_nothing "$want" "$dir"
+}
+sign_refused() { # <description> <error text> <setup> [<started>]
+  local dir
+  case_with "$3"
+  check "$1" signs_nothing "$2" "$dir" "${@:4}"
 }
 drop_sig() { rm "$1/$(asset zero x64_windows.msi).sig"; }
 drop_artifact() { rm "$1/$(asset default x64_darwin.app.tar.gz)"; }
@@ -141,10 +151,14 @@ legacy() {
 }
 garbled() { printf '*' >>"$1/$(asset zero amd64_linux.deb).sig"; }
 published_as() { cp "$1" "$2" && cp "$1.sig" "$2.sig"; } # <signed artifact> <asset path>
-bundler_named() {
-  sign "$tmp" Unyt_1.2.3_amd64.AppImage
-  published_as "$tmp/Unyt_1.2.3_amd64.AppImage" "$1/$(asset default amd64_linux.AppImage)"
+built_as() { # <asset-dir> <bundler's file name> <asset>
+  sign "$tmp" "$2"
+  published_as "$tmp/$2" "$1/$3"
 }
+bundler_named() { built_as "$1" Unyt_1.2.3_amd64.AppImage "$(asset default amd64_linux.AppImage)"; }
+deb_as_appimage() { built_as "$1" Unyt_1.2.3_amd64.deb "$(asset default amd64_linux.AppImage)"; }
+exe_as_msi() { built_as "$1" Unyt_1.2.3_x64-setup.exe "$(asset zero x64_windows.msi)"; }
+earlier_run() { sign "$1" "$(asset zero x64_windows.msi)" ours "timestamp:0	file:$(asset zero x64_windows.msi)	version:1.2.3"; }
 other_arc() { published_as "$1/$(asset zero amd64_linux.AppImage)" "$1/$(asset default amd64_linux.AppImage)"; }
 other_installer() { published_as "$1/$(asset default amd64_linux.deb)" "$1/$(asset default amd64_linux.AppImage)"; }
 
@@ -170,10 +184,18 @@ refused "a signature naming the other arc's asset fails the manifests" \
   "is signed for another file" other_arc
 refused "a signature naming another installer's asset fails the manifests" \
   "is signed for another file" other_installer
+sign_refused "a deb build under the AppImage's name is refused before signing" \
+  "signs Unyt_1.2.3_amd64.deb, which is not a build of that installer" deb_as_appimage
+sign_refused "an exe build under the msi's name is refused before signing" \
+  "signs Unyt_1.2.3_x64-setup.exe, which is not a build of that installer" exe_as_msi
+sign_refused "an earlier run's build among this run's is refused before signing" \
+  "$(asset zero x64_windows.msi).sig was signed before this run started" earlier_run 1
+check "a run start that never reached the script is refused before signing" \
+  signs_nothing "4: usage:" "$tmp/full" ""
 
 mkdir -p "$tmp/unsigned"
 check "signing a release with no signatures fails" \
-  refuses "no signatures in" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$tmp/unsigned"
+  refuses "no signatures in" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$tmp/unsigned" 0
 
 # A release as tauri-action publishes it: the bundler signs both arc factors' builds under one file
 # name, and the upload renames them.
@@ -181,6 +203,7 @@ tauri() { npx --yes @tauri-apps/cli@2.11.5 "$@"; }
 tauri signer generate --ci -p test -w "$tmp/tauri.key" >/dev/null
 with_key() { TAURI_SIGNING_PRIVATE_KEY="$(cat "$tmp/tauri.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=test "$@"; }
 mkdir -p "$tmp/bundle" "$tmp/bundled"
+started="$(date +%s)"
 for arc in default zero; do
   for t in $targets; do
     built="$tmp/bundle/Unyt_1.2.3_${t#*:}"
@@ -192,10 +215,12 @@ done
 check "a release as tauri-action publishes it fails" refuses "is signed for another file" \
   manifests "$tmp/bundled" "$tmp/bundled.out" "$(cat "$tmp/tauri.key.pub")"
 signed_and_published() { # <pubkey>
-  with_key bash "$here/updater-sign.sh" 1.2.3 "$1" "$tmp/bundled" &&
+  with_key bash "$here/updater-sign.sh" 1.2.3 "$1" "$tmp/bundled" "$started" &&
     manifests "$tmp/bundled" "$tmp/bundled.out" "$1"
 }
 check "signed by the Tauri signer under its asset names, it publishes its manifests" \
+  signed_and_published "$(cat "$tmp/tauri.key.pub")"
+check "a re-run signs the signatures the first run left under the asset names" \
   signed_and_published "$(cat "$tmp/tauri.key.pub")"
 
 echo "updater scripts: $pass passed, $fail failed"
