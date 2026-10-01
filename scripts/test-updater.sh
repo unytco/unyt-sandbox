@@ -10,6 +10,7 @@ command -v minisign >/dev/null || {
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
+export GITHUB_RUN_ATTEMPT=1
 trap 'rm -rf "$tmp"' EXIT
 pass=0
 fail=0
@@ -212,6 +213,9 @@ sign_refused "an earlier run's build among this run's is refused before signing"
   "$(asset zero x64_windows.msi).sig was signed before this run started" earlier_run 1
 check "a run start that never reached the script is refused before signing" \
   signs_nothing "4: usage:" "$tmp/full" ""
+rerun() { GITHUB_RUN_ATTEMPT=2 signs_nothing "$@"; }
+check "a re-run of the release run is refused before signing" \
+  rerun "attempt 2 of this run: only a run's first attempt signs" "$tmp/full"
 
 mkdir -p "$tmp/unsigned"
 check "signing a release with no signatures fails" \
@@ -292,7 +296,7 @@ signed_and_published() { # <asset-dir> <pubkey>
 }
 check "signed by the Tauri signer under its asset names, it publishes its manifests" \
   signed_and_published "$tmp/bundled" "$(cat "$tmp/tauri.key.pub")"
-check "a re-run signs the signatures the first run left under the asset names" \
+check "signing again signs the signatures the first signing left under the asset names" \
   signed_and_published "$tmp/bundled" "$(cat "$tmp/tauri.key.pub")"
 check "a zero-arc build relabelled as the default-arc one publishes nothing" \
   refuses "$(unclaimed "$(asset default amd64_linux.AppImage)")" \

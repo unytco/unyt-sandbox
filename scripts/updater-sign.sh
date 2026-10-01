@@ -4,8 +4,8 @@
 # <asset-dir> holds the release's .sig assets and the artifacts they sign, under their asset names;
 # each .sig is overwritten. <pubkey> is the base64 public key the app pins. <started> is when this
 # release run started, in Unix seconds. <provenance> holds the lines updater-provenance.sh wrote in
-# this run's build jobs. Env: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD. Needs
-# npx and minisign on PATH.
+# this run's build jobs. Env: TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD and
+# GITHUB_RUN_ATTEMPT. Needs npx and minisign on PATH.
 #
 # The bundler signs each artifact under a local file name both arc factors share, before tauri-action
 # renames it for upload, and the app refuses a signature for any file but its own release asset. A
@@ -24,6 +24,9 @@ ASSETS="${3:?$usage}"
 STARTED="${4:?$usage}"
 PROVENANCE="${5:?$usage}"
 
+# A re-run reads build records that an earlier attempt's smoke could have replaced.
+[ "${GITHUB_RUN_ATTEMPT:-}" = 1 ] ||
+  fail "attempt ${GITHUB_RUN_ATTEMPT:-unknown} of this run: only a run's first attempt signs, so re-tag the release"
 twice="$(awk '{ print $2 }' "$PROVENANCE" | sort | uniq -d)"
 [ -z "$twice" ] || fail "this run's builds published ${twice//$'\n'/ } more than once"
 for sig in "$ASSETS"/*.sig; do
