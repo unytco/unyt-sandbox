@@ -1393,6 +1393,12 @@ if [ -f "$rel" ]; then
     "the release must call the smoke workflow"
   in_stage "$stage3" '    needs: [publish-happ, release-tauri-app, updater-manifests]' \
     "the smoke must not run the release's installers before its updates are signed"
+  if [ "$(printf '%s\n' "$stage3_if" | grep -cF -- "needs.updater-manifests.result != 'failure'" || true)" -eq 1 ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the smoke runs the installers after a failed signing" \
+      "${stage3_if:-<no if: found>}" >&2
+  fi
 
   # A GATE MAY NOT RIDE A ROLLING LABEL. macos-latest moved to macOS 26, whose
   # screen-capture rules differ from the ones phase 1 is proven against, so a gate
