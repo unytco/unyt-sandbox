@@ -1393,7 +1393,8 @@ if [ -f "$rel" ]; then
     "the release must call the smoke workflow"
   in_stage "$stage3" '    needs: [publish-happ, release-tauri-app, updater-manifests]' \
     "the smoke must not run the release's installers before its updates are signed"
-  if [ "$(printf '%s\n' "$stage3_if" | grep -cF -- "needs.updater-manifests.result != 'failure'" || true)" -eq 1 ]; then
+  smoke_if="    if: \${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result != 'failure' }}"
+  if [ "$stage3_if" = "$smoke_if" ]; then
     pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the smoke runs the installers after a failed signing" \
