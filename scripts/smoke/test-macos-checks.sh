@@ -125,8 +125,7 @@ case "${1:-}" in
     mkdir -p "$mp"
     if [ "${STUB_BREAK:-}" = noapp ]; then echo "read me" >"$mp/README.txt"; exit 0; fi
     # A glob, not `mnt/.`: BSD cp does not treat a trailing `/.` as "the
-    # contents of" the way GNU cp does. Glob matches are not word-split, so the
-    # space in "Unyt Sandbox.app" is safe.
+    # contents of" the way GNU cp does.
     cp -a "$STUB_FIXTURE/mnt/"* "$mp/"
     exit 0 ;;
   detach) exit 0 ;;
@@ -270,7 +269,7 @@ case "$*" in
         fi ;;
     esac
     echo "Executable=$f" >&2
-    echo "Identifier=co.unyt.unyt.sandbox" >&2
+    echo "Identifier=co.unyt.unyt-app" >&2
     echo "Authority=Developer ID Application: Unyt (ABCDE12345)" >&2
     echo "Authority=Developer ID Certification Authority" >&2
     echo "TeamIdentifier=ABCDE12345" >&2
@@ -406,7 +405,7 @@ EOF
 # one non-Mach-O, so the enumeration has something to correctly exclude.
 build_fixture() { # <dir> [version] [plist-claim] [lc-flavour]
   local dir="$1" version="${2:-0.100.0}" claim="${3:-10.13}" flavour="${4:-x86}"
-  local app="$dir/mnt/Unyt Sandbox.app" lc
+  local app="$dir/mnt/Unyt.app" lc
   case "$flavour" in
     arm64) lc="$LC_ARM64" ;;
     *)     lc="$LC_X86" ;;
@@ -417,7 +416,7 @@ build_fixture() { # <dir> [version] [plist-claim] [lc-flavour]
   # FIX_NO_MACHO writes plain scripts instead, producing a bundle the scans find
   # NOTHING in.
   local m
-  for m in "$app/Contents/MacOS/unyt-sandbox" "$app/Contents/Resources/helper" \
+  for m in "$app/Contents/MacOS/unyt-app" "$app/Contents/Resources/helper" \
            "$app/Contents/Frameworks/libunyt.dylib"; do
     if [ -n "${FIX_NO_MACHO:-}" ]; then
       printf '#!/bin/sh\nexit 0\n' >"$m"
@@ -436,9 +435,9 @@ build_fixture() { # <dir> [version] [plist-claim] [lc-flavour]
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>unyt-sandbox</string>
+	<string>unyt-app</string>
 	<key>CFBundleIdentifier</key>
-	<string>co.unyt.unyt.sandbox</string>
+	<string>co.unyt.unyt-app</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$version</string>
 	<key>LSMinimumSystemVersion</key>
@@ -447,7 +446,7 @@ build_fixture() { # <dir> [version] [plist-claim] [lc-flavour]
 </plist>
 EOF
 
-  for m in unyt-sandbox helper libunyt.dylib; do
+  for m in unyt-app helper libunyt.dylib; do
     printf '%s\n' "$OTOOL_L_CLEAN" >"$dir/otool/$m.deps"
     printf '%s\n' "$lc" >"$dir/otool/$m.loadcmds"
   done
@@ -457,13 +456,13 @@ EOF
   # behind the arm64 slice, since the max across slices is 11.0 either way.
   if [ -n "${FIX_UNIVERSAL:-}" ]; then
     mkdir -p "$dir/lipo"
-    printf 'x86_64 arm64\n' >"$dir/lipo/unyt-sandbox"
-    printf '%s\n' "$LC_ARM64" >"$dir/otool/unyt-sandbox.arm64.loadcmds"
+    printf 'x86_64 arm64\n' >"$dir/lipo/unyt-app"
+    printf '%s\n' "$LC_ARM64" >"$dir/otool/unyt-app.arm64.loadcmds"
     if [ "${FIX_UNIVERSAL_X86:-10.13}" = "10.13" ]; then
-      printf '%s\n' "$LC_X86" >"$dir/otool/unyt-sandbox.x86_64.loadcmds"
+      printf '%s\n' "$LC_X86" >"$dir/otool/unyt-app.x86_64.loadcmds"
     else
       printf 'Load command 9\n      cmd LC_VERSION_MIN_MACOSX\n  cmdsize 16\n  version %s\n      sdk 26.5\n' \
-        "${FIX_UNIVERSAL_X86}" >"$dir/otool/unyt-sandbox.x86_64.loadcmds"
+        "${FIX_UNIVERSAL_X86}" >"$dir/otool/unyt-app.x86_64.loadcmds"
     fi
   fi
   : >"$dir/artifact.dmg"
@@ -492,7 +491,7 @@ build_scenario() { # <name>
   build_fixture "$SCEN_DIR" "${FIX_VERSION:-0.100.0}" "${FIX_CLAIM:-10.13}" "${FIX_FLAVOUR:-x86}"
   make_stubs "$SCEN_DIR/bin"
   [ -n "${FIX_MUTATE:-}" ] && "$FIX_MUTATE" "$SCEN_DIR"
-  SCEN_DMG="$SCEN_DIR/${FIX_DMG_NAME:-unyt_0.100.0_Unyt.Sandbox_default-arc_x64_darwin.dmg}"
+  SCEN_DMG="$SCEN_DIR/${FIX_DMG_NAME:-unyt_0.100.0_Unyt_default-arc_x64_darwin.dmg}"
   SCEN_STATE="$SCEN_DIR/state"
   mv "$SCEN_DIR/artifact.dmg" "$SCEN_DMG"
   scenario_reset
@@ -685,12 +684,12 @@ expect_row "the bundled app is the version the artifact claims" FAIL \
 # THE PRE-RELEASE CHANNEL: read only as far as the `-`, a -dev DMG carries no
 # readable version and this check reds on every artifact of every -dev release.
 FIX_VERSION=0.101.0-dev.0 \
-  FIX_DMG_NAME=unyt_0.101.0-dev.0_Unyt.Sandbox_default-arc_x64_darwin.dmg \
+  FIX_DMG_NAME=unyt_0.101.0-dev.0_Unyt_default-arc_x64_darwin.dmg \
   run_scenario dev-version
 expect_row "the bundled app is the version the artifact claims" pass \
   "a -dev DMG matching its bundle"
 FIX_VERSION=0.101.0 \
-  FIX_DMG_NAME=unyt_0.101.0-dev.0_Unyt.Sandbox_default-arc_x64_darwin.dmg \
+  FIX_DMG_NAME=unyt_0.101.0-dev.0_Unyt_default-arc_x64_darwin.dmg \
   run_scenario dev-version-mismatch
 expect_row "the bundled app is the version the artifact claims" FAIL \
   "a -dev DMG packaging the stable version"
@@ -713,7 +712,7 @@ expect_only_failure "no build-machine library paths in any Mach-O" \
 # The same bug in an rpath baked at build time, which `otool -L` alone misses.
 mutate_rpath() {
   printf '%s\nLoad command 20\n      cmd LC_RPATH\n  cmdsize 32\n     path /usr/local/lib (offset 12)\n' \
-    "$LC_X86" >"$1/otool/unyt-sandbox.loadcmds"
+    "$LC_X86" >"$1/otool/unyt-app.loadcmds"
 }
 FIX_MUTATE=mutate_rpath run_scenario break-rpath
 expect_only_failure "no build-machine library paths in any Mach-O" \
@@ -982,11 +981,11 @@ for id in "${CHECK_IDS[@]}"; do
       "--only signed re-derives the enumeration from the state directory" ;;
     deployment) expect_err "3 across 3 Mach-O file(s)" \
       "--only deployment reads every slice of every file the state directory holds" ;;
-    gatekeeper) expect_target spctl "$SCEN_STATE/Unyt Sandbox.app" \
+    gatekeeper) expect_target spctl "$SCEN_STATE/Unyt.app" \
       "--only gatekeeper assesses the bundle the mount check extracted" ;;
-    stapled) expect_target xcrun "$SCEN_STATE/Unyt Sandbox.app" \
+    stapled) expect_target xcrun "$SCEN_STATE/Unyt.app" \
       "--only stapled validates the ticket on that same bundle" ;;
-    syspolicy) expect_target syspolicy_check "$SCEN_STATE/Unyt Sandbox.app" \
+    syspolicy) expect_target syspolicy_check "$SCEN_STATE/Unyt.app" \
       "--only syspolicy assesses that same bundle" ;;
   esac
   i=$((i + 1))
@@ -1211,7 +1210,7 @@ fi
 # extracted copy hands a check a path to nothing.
 build_scenario only-stale-state
 only_check mount
-rm -rf "$SCEN_STATE/Unyt Sandbox.app"
+rm -rf "$SCEN_STATE/Unyt.app"
 only_check signed
 expect_only_row "every Mach-O in the bundle is signed" FAIL \
   "--only against a state directory whose bundle has gone"
@@ -1258,7 +1257,7 @@ expect_no_err "/usr/lib/libSystem.B.dylib" \
 # path to nothing — an empty list that reads like a binary with no dependencies.
 build_scenario only-report-stale-state
 only_check mount
-rm -rf "$SCEN_STATE/Unyt Sandbox.app"
+rm -rf "$SCEN_STATE/Unyt.app"
 mode_check report-stale --report "$SCEN_DMG"
 expect_rc zero "--report exits 0 against a state directory whose bundle has gone"
 expect_err "nothing extracted in" "--report says so rather than listing the linkage of a path to nothing"

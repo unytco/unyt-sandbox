@@ -31,7 +31,7 @@ else
 fi
 
 # Assets are matched by SUFFIX so the caller never has to know the version: the
-# release names them unyt_<version>_Unyt.Sandbox_<arc>-arc_<arch>_<platform><ext>.
+# release names them unyt_<version>_Unyt_<arc>-arc_<arch>_<platform><ext>.
 matches="$(gh api "repos/$REPO/releases/$release_id" \
   --jq "[.assets[] | select(.name | endswith(\"$SUFFIX\"))] | .[] | \"\(.id)\t\(.name)\t\(.size)\"")"
 match_count="$(printf '%s' "$matches" | grep -c . || true)"

@@ -236,7 +236,7 @@ class EvidenceThatIsNotAPhotograph(Quiet):
         def seek_evidence(slug, force=False):
             if not found:
                 return False
-            lane.window_line = 'WINDOW 7 0 0 800 800 0 "Unyt Sandbox"'
+            lane.window_line = 'WINDOW 7 0 0 800 800 0 "Unyt"'
             lane.on_screen = True
             return True
 
@@ -419,7 +419,7 @@ class TheMacLanesPixelPhase(Quiet):
     photographed green. It may rest on nothing but a frame this lane's own
     analyser called the app's own screen."""
 
-    WINDOW = 'WINDOW 7 0 0 800 800 0 "Unyt Sandbox"'
+    WINDOW = 'WINDOW 7 0 0 800 800 0 "Unyt"'
 
     def lane(self, frame, grant="granted", control="usable", reached=True, failed=None):
         os.environ["UNYT_PROVE_PIXEL_SECONDS"] = "1"
@@ -509,7 +509,7 @@ class TheMacLanesPixelPhase(Quiet):
         lane = self.lane("app")
         # A size largest_window() can actually return: the main window replaces
         # the splash mid-run and is a different shape.
-        lane.window_line = 'WINDOW 7 0 0 1200 900 0 "Unyt Sandbox"'
+        lane.window_line = 'WINDOW 7 0 0 1200 900 0 "Unyt"'
         word, why = lane.verdict()
         self.assertEqual("WINDOW-ONLY", word)
         self.assertIn("not the 800x800 the splash declares", why)
@@ -520,9 +520,9 @@ class TheMacLanesPixelPhase(Quiet):
             "DUMP   pid=4242 layer=0\n"
             "KEYS   total=3 pid=3 bounds=3 layer=3 name=1\n"
             "GRANT  screen-recording=granted\n"
-            'WINDOW 3 0 0 300 200 0 "Unyt Sandbox" \n'
-            'WINDOW 9 0 0 640 480 0 "Unyt Sandbox" \n'
-            'WINDOW 7 0 0 800 800 0 "Unyt Sandbox" Unyt\n'
+            'WINDOW 3 0 0 300 200 0 "Unyt" \n'
+            'WINDOW 9 0 0 640 480 0 "Unyt" \n'
+            'WINDOW 7 0 0 800 800 0 "Unyt" Unyt\n'
         )
         lane.window_info = lambda pid=0: subprocess.CompletedProcess(
             [], 0, stdout=dump, stderr=""
@@ -879,7 +879,7 @@ class TheLogOracle(unittest.TestCase):
                 self.assertTrue(prove.shell_value(name))
 
     def test_the_bundle_id_comes_from_there_too(self):
-        self.assertEqual("co.unyt.unyt.sandbox", prove.shell_value("UNYT_BUNDLE_ID"))
+        self.assertEqual("co.unyt.unyt-app", prove.shell_value("UNYT_BUNDLE_ID"))
 
     def test_a_pattern_that_moved_is_fatal_rather_than_silent(self):
         with self.assertRaises(prove.Answer):
@@ -1289,14 +1289,14 @@ class WhatWindowsIsToldToInstall(unittest.TestCase):
 
     def test_nsis_quotes_its_install_location(self):
         self.assertEqual(
-            r"C:\Program Files\Unyt Sandbox",
-            prove.install_location(r'"C:\Program Files\Unyt Sandbox"'),
+            r"C:\Program Files\Unyt",
+            prove.install_location(r'"C:\Program Files\Unyt"'),
         )
 
     def test_the_msi_trails_a_separator_on_the_same_directory(self):
         self.assertEqual(
-            r"C:\Program Files\Unyt Sandbox",
-            prove.install_location("C:\\Program Files\\Unyt Sandbox\\"),
+            r"C:\Program Files\Unyt",
+            prove.install_location("C:\\Program Files\\Unyt\\"),
         )
 
     def test_an_empty_install_location_is_unknown_not_the_current_directory(self):
@@ -1306,7 +1306,7 @@ class WhatWindowsIsToldToInstall(unittest.TestCase):
     def test_the_app_is_picked_out_of_everything_an_install_registered(self):
         entries = [
             prove.Entry("k1", "WebView2 Runtime", r"c:\wv2"),
-            prove.Entry("k2", "Unyt Sandbox", r"c:\unyt"),
+            prove.Entry("k2", "Unyt", r"c:\unyt"),
         ]
         self.assertEqual("k2", prove.select_install_entry(entries).key)
 
@@ -1322,7 +1322,7 @@ class WhatWindowsIsToldToInstall(unittest.TestCase):
         # how every Windows lane would die instead of answering.
         entries = [
             prove.Entry("k1", None, None),
-            prove.Entry("k2", "Unyt Sandbox", "c:\\u"),
+            prove.Entry("k2", "Unyt", "c:\\u"),
         ]
         self.assertEqual("k2", prove.select_install_entry(entries).key)
         self.assertEqual("k1", prove.select_install_entry(entries[:1]).key)

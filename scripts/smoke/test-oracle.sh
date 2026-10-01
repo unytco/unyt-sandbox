@@ -1791,22 +1791,22 @@ if inv_rc ''; then
 else pass=$((pass + 1)); fi
 
 # ── the release the arc-factor matrix actually produces ──────────────────────
-# THE ASSET NAMES ARE THE PUBLISHED ONES, verbatim from v0.101.0, crossed with
-# the arc factors stage 2 builds, which is all `assetNamePattern` varies between
-# two rows. So a fifth matrix row on a new arc factor lands in this fixture on
-# its own, though adding one is still a deliberate change: `want_targets` above
-# names the rows that ship.
+# THE ASSET NAMES ARE THE PUBLISHED ONES, v0.101.0's under today's product name,
+# crossed with the arc factors stage 2 builds, which is all `assetNamePattern`
+# varies between two rows. So a fifth matrix row on a new arc factor lands in
+# this fixture on its own, though adding one is still a deliberate change:
+# `want_targets` above names the rows that ship.
 release_extras='alliance.dna
 unyt.happ
 unyt.webhapp'
-release_installers='unyt_0.101.0_Unyt.Sandbox_default-arc_aarch64_darwin.app.tar.gz
-unyt_0.101.0_Unyt.Sandbox_default-arc_aarch64_darwin.dmg
-unyt_0.101.0_Unyt.Sandbox_default-arc_amd64_linux.AppImage
-unyt_0.101.0_Unyt.Sandbox_default-arc_amd64_linux.deb
-unyt_0.101.0_Unyt.Sandbox_default-arc_x64_darwin.app.tar.gz
-unyt_0.101.0_Unyt.Sandbox_default-arc_x64_darwin.dmg
-unyt_0.101.0_Unyt.Sandbox_default-arc_x64_windows.exe
-unyt_0.101.0_Unyt.Sandbox_default-arc_x64_windows.msi'
+release_installers='unyt_0.101.0_Unyt_default-arc_aarch64_darwin.app.tar.gz
+unyt_0.101.0_Unyt_default-arc_aarch64_darwin.dmg
+unyt_0.101.0_Unyt_default-arc_amd64_linux.AppImage
+unyt_0.101.0_Unyt_default-arc_amd64_linux.deb
+unyt_0.101.0_Unyt_default-arc_x64_darwin.app.tar.gz
+unyt_0.101.0_Unyt_default-arc_x64_darwin.dmg
+unyt_0.101.0_Unyt_default-arc_x64_windows.exe
+unyt_0.101.0_Unyt_default-arc_x64_windows.msi'
 shipped="$release_extras"
 for arc in $build_arcs; do
   shipped="$shipped
@@ -1873,7 +1873,7 @@ else pass=$((pass + 1)); fi
 # would let a row that drifted to a third arc factor claim the lane's suffix,
 # leaving the lane skipped with nothing red to say so.
 if inv_rc "$shipped
-unyt_0.101.0_Unyt.Sandbox_full-arc_amd64_linux.deb"; then
+unyt_0.101.0_Unyt_full-arc_amd64_linux.deb"; then
   fail=$((fail + 1))
   printf 'FAIL  %-58s %s\n' "an installer under an unknown arc factor read as claimed" \
     "the arc token is not a wildcard" >&2

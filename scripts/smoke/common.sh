@@ -3,7 +3,7 @@
 
 # From unyt/src-tauri/tauri.conf.json. Tauri keys app_log_dir() on it, so logs
 # land under $XDG_DATA_HOME/<id>/logs — no AGENT_ID suffix on this one.
-UNYT_BUNDLE_ID="co.unyt.unyt.sandbox"
+UNYT_BUNDLE_ID="co.unyt.unyt-app"
 
 # The glibc of the OLDEST distro we support (Ubuntu 22.04 ships 2.35), which is
 # the ceiling on what a shipped binary may require.

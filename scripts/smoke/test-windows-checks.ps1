@@ -312,16 +312,16 @@ try {
   Assert-That 'no rows at all -> exit 0' (Get-OverallStatus -Results @()) 0
 
   Assert-That 'the version comes out of a release asset name' `
-  (Get-ArtifactVersion -FileName 'unyt_0.100.0_Unyt.Sandbox_default-arc_x64_windows.exe') '0.100.0'
+  (Get-ArtifactVersion -FileName 'unyt_0.100.0_Unyt_default-arc_x64_windows.exe') '0.100.0'
   Assert-That 'and out of the .msi name' `
-  (Get-ArtifactVersion -FileName 'unyt_1.2.3_Unyt.Sandbox_default-arc_x64_windows.msi') '1.2.3'
+  (Get-ArtifactVersion -FileName 'unyt_1.2.3_Unyt_default-arc_x64_windows.msi') '1.2.3'
   Assert-That 'a hand-built file has no version to read' (Get-ArtifactVersion -FileName 'handbuilt.exe') $null
   # THE PRE-RELEASE CHANNEL: read as far as the `-` and this returns $null, which
   # reds every check that compares a version.
   Assert-That 'a -dev asset carries its whole version, tail included' `
-  (Get-ArtifactVersion -FileName 'unyt_0.101.0-dev.0_Unyt.Sandbox_default-arc_x64_windows.exe') '0.101.0-dev.0'
+  (Get-ArtifactVersion -FileName 'unyt_0.101.0-dev.0_Unyt_default-arc_x64_windows.exe') '0.101.0-dev.0'
   Assert-That 'and so does its .msi' `
-  (Get-ArtifactVersion -FileName 'unyt_0.101.0-dev.12_Unyt.Sandbox_default-arc_x64_windows.msi') '0.101.0-dev.12'
+  (Get-ArtifactVersion -FileName 'unyt_0.101.0-dev.12_Unyt_default-arc_x64_windows.msi') '0.101.0-dev.12'
   # NSIS artifacts here are a plain .exe, never -setup.exe; a name that does not
   # match must be unknown rather than silently accepted.
   Assert-That 'a non-release name is unknown' (Get-ArtifactVersion -FileName 'unyt-setup.exe') $null
@@ -332,7 +332,7 @@ try {
 
   $a = [PSCustomObject]@{ KeyPath = 'HKCU:\...\A'; DisplayName = 'A'; DisplayVersion = '1' }
   $b = [PSCustomObject]@{ KeyPath = 'HKCU:\...\B'; DisplayName = 'B'; DisplayVersion = '1' }
-  $c = [PSCustomObject]@{ KeyPath = 'HKCU:\...\Unyt'; DisplayName = 'Unyt Sandbox'; DisplayVersion = '0.100.0' }
+  $c = [PSCustomObject]@{ KeyPath = 'HKCU:\...\Unyt'; DisplayName = 'Unyt'; DisplayVersion = '0.100.0' }
   Assert-That 'the entry the install added is the one found' `
   (Get-NewUninstallEntry -Before @($a, $b) -After @($a, $b, $c)).KeyPath 'HKCU:\...\Unyt'
   Assert-That 'an install that registered nothing is detected' `
@@ -359,8 +359,8 @@ try {
   (ConvertTo-MsiProductVersion -Version '0.101.0') '0.101.0'
   Assert-That 'and a channel the bundler never sees is left alone' `
   (ConvertTo-MsiProductVersion -Version '0.101.0-rc.3') '0.101.0-rc.3'
-  $devMsi = [PSCustomObject]@{ KeyPath = 'HKLM:\...\Unyt'; DisplayName = 'Unyt Sandbox'; DisplayVersion = '0.101.0.0' }
-  $devNsis = [PSCustomObject]@{ KeyPath = 'HKCU:\...\Unyt'; DisplayName = 'Unyt Sandbox'; DisplayVersion = '0.101.0-dev.0' }
+  $devMsi = [PSCustomObject]@{ KeyPath = 'HKLM:\...\Unyt'; DisplayName = 'Unyt'; DisplayVersion = '0.101.0.0' }
+  $devNsis = [PSCustomObject]@{ KeyPath = 'HKCU:\...\Unyt'; DisplayName = 'Unyt'; DisplayVersion = '0.101.0-dev.0' }
   Assert-True 'the msi registering 0.101.0.0 for a -dev.0 artifact passes' `
   (Test-UninstallEntry -Entry $devMsi -ExpectedVersion '0.101.0-dev.0' -Kind msi).Ok
   Assert-True 'while the .exe registering the tag itself passes too' `
@@ -388,7 +388,7 @@ try {
   (Get-UninstallCommand -Entry ([PSCustomObject]@{ UninstallString = 'msiexec.exe /I' })) $null
 
   $good = Join-Path $root 'installed'; New-Item -ItemType Directory -Path $good -Force | Out-Null
-  Set-Content -LiteralPath (Join-Path $good 'unyt-sandbox.exe') -Value 'x'
+  Set-Content -LiteralPath (Join-Path $good 'unyt-app.exe') -Value 'x'
   Assert-True 'a directory holding the program passes' (Test-InstallDirectory -Path $good).Ok
   $empty = Join-Path $root 'empty'; New-Item -ItemType Directory -Path $empty -Force | Out-Null
   Assert-False 'a registered install that shipped no program fails' (Test-InstallDirectory -Path $empty).Ok
@@ -569,13 +569,13 @@ try {
   # so a lossy serialisation reports a perfectly good install as broken.
   $stateRound = Join-Path $root 'state-roundtrip'
   # The shape a real registry read produces: every field present, some of them
-  # $null, and a path with a space in it (%LOCALAPPDATA%\Unyt Sandbox).
+  # $null, and a path with a space in it (a user profile folder with a space in its name).
   $spaced = [PSCustomObject]@{
-    KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt Sandbox'
-    DisplayName          = 'Unyt Sandbox'
+    KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt'
+    DisplayName          = 'Unyt'
     DisplayVersion       = '0.100.0'
-    InstallLocation      = 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
-    UninstallString      = '"C:\Users\runneradmin\AppData\Local\Unyt Sandbox\uninstall.exe"'
+    InstallLocation      = 'C:\Users\runner admin\AppData\Local\Unyt'
+    UninstallString      = '"C:\Users\runner admin\AppData\Local\Unyt\uninstall.exe"'
     QuietUninstallString = $null
   }
   $touched = @('KeyPath', 'DisplayName', 'DisplayVersion', 'InstallLocation', 'UninstallString', 'QuietUninstallString')
@@ -617,7 +617,7 @@ try {
     Assert-That 'the round-tripped entry yields the same uninstall command' `
     (Get-UninstallCommand -Entry $back) (Get-UninstallCommand -Entry $spaced)
     Assert-That 'and it is still the uppercase NSIS silent switch' `
-    (Get-UninstallCommand -Entry $back) '"C:\Users\runneradmin\AppData\Local\Unyt Sandbox\uninstall.exe" /S'
+    (Get-UninstallCommand -Entry $back) '"C:\Users\runner admin\AppData\Local\Unyt\uninstall.exe" /S'
     Assert-That 'the round-tripped entry gives the same version verdict' `
     (Test-UninstallEntry -Entry $back -ExpectedVersion '0.100.0' -Kind nsis).Ok `
     (Test-UninstallEntry -Entry $spaced -ExpectedVersion '0.100.0' -Kind nsis).Ok
@@ -647,7 +647,7 @@ try {
     # BOTH INSTALLERS ARE SMOKED ON THE SAME RUNNER: an .msi whose own
     # registration failed would find the .exe's entry, and check 6 would
     # uninstall THAT while reporting it as the .msi's clean uninstall.
-    Save-SmokeState -Name 'InstallDir' -Value 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
+    Save-SmokeState -Name 'InstallDir' -Value 'C:\Users\runneradmin\AppData\Local\Unyt'
     Clear-SmokeState
     foreach ($name in @('Before', 'Installed', 'Entry', 'InstallDir')) {
       Assert-That "starting a cycle drops the previous $name" (Get-SmokeState -Name $name) $null
@@ -664,7 +664,7 @@ try {
     # does, so a cycle cannot read the previous one's state when this one fails.
     Save-SmokeState -Name 'Installed' -Value $true
     Save-SmokeState -Name 'Entry' -Value $spaced
-    Save-SmokeState -Name 'InstallDir' -Value 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
+    Save-SmokeState -Name 'InstallDir' -Value 'C:\Users\runneradmin\AppData\Local\Unyt'
     $script:Results.Clear()
     $install = Get-Check -Id 'install'
     Invoke-Check -Name $install.Name -Body $install.Body
@@ -678,20 +678,20 @@ try {
 
   # The real call site is TWO processes: what check 3 writes, check 5 reads
   # having never seen it. The whole handoff minus the install itself.
-  $installed = Join-Path $root 'handoff/Unyt Sandbox'
+  $installed = Join-Path $root 'handoff/Program Files/Unyt'
   New-Item -ItemType Directory -Path $installed -Force | Out-Null
-  Set-Content -LiteralPath (Join-Path $installed 'unyt-sandbox.exe') -Value 'x'
+  Set-Content -LiteralPath (Join-Path $installed 'unyt-app.exe') -Value 'x'
   # Named like a release asset and never executed: -Only executable reads the
   # state and inspects that directory, and touches the artifact only to name it.
-  $fakeExe = Join-Path $root 'unyt_0.100.0_Unyt.Sandbox_default-arc_x64_windows.exe'
+  $fakeExe = Join-Path $root 'unyt_0.100.0_Unyt_default-arc_x64_windows.exe'
   Set-Content -LiteralPath $fakeExe -Value 'x'
   $env:UNYT_SMOKE_STATE = Join-Path $root 'handoff/state'
   try {
     # QUOTED, the way NSIS really writes InstallLocation, so the normalisation
     # check 3 does is what the next step inherits rather than the raw value.
     Save-SmokeState -Name 'Entry' -Value ([PSCustomObject]@{
-        KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt Sandbox'
-        DisplayName          = 'Unyt Sandbox'
+        KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt'
+        DisplayName          = 'Unyt'
         DisplayVersion       = '0.100.0'
         InstallLocation      = "`"$installed`""
         UninstallString      = $null
@@ -708,9 +708,9 @@ try {
 
   # With no state directory the suite is one process and state stays in memory, so
   # the reset has to reach that copy too.
-  Save-SmokeState -Name 'InstallDir' -Value 'C:\Program Files\Unyt Sandbox'
+  Save-SmokeState -Name 'InstallDir' -Value 'C:\Program Files\Unyt'
   Assert-That 'with no state directory a value is kept in memory' `
-  (Get-SmokeState -Name 'InstallDir') 'C:\Program Files\Unyt Sandbox'
+  (Get-SmokeState -Name 'InstallDir') 'C:\Program Files\Unyt'
   Clear-SmokeState
   Assert-That 'and the reset clears the in-memory copy as well' (Get-SmokeState -Name 'InstallDir') $null
 
@@ -837,10 +837,10 @@ try {
     Remove-Item -LiteralPath $noteLog -Force -ErrorAction SilentlyContinue
     $script:Results.Clear()
     Save-SmokeState -Name 'Entry' -Value ([PSCustomObject]@{
-        KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt Sandbox'
-        DisplayName          = 'Unyt Sandbox'
+        KeyPath              = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Unyt'
+        DisplayName          = 'Unyt'
         DisplayVersion       = '0.101.0-dev.0'
-        InstallLocation      = 'C:\Users\runneradmin\AppData\Local\Unyt Sandbox'
+        InstallLocation      = 'C:\Users\runneradmin\AppData\Local\Unyt'
         UninstallString      = "`"$stub`""
         QuietUninstallString = $null
       })
