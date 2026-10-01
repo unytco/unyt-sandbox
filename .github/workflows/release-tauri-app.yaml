@@ -6,7 +6,7 @@ on:
       # A throwaway build that proves the pipeline. Never something a user installs.
       - "v[0-9]+.[0-9]+.[0-9]+-dev.*"
 
-# One run per tag at a time: updater-sign.sh takes a build signed after this run started as this run's.
+# One run per tag at a time: two would replace each other's builds on the one release.
 concurrency:
   group: release-tauri-app-${{ github.ref }}
   cancel-in-progress: false
@@ -295,6 +295,7 @@ jobs:
         run: df -h /
 
       - name: build (${{ matrix.config.arc_factor }} arc)
+        id: build
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -324,6 +325,25 @@ jobs:
           assetNamePattern: ${{
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
+
+      # A run artifact, not a release asset, so editing the release cannot change it.
+      - name: Record what this build published for the updater
+        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        shell: bash
+        env:
+          ARC_FACTOR: ${{ matrix.config.arc_factor }}
+          BUILD_ARGS: ${{ matrix.config.args }}
+          ARTIFACT_PATHS: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          bash scripts/updater-provenance.sh unyt/src-tauri/tauri.conf.json \
+            "$ARC_FACTOR" "$BUILD_ARGS" "$ARTIFACT_PATHS" >updater-provenance.sha256
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        with:
+          name: updater-provenance-${{ strategy.job-index }}
+          path: updater-provenance.sha256
+          if-no-files-found: error
 
       - name: Free disk when the job ends (linux)
         if: always() && matrix.config.platform == 'ubuntu-22.04'
@@ -361,6 +381,12 @@ jobs:
               --pattern "$(basename "$sig" .sig)"
           done
 
+      - name: Download what each build recorded publishing
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: updater-provenance-*
+          path: provenance
+
       - name: Sign them under their asset names
         env:
           APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
@@ -368,7 +394,9 @@ jobs:
           STARTED_AT: ${{ needs.publish-happ.outputs.startedAt }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bash scripts/updater-sign.sh "$APP_VERSION" "$PUBKEY" assets "$STARTED_AT"
+        run: |
+          cat provenance/*/updater-provenance.sha256 >updater-provenance.sha256
+          bash scripts/updater-sign.sh "$APP_VERSION" "$PUBKEY" assets "$STARTED_AT" updater-provenance.sha256
 
       - name: Publish them with one manifest per arc factor
         env:

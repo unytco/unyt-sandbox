@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Sourced by the updater scripts, never run. Needs minisign on PATH.
+# Sourced by the updater scripts, never run. signed_fields needs minisign on PATH.
 
 fail() {
   echo "::error::$*" >&2
   exit 1
 }
+
+sha256() { sha256sum <"$1" | cut -d' ' -f1; } # <file>
 
 # The trusted comment of <dir>/<name>.sig, one field per line, once it verifies <dir>/<name> with
 # <pubkey>, the base64 public key the app pins, and names <version>. -H refuses minisign's legacy mode,

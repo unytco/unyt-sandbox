@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# updater-signing.sh, updater-sign.sh and updater-manifests.sh against fixtures signed with throwaway
-# keys. Needs minisign on PATH (install-minisign.sh), and npx for the Tauri signer.
+# updater-signing.sh, updater-provenance.sh, updater-sign.sh and updater-manifests.sh against fixtures
+# signed with throwaway keys. Needs minisign on PATH (install-minisign.sh), and npx for the Tauri signer.
 set -euo pipefail
 
 command -v minisign >/dev/null || {
@@ -81,12 +81,13 @@ sign() { # <dir> <asset> [<key> [<trusted comment>]]
     -t "${4:-timestamp:1	file:$name	version:1.2.3}" >/dev/null
   base64 -w0 <"$tmp/sig" >"$1/$name.sig"
 }
-release() { # <dir>
+release() { # <dir>: also writes <dir>.provenance, what its builds recorded publishing
   mkdir -p "$1"
   local arc t
   for arc in default zero; do
     for t in $targets; do sign "$1" "$(asset "$arc" "${t#*:}")"; done
   done
+  (cd "$1" && for sig in *.sig; do sha256sum "${sig%.sig}"; done) >"$1.provenance"
 }
 manifests() { # <asset-dir> <out-dir> [<pubkey>]
   mkdir -p "$2"
@@ -117,7 +118,7 @@ chmod +x "$tmp/stub/npx"
 signs_nothing() { # <error text> <asset-dir> [<started>]
   rm -f "$tmp/stub/npx.called"
   refuses "$1" env PATH="$tmp/stub:$PATH" \
-    bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$2" "${3-0}" &&
+    bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$2" "${3-0}" "$2.provenance" &&
     [ ! -e "$tmp/stub/npx.called" ]
 }
 case_with() { # <setup>: sets $dir to a new release with <setup> applied
@@ -161,6 +162,11 @@ exe_as_msi() { built_as "$1" Unyt_1.2.3_x64-setup.exe "$(asset zero x64_windows.
 earlier_run() { sign "$1" "$(asset zero x64_windows.msi)" ours "timestamp:0	file:$(asset zero x64_windows.msi)	version:1.2.3"; }
 other_arc() { published_as "$1/$(asset zero amd64_linux.AppImage)" "$1/$(asset default amd64_linux.AppImage)"; }
 other_installer() { published_as "$1/$(asset default amd64_linux.deb)" "$1/$(asset default amd64_linux.AppImage)"; }
+other_arch() { published_as "$1/$(asset zero aarch64_darwin.app.tar.gz)" "$1/$(asset zero x64_darwin.app.tar.gz)"; }
+unrecorded() { grep -vF " $(asset zero x64_windows.exe)" "$1.provenance" >"$1.kept" && mv "$1.kept" "$1.provenance"; }
+unpublished() { rm "$1/$(asset default aarch64_darwin.app.tar.gz)"{,.sig}; }
+recorded_longer() { sed -i "s/ $(asset default amd64_linux.AppImage)\$/&.tar.gz/" "$1.provenance"; }
+recorded_twice() { grep -F " $(asset default x64_windows.msi)" "$1.provenance" >"$1.twice" && cat "$1.twice" >>"$1.provenance"; }
 
 refused "a missing signature fails rather than drop a platform" \
   "no zero-arc signature ending in x64_windows.msi.sig" drop_sig
@@ -184,10 +190,24 @@ refused "a signature naming the other arc's asset fails the manifests" \
   "is signed for another file" other_arc
 refused "a signature naming another installer's asset fails the manifests" \
   "is signed for another file" other_installer
+unclaimed() { echo "$1 is not the build this run published under that name"; } # <asset>
 sign_refused "a deb build under the AppImage's name is refused before signing" \
-  "signs Unyt_1.2.3_amd64.deb, which is not a build of that installer" deb_as_appimage
+  "$(unclaimed "$(asset default amd64_linux.AppImage)")" deb_as_appimage
 sign_refused "an exe build under the msi's name is refused before signing" \
-  "signs Unyt_1.2.3_x64-setup.exe, which is not a build of that installer" exe_as_msi
+  "$(unclaimed "$(asset zero x64_windows.msi)")" exe_as_msi
+sign_refused "a zero-arc build and its signature under the default-arc name are refused before signing" \
+  "$(unclaimed "$(asset default amd64_linux.AppImage)")" other_arc
+sign_refused "an arm64 macOS build and its signature under the x64 name are refused before signing" \
+  "$(unclaimed "$(asset zero x64_darwin.app.tar.gz)")" other_arch
+sign_refused "an artifact no build recorded publishing is refused before signing" \
+  "no build job of this run recorded publishing $(asset zero x64_windows.exe)" unrecorded
+sign_refused "a record of a longer name does not vouch for the asset it contains" \
+  "no build job of this run recorded publishing $(asset default amd64_linux.AppImage)" recorded_longer
+sign_refused "a recorded asset missing from the release is refused before signing" \
+  "$(asset default aarch64_darwin.app.tar.gz), which a build of this run published, is not on the release" \
+  unpublished
+sign_refused "an asset recorded twice is refused before signing" \
+  "this run's builds published $(asset default x64_windows.msi) more than once" recorded_twice
 sign_refused "an earlier run's build among this run's is refused before signing" \
   "$(asset zero x64_windows.msi).sig was signed before this run started" earlier_run 1
 check "a run start that never reached the script is refused before signing" \
@@ -195,33 +215,91 @@ check "a run start that never reached the script is refused before signing" \
 
 mkdir -p "$tmp/unsigned"
 check "signing a release with no signatures fails" \
-  refuses "no signatures in" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$tmp/unsigned" 0
+  refuses "no signatures in" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$tmp/unsigned" 0 /dev/null
 
 # A release as tauri-action publishes it: the bundler signs both arc factors' builds under one file
-# name, and the upload renames them.
+# name, the upload renames them, and each build job records what it published.
 tauri() { npx --yes @tauri-apps/cli@2.11.5 "$@"; }
 tauri signer generate --ci -p test -w "$tmp/tauri.key" >/dev/null
 with_key() { TAURI_SIGNING_PRIVATE_KEY="$(cat "$tmp/tauri.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=test "$@"; }
-mkdir -p "$tmp/bundle" "$tmp/bundled"
+printf '{"productName": "Unyt", "version": "1.2.3"}' >"$tmp/tauri.conf.json"
+# jq.exe as a Windows runner's Git Bash runs it.
+mkdir "$tmp/windows"
+printf '#!/bin/sh\n%s "$@" | sed "s/$/\\r/"\n' "$(command -v jq)" >"$tmp/windows/jq"
+chmod +x "$tmp/windows/jq"
+recorded() { # <runner os> <runner arch> <build args> <arc> <artifact path>...: what the job records
+  local path="$PATH" os="$1" arch="$2" args="$3" arc="$4"
+  shift 4
+  if [ "$os" = Windows ]; then path="$tmp/windows:$PATH" && set -- "${@//\//\\}"; fi
+  PATH="$path" RUNNER_OS="$os" RUNNER_ARCH="$arch" bash "$here/updater-provenance.sh" \
+    "$tmp/tauri.conf.json" "$arc" "$args" "$(jq -nc '$ARGS.positional' --args "$@")"
+}
+build() { # <arc> <runner os> <runner arch> <build args> <bundler's path>[:<asset suffix>]...
+  local arc="$1" os="$2" arch="$3" args="$4" spec path made=()
+  shift 4
+  for spec; do
+    path="$tmp/target/$arc/${spec%%:*}"
+    mkdir -p "$(dirname "$path")"
+    printf 'the %s-arc %s build' "$arc" "${spec%%:*}" >"$path"
+    made+=("$path")
+    [ "$spec" != "${spec#*:}" ] || continue
+    with_key tauri signer sign --app-version 1.2.3 "$path" >/dev/null
+    published_as "$path" "$tmp/bundled/$(asset "$arc" "${spec#*:}")"
+    made+=("$path.sig")
+  done
+  recorded "$os" "$arch" "$args" "$arc" "${made[@]}" >>"$tmp/bundled.provenance"
+}
+mkdir -p "$tmp/bundled"
 started="$(date +%s)"
 for arc in default zero; do
-  for t in $targets; do
-    built="$tmp/bundle/Unyt_1.2.3_${t#*:}"
-    printf 'the %s-arc %s build' "$arc" "${t#*:}" >"$built"
-    with_key tauri signer sign --app-version 1.2.3 "$built" >/dev/null
-    published_as "$built" "$tmp/bundled/$(asset "$arc" "${t#*:}")"
-  done
+  build "$arc" macOS ARM64 "--target aarch64-apple-darwin" \
+    aarch64-apple-darwin/release/bundle/dmg/Unyt_1.2.3_aarch64.dmg \
+    aarch64-apple-darwin/release/bundle/macos/Unyt.app.tar.gz:aarch64_darwin.app.tar.gz
+  build "$arc" macOS ARM64 "--target x86_64-apple-darwin" \
+    x86_64-apple-darwin/release/bundle/dmg/Unyt_1.2.3_x64.dmg \
+    x86_64-apple-darwin/release/bundle/macos/Unyt.app.tar.gz:x64_darwin.app.tar.gz
+  build "$arc" Linux X64 "--bundles deb,appimage" \
+    release/bundle/deb/Unyt_1.2.3_amd64.deb:amd64_linux.deb \
+    release/bundle/appimage/Unyt_1.2.3_amd64.AppImage:amd64_linux.AppImage
+  build "$arc" Windows X64 "" \
+    release/bundle/msi/Unyt_1.2.3_x64_en-US.msi:x64_windows.msi \
+    release/bundle/nsis/Unyt_1.2.3_x64-setup.exe:x64_windows.exe
 done
+check "a build on a runner with no known asset name records nothing" \
+  refuses 'no asset name for a macOS ARM64 build with args ""' recorded macOS ARM64 "" default
+for os in Linux Windows; do
+  check "an arm64 $os build records nothing" \
+    refuses "no asset name for a $os ARM64 build" recorded "$os" ARM64 "" default
+done
+printf '{"productName": "Unyt (Sandbox)", "version": "1.2.3"}' >"$tmp/renamed.conf.json"
+check "a product name GitHub renames is recorded as the release names it" \
+  test "$(RUNNER_OS=Linux RUNNER_ARCH=X64 bash "$here/updater-provenance.sh" "$tmp/renamed.conf.json" \
+    default "" "[\"$tmp/target/default/release/bundle/deb/Unyt_1.2.3_amd64.deb.sig\"]" | cut -d' ' -f3)" \
+  = unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
+printf 'an rpm' >"$tmp/target/x.rpm"
+cp "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
+check "a build that signed an artifact the updater never installs records nothing" \
+  refuses "x.rpm is signed, but no updater installs it" \
+  recorded Linux X64 "" default "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
 check "a release as tauri-action publishes it fails" refuses "is signed for another file" \
   manifests "$tmp/bundled" "$tmp/bundled.out" "$(cat "$tmp/tauri.key.pub")"
-signed_and_published() { # <pubkey>
-  with_key bash "$here/updater-sign.sh" 1.2.3 "$1" "$tmp/bundled" "$started" &&
-    manifests "$tmp/bundled" "$tmp/bundled.out" "$1"
+cp -r "$tmp/bundled" "$tmp/relabelled"
+published_as "$tmp/relabelled/$(asset zero amd64_linux.AppImage)" "$tmp/relabelled/$(asset default amd64_linux.AppImage)"
+cp -r "$tmp/relabelled" "$tmp/relabelled.built"
+signed_and_published() { # <asset-dir> <pubkey>
+  with_key bash "$here/updater-sign.sh" 1.2.3 "$2" "$1" "$started" "$tmp/bundled.provenance" &&
+    manifests "$1" "$1.out" "$2"
 }
 check "signed by the Tauri signer under its asset names, it publishes its manifests" \
-  signed_and_published "$(cat "$tmp/tauri.key.pub")"
+  signed_and_published "$tmp/bundled" "$(cat "$tmp/tauri.key.pub")"
 check "a re-run signs the signatures the first run left under the asset names" \
-  signed_and_published "$(cat "$tmp/tauri.key.pub")"
+  signed_and_published "$tmp/bundled" "$(cat "$tmp/tauri.key.pub")"
+check "a zero-arc build relabelled as the default-arc one publishes nothing" \
+  refuses "$(unclaimed "$(asset default amd64_linux.AppImage)")" \
+  signed_and_published "$tmp/relabelled" "$(cat "$tmp/tauri.key.pub")"
+check "and every signature is left as its build made it" diff -r "$tmp/relabelled.built" "$tmp/relabelled"
+check "nor do the manifests publish the relabelled release" refuses "is signed for another file" \
+  manifests "$tmp/relabelled" "$tmp/relabelled.out" "$(cat "$tmp/tauri.key.pub")"
 
 echo "updater scripts: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
