@@ -6,6 +6,11 @@ on:
       # A throwaway build that proves the pipeline. Never something a user installs.
       - "v[0-9]+.[0-9]+.[0-9]+-dev.*"
 
+# One run per tag at a time: two would replace each other's builds on the one release.
+concurrency:
+  group: release-tauri-app-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish-happ:
     name: Stage 1 - publish happ
@@ -19,8 +24,14 @@ jobs:
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
       signedUpdates: ${{ steps.updater.outputs.enabled }}
       updaterPubkey: ${{ steps.updater.outputs.pubkey }}
+      startedAt: ${{ steps.start.outputs.at }}
+      happSha256: ${{ steps.happ.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Note when this run started
+        id: start
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
@@ -29,12 +40,12 @@ jobs:
           fetch-depth: 0
 
       - name: Install nix
-        uses: cachix/install-nix-action@v31
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           github_access_token: ${{ secrets.GIT_PAT }}
           nix_path: nixpkgs=channel:nixos-26.05
 
-      - uses: cachix/cachix-action@v17
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: holochain-ci
           extraPullNames: darksoil-studio
@@ -124,8 +135,15 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # The build jobs take the happ from the release, which can be edited once this uploads it.
+      - name: Note the happ the builds compile in
+        id: happ
+        run: |
+          sum="$(sha256sum <unyt/workdir/unyt.happ)"
+          echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
+
       - id: create-release
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
           artifactErrorsFailBuild: true
@@ -204,7 +222,7 @@ jobs:
         if: matrix.config.platform != 'ubuntu-22.04'
         run: git config --system core.longpaths true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
@@ -212,7 +230,7 @@ jobs:
           fetch-depth: 1
 
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -255,7 +273,7 @@ jobs:
           yarn install --frozen-lockfile --ignore-engines
 
       - name: Download release of the .happ
-        uses: robinraju/release-downloader@v1.10
+        uses: robinraju/release-downloader@c39a3b234af58f0cf85888573d361fb6fa281534 # v1.10
         env:
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
         with:
@@ -263,6 +281,12 @@ jobs:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           fileName: "unyt.happ"
           out-file-path: "unyt/workdir/"
+
+      - name: Check the happ is the one stage 1 published
+        shell: bash
+        env:
+          HAPP_SHA256: ${{ needs.publish-happ.outputs.happSha256 }}
+        run: bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"
 
       - name: Assert migration-service URL is set (no silently un-updatable build)
         shell: bash
@@ -302,7 +326,8 @@ jobs:
         run: df -h /
 
       - name: build (${{ matrix.config.arc_factor }} arc)
-        uses: tauri-apps/tauri-action@v0
+        id: build
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -332,6 +357,25 @@ jobs:
             format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
             matrix.config.arc_factor) }}
 
+      # A run artifact, not a release asset, so editing the release cannot change it.
+      - name: Record what this build published for the updater
+        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        shell: bash
+        env:
+          ARC_FACTOR: ${{ matrix.config.arc_factor }}
+          BUILD_ARGS: ${{ matrix.config.args }}
+          ARTIFACT_PATHS: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          bash scripts/updater-provenance.sh unyt/src-tauri/tauri.conf.json \
+            "$ARC_FACTOR" "$BUILD_ARGS" "$ARTIFACT_PATHS" >updater-provenance.sha256
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        with:
+          name: updater-provenance-${{ strategy.job-index }}
+          path: updater-provenance.sha256
+          if-no-files-found: error
+
       - name: Free disk when the job ends (linux)
         if: always() && matrix.config.platform == 'ubuntu-22.04'
         run: df -h /
@@ -352,21 +396,49 @@ jobs:
       - name: Install minisign
         run: bash scripts/install-minisign.sh
 
-      - name: Publish one manifest per arc factor
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Download the updater artifacts and their build signatures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir assets
+          for sig in assets/*.sig; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
+              --pattern "$(basename "$sig" .sig)"
+          done
+
+      - name: Download what each build recorded publishing
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: updater-provenance-*
+          path: provenance
+
+      - name: Sign them under their asset names
+        env:
+          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
+          PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
+          STARTED_AT: ${{ needs.publish-happ.outputs.startedAt }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          cat provenance/*/updater-provenance.sha256 >updater-provenance.sha256
+          bash scripts/updater-sign.sh "$APP_VERSION" "$PUBKEY" assets "$STARTED_AT" updater-provenance.sha256
+
+      - name: Publish them with one manifest per arc factor
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
           PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
         run: |
-          mkdir assets manifests
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir assets
-          for sig in assets/*.sig; do
-            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
-              --pattern "$(basename "$sig" .sig)"
-          done
+          mkdir manifests
           bash scripts/updater-manifests.sh "$TAG" "$APP_VERSION" "$PUBKEY" assets manifests
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber manifests/*.json
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.sig manifests/*.json
 
   # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
   # human publishes it, so the run's colour is what tells them. Phase 2 keeps the
@@ -378,10 +450,14 @@ jobs:
     # JUST THE STAGE: GitHub prefixes every called job with this one, so anything
     # said here is said again on all 16 lines of the Checks list.
     name: Stage 3
-    needs: [publish-happ, release-tauri-app]
-    # Not gated on the build job — one failed row would suppress every lane.
+    # After the signing, and never after it failed: the smoke runs the release's installers, which could
+    # replace the build records the signing trusts. A release whose signing failed is re-tagged, not
+    # re-run.
+    needs: [publish-happ, release-tauri-app, updater-manifests]
+    # Not gated on the build job: one failed row would suppress every lane. Where the release signs its
+    # updates, a failed row fails the signing and so skips the smoke.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
-    if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' }}
+    if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result != 'failure' }}
     uses: ./.github/workflows/release-smoke.yaml
     with:
       release: ${{ needs.publish-happ.outputs.releaseId }}

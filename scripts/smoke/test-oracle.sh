@@ -1391,6 +1391,15 @@ if [ -f "$rel" ]; then
   fi
   in_stage "$stage3" '    uses: ./.github/workflows/release-smoke.yaml' \
     "the release must call the smoke workflow"
+  in_stage "$stage3" '    needs: [publish-happ, release-tauri-app, updater-manifests]' \
+    "the smoke must not run the release's installers before its updates are signed"
+  smoke_if="    if: \${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result != 'failure' }}"
+  if [ "$stage3_if" = "$smoke_if" ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the smoke runs the installers after a failed signing" \
+      "${stage3_if:-<no if: found>}" >&2
+  fi
 
   # A GATE MAY NOT RIDE A ROLLING LABEL. macos-latest moved to macOS 26, whose
   # screen-capture rules differ from the ones phase 1 is proven against, so a gate
@@ -1450,11 +1459,14 @@ if [ -f "$rel" ]; then
   # other step's `with:` satisfies a job-wide search while tauri-action publishes
   # its own default names, and an `if:` here can be written before `uses:`, so the
   # slice has to be the step from its `- name:` line.
-  build_step="$(printf '%s\n' "$stage2" | awk '
-    function flush() { if (buf ~ /uses: tauri-apps\/tauri-action/) printf "%s", buf; buf = "" }
-    /^      - / { flush() }
-    { buf = buf $0 "\n" }
-    END { flush() }')"
+  step_with() { # <text>: the stage-2 step holding <text>
+    printf '%s\n' "$stage2" | awk -v text="$1" '
+      function flush() { if (index(buf, text)) printf "%s", buf; buf = "" }
+      /^      - / { flush() }
+      { buf = buf $0 "\n" }
+      END { flush() }'
+  }
+  build_step="$(step_with 'uses: tauri-apps/tauri-action')"
 
   # A folded value reads as one string, so rewrapping one cannot change what the
   # assertions below see. Every occurrence of the key, not just the first.
@@ -1526,6 +1538,23 @@ if [ -f "$rel" ]; then
       "${build_step_if:-<no tauri-action build step found>}" >&2
   fi
 
+  # AND THE HAPP EVERY ROW BUILDS IN IS THE ONE STAGE 1 PUBLISHED: the rows take it from the
+  # release, which can be edited. Checked between the download and the build, in every row.
+  happ_step="$(step_with 'bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"')"
+  got_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'uses: robinraju/release-downloader@' | cut -d: -f1)"
+  checked_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'bash scripts/check-sha256.sh unyt/workdir/unyt.happ' | cut -d: -f1)"
+  built_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'uses: tauri-apps/tauri-action@' | cut -d: -f1)"
+  if [ -n "$happ_step" ] && [ -n "$got_at" ] && [ -n "$built_at" ] &&
+     [ "$got_at" -lt "$checked_at" ] && [ "$checked_at" -lt "$built_at" ] &&
+     [ "$(printf '%s\n' "$happ_step" | grep -cE '^ *if:' || true)" -eq 0 ] &&
+     [ "$(printf '%s\n' "$happ_step" | grep -cF 'HAPP_SHA256: ${{ needs.publish-happ.outputs.happSha256 }}' || true)" -eq 1 ] &&
+     [ "$(printf '%s\n' "$stage1" | grep -cF 'happSha256: ${{ steps.happ.outputs.sha256 }}' || true)" -eq 1 ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a row can build in a happ stage 1 did not publish" \
+      "download at line ${got_at:-?}, check at ${checked_at:-?}, build at ${built_at:-?} of stage 2" >&2
+  fi
+
   # THE EXACT SET OF ROWS, not a count of them. A matrix that swapped a zero-arc
   # row for a second default-arc one satisfies every check above: eight rows,
   # each with an arc factor, each with its own label. The fixture further down
@@ -1585,7 +1614,7 @@ for f in "$here"/../../.github/workflows/*.y*ml; do
       movable) movable="${movable:+$movable }$where" ;;
       pinned) pinned=$((pinned + 1)) ;;
     esac
-  done < <(awk -v file="$(basename "$f")" -v sq="'" '
+  done < <(awk -v file="$(basename "$f")" -v secrets="$(grep -c 'secrets\.' "$f" || true)" -v sq="'" '
     # THE PAT MUST NOT OUTLIVE THE CHECKOUT: actions/checkout writes the token it
     # is handed into .git/config and leaves it readable there for every later
     # step of the job. Steps, not lines — a file-wide grep would pair the
@@ -1600,14 +1629,16 @@ for f in "$here"/../../.github/workflows/*.y*ml; do
     line ~ /^[[:space:]]*- / { flush(); start = NR }
     { buf = buf line "\n" }
     line ~ /uses:[[:space:]]*actions\/checkout@/ { checkout = 1 }
-    # AND THE COMPILER FOR WHAT USERS INSTALL COMES FROM A COMMIT: a ref that
-    # moves changes which compiler builds the binaries we sign and ship, on a
-    # run nobody re-reads. Which toolchain it installs is set by the `with:`
-    # line, not by the ref — this is about the action, not the version.
+    # AND WHAT A WORKFLOW HOLDING A SECRET RUNS COMES FROM A COMMIT: the release
+    # workflows hold the PAT that edits a release and the key that signs its
+    # updates, and a tag can be moved under us. The rust toolchain is pinned
+    # wherever it runs, as a ref that moves changes which compiler builds what
+    # users install.
     # Length and charset, never a {40} interval — mawk 1.3.3 has no intervals.
-    line ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/ {
+    line ~ /uses:[[:space:]]*[^.[:space:]]/ &&
+      (secrets > 0 || line ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) {
       ref = line
-      sub(/.*rust-toolchain@/, "", ref)
+      sub(/.*@/, "", ref)
       sub(/[[:space:]].*$/, "", ref)
       if (length(ref) == 40 && ref !~ /[^0-9a-f]/) printf "pinned %s:%d\n", file, NR
       else printf "movable %s:%d (%s)\n", file, NR, ref
@@ -1631,8 +1662,8 @@ fi
 # Both directions: an unpinned ref anywhere, and the pinned step having gone.
 if [ -z "$movable" ] && [ "$pinned" -gt 0 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1))
-  printf 'FAIL  %-58s %s\n' "the rust toolchain rides a ref that can move" \
-    "${movable:-no dtolnay/rust-toolchain step is pinned to a commit any more}" >&2
+  printf 'FAIL  %-58s %s\n' "an action beside a secret rides a ref that can move" \
+    "${movable:-no action is pinned to a commit any more}" >&2
 fi
 
 # ── the inventory decides which lanes run, so it must not be able to lie ─────
