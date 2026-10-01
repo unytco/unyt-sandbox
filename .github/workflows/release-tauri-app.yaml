@@ -419,7 +419,9 @@ jobs:
     # JUST THE STAGE: GitHub prefixes every called job with this one, so anything
     # said here is said again on all 16 lines of the Checks list.
     name: Stage 3
-    needs: [publish-happ, release-tauri-app]
+    # After the signing: the smoke runs the release's installers, which could replace the build records
+    # the signing trusts.
+    needs: [publish-happ, release-tauri-app, updater-manifests]
     # Not gated on the build job — one failed row would suppress every lane.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
     if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' }}

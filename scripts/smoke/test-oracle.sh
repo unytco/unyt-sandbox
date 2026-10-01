@@ -1391,6 +1391,8 @@ if [ -f "$rel" ]; then
   fi
   in_stage "$stage3" '    uses: ./.github/workflows/release-smoke.yaml' \
     "the release must call the smoke workflow"
+  in_stage "$stage3" '    needs: [publish-happ, release-tauri-app, updater-manifests]' \
+    "the smoke must not run the release's installers before its updates are signed"
 
   # A GATE MAY NOT RIDE A ROLLING LABEL. macos-latest moved to macOS 26, whose
   # screen-capture rules differ from the ones phase 1 is proven against, so a gate
