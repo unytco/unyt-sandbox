@@ -24,6 +24,7 @@ jobs:
       signedUpdates: ${{ steps.updater.outputs.enabled }}
       updaterPubkey: ${{ steps.updater.outputs.pubkey }}
       startedAt: ${{ steps.start.outputs.at }}
+      happSha256: ${{ steps.happ.outputs.sha256 }}
     steps:
       - name: Note when this run started
         id: start
@@ -116,6 +117,13 @@ jobs:
             cat release_notes.txt
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+      # The build jobs take the happ from the release, which can be edited once this uploads it.
+      - name: Note the happ the builds compile in
+        id: happ
+        run: |
+          sum="$(sha256sum <unyt/workdir/unyt.happ)"
+          echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
 
       - id: create-release
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
@@ -256,6 +264,12 @@ jobs:
           releaseId: ${{ needs.publish-happ.outputs.releaseId }}
           fileName: "unyt.happ"
           out-file-path: "unyt/workdir/"
+
+      - name: Check the happ is the one stage 1 published
+        shell: bash
+        env:
+          HAPP_SHA256: ${{ needs.publish-happ.outputs.happSha256 }}
+        run: bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"
 
       - name: Assert migration-service URL is set (no silently un-updatable build)
         shell: bash

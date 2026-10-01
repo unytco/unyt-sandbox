@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sourced by the updater scripts, never run. signed_fields needs minisign on PATH.
+# Sourced by the release scripts, never run. signed_fields needs minisign on PATH.
 
 fail() {
   echo "::error::$*" >&2

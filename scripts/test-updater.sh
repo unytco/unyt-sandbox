@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# updater-signing.sh, updater-provenance.sh, updater-sign.sh and updater-manifests.sh against fixtures
-# signed with throwaway keys. Needs minisign on PATH (install-minisign.sh), and npx for the Tauri signer.
+# updater-signing.sh, updater-provenance.sh, updater-sign.sh, updater-manifests.sh and check-sha256.sh
+# against fixtures signed with throwaway keys. Needs minisign on PATH (install-minisign.sh), and npx for
+# the Tauri signer.
 set -euo pipefail
 
 command -v minisign >/dev/null || {
@@ -220,6 +221,15 @@ check "a re-run of the release run is refused before signing" \
 mkdir -p "$tmp/unsigned"
 check "signing a release with no signatures fails" \
   refuses "no signatures in" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$tmp/unsigned" 0 /dev/null
+
+printf 'the happ stage 1 built' >"$tmp/unyt.happ"
+printf 'another happ' >"$tmp/other.happ"
+published="$(sha256sum <"$tmp/unyt.happ" | cut -d' ' -f1)"
+check "a build row takes the happ stage 1 published" bash "$here/check-sha256.sh" "$tmp/unyt.happ" "$published"
+check "a build row refuses any other happ" \
+  refuses "other.happ has sha256" bash "$here/check-sha256.sh" "$tmp/other.happ" "$published"
+check "a build row refuses a happ when stage 1 published no digest" \
+  refuses "2: usage:" bash "$here/check-sha256.sh" "$tmp/unyt.happ" ""
 
 # A release as tauri-action publishes it: the bundler signs both arc factors' builds under one file
 # name, the upload renames them, and each build job records what it published.

@@ -1458,11 +1458,14 @@ if [ -f "$rel" ]; then
   # other step's `with:` satisfies a job-wide search while tauri-action publishes
   # its own default names, and an `if:` here can be written before `uses:`, so the
   # slice has to be the step from its `- name:` line.
-  build_step="$(printf '%s\n' "$stage2" | awk '
-    function flush() { if (buf ~ /uses: tauri-apps\/tauri-action/) printf "%s", buf; buf = "" }
-    /^      - / { flush() }
-    { buf = buf $0 "\n" }
-    END { flush() }')"
+  step_with() { # <text>: the stage-2 step holding <text>
+    printf '%s\n' "$stage2" | awk -v text="$1" '
+      function flush() { if (index(buf, text)) printf "%s", buf; buf = "" }
+      /^      - / { flush() }
+      { buf = buf $0 "\n" }
+      END { flush() }'
+  }
+  build_step="$(step_with 'uses: tauri-apps/tauri-action')"
 
   # A folded value reads as one string, so rewrapping one cannot change what the
   # assertions below see. Every occurrence of the key, not just the first.
@@ -1532,6 +1535,23 @@ if [ -f "$rel" ]; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "some rows can skip the build and still read green" \
       "${build_step_if:-<no tauri-action build step found>}" >&2
+  fi
+
+  # AND THE HAPP EVERY ROW BUILDS IN IS THE ONE STAGE 1 PUBLISHED: the rows take it from the
+  # release, which can be edited. Checked between the download and the build, in every row.
+  happ_step="$(step_with 'bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"')"
+  got_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'uses: robinraju/release-downloader@' | cut -d: -f1)"
+  checked_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'bash scripts/check-sha256.sh unyt/workdir/unyt.happ' | cut -d: -f1)"
+  built_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'uses: tauri-apps/tauri-action@' | cut -d: -f1)"
+  if [ -n "$happ_step" ] && [ -n "$got_at" ] && [ -n "$built_at" ] &&
+     [ "$got_at" -lt "$checked_at" ] && [ "$checked_at" -lt "$built_at" ] &&
+     [ "$(printf '%s\n' "$happ_step" | grep -cE '^ *if:' || true)" -eq 0 ] &&
+     [ "$(printf '%s\n' "$happ_step" | grep -cF 'HAPP_SHA256: ${{ needs.publish-happ.outputs.happSha256 }}' || true)" -eq 1 ] &&
+     [ "$(printf '%s\n' "$stage1" | grep -cF 'happSha256: ${{ steps.happ.outputs.sha256 }}' || true)" -eq 1 ]; then
+    pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "a row can build in a happ stage 1 did not publish" \
+      "download at line ${got_at:-?}, check at ${checked_at:-?}, build at ${built_at:-?} of stage 2" >&2
   fi
 
   # THE EXACT SET OF ROWS, not a count of them. A matrix that swapped a zero-arc
