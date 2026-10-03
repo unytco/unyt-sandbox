@@ -499,7 +499,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          cat provenance/*/updater-provenance.sha256 >updater-provenance.sha256
+          find provenance -type f -name '*.sha256' -exec cat {} + >updater-provenance.sha256
           bash scripts/updater-sign.sh "$APP_VERSION" assets "$STARTED_AT" updater-provenance.sha256
 
       # SHA256SUMS comes from the build records, not the release, so it names the bytes each build made.

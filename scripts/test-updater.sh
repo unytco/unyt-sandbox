@@ -390,7 +390,7 @@ gathers_every_build() { gathered Unyt "$tmp/rows" && diff <(ls "$tmp/bundled") <
 check "every build the rows stage is gathered for the release" gathers_every_build
 staged_rows() { # <case> <row>/<name>...: a gathering of rows that staged those names
   local spec
-  for spec in "${@:2}"; do mkdir -p "$tmp/$1/${spec%/*}" && printf 'staged' >"$tmp/$1/$spec"; done
+  for spec in "${@:2}"; do mkdir -p "$(dirname "$tmp/$1/$spec")" && printf 'staged' >"$tmp/$1/$spec"; done
 }
 gather_refused() { # <description> <error text> <productName> <row>/<name>...
   staged_rows "case$((pass + fail))" "${@:4}"
@@ -411,6 +411,10 @@ gather_refused "a row that stages a name across two lines fails" "no build asset
   Unyt "0/$(asset default amd64_linux.deb)"$'\n'"$(asset default amd64_linux.deb).sig"
 gather_refused "a row that stages a directory under an asset name fails" "which is not a file" \
   Unyt "0/$(asset default amd64_linux.deb)/inside"
+staged_rows lone-row "$(asset default amd64_linux.deb)" "$(asset default amd64_linux.deb).sig"
+check "a lone row's builds, which download-artifact leaves unnested, are gathered" gathered Unyt "$tmp/lone-row"
+gather_refused "a lone row that stages the happ fails" "staged unyt.happ, which is no build asset of this release" \
+  Unyt unyt.happ
 mkdir "$tmp/no-rows"
 check "rows that staged nothing fail" refuses "no build row staged anything" gathered Unyt "$tmp/no-rows"
 staged_rows renamed-rows 0/unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
@@ -497,10 +501,9 @@ release_edit "a credential every job of the workflow holds fails" "the workflow,
   's/^jobs:$/env:\n  GH_TOKEN: ${{ secrets.GIT_PAT }}\n&/'
 release_edit "a credential every job holds, written after the jobs, fails" \
   "the workflow, and so every job, reads secrets.git_pat" '$a env:\n  GH_TOKEN: ${{ secrets.GIT_PAT }}'
-release_edit "a holder's credential reached through a YAML alias fails" "release-tauri-app reads secrets.git_pat" \
+release_edit "a holder's credential reached through a YAML alias fails" "uses a YAML anchor" \
   "$(after 'bodyFile: .*' 'x: \&pat ${{ secrets.GIT_PAT }}'); $(after 'APPLE_TEAM_ID: .*' 'X: *pat')"
-release_edit "a holder's credential reached through an alias in a flow sequence fails" \
-  "release-tauri-app reads secrets.git_pat" \
+release_edit "a holder's credential reached through an alias in a flow sequence fails" "uses a YAML anchor" \
   "$(after 'bodyFile: .*' 'x: [\&pat "${{ secrets.GIT_PAT }}"]'); $(after 'APPLE_TEAM_ID: .*' 'X: [*pat]')"
 release_edit "a YAML merge key fails" "uses a YAML merge key" \
   "$(after 'bodyFile: .*' 'x: \&base {a: 1}'); $(after 'APPLE_TEAM_ID: .*' '<<: *base')"
@@ -513,11 +516,19 @@ release_edit "a write spelled with a YAML escape fails" "build-happ holds a toke
   '0,/^      contents: read$/s//      contents: "\\x77rite"/'
 release_edit "permissions keyed otherwise fail the same" "build-happ holds a token that can write" \
   '0,/^    permissions:$/{//{N;s/.*/    permissions :\n      contents: write/}}'
-release_edit "a build row that reads a holder's outputs fails" \
-  "release-tauri-app reads what a credential holder hands on: needs.publish-happ" \
+hands_on="release-tauri-app reads what a credential holder hands on"
+release_edit "a build row that reads a holder's outputs fails" "$hands_on" \
   "$(after 'APPLE_TEAM_ID: .*' 'RELEASE: ${{ needs.publish-happ.outputs.releaseId }}')"
-release_edit "a build row that reads every job's outputs fails" "release-tauri-app reads what a credential holder hands on: needs" \
+release_edit "a build row that reads every job's outputs fails" "$hands_on" \
   "$(after 'APPLE_TEAM_ID: .*' 'ALL: ${{ toJSON(needs) }}')"
+release_edit "a build row that reads a holder's outputs in a key fails" "$hands_on" \
+  "$(after 'APPLE_TEAM_ID: .*' '"${{ needs.publish-happ.outputs.releaseId }}": x')"
+release_edit "a build row that reads a holder's outputs in a bare condition fails" "$hands_on" \
+  "s/^      - name: Free disk when the job ends (linux)\$/      - if: needs.publish-happ.outputs.releaseId != ''\n        run: true\n&/"
+release_edit "a secret in a key of the workflow's env fails" "the workflow, and so every job, reads secrets.git_pat" \
+  's/^jobs:$/env:\n  "${{ secrets.GIT_PAT }}": "1"\n&/'
+release_edit "a secret behind a quoted }} fails" "the workflow, and so every job, reads secrets.git_pat" \
+  "s/^jobs:\$/env:\n  X: \"\${{ format('}}{0}', secrets.GIT_PAT) }}\"\n&/"
 release_edit "a build job whose token can write fails" "build-happ holds a token that can write" \
   '0,/^      contents: read$/s//      contents: write/'
 release_edit "a quoted write fails" "build-happ holds a token that can write" \
@@ -547,7 +558,8 @@ release_edit "a credential holder the workflow no longer has fails" \
 check "a workflow that cannot be read fails" refuses "could not read" credentials "$tmp/workflow/absent.yaml"
 for marker in "uses: ./.github/actions/checkout-app" "run: echo \${{ secrets.UNYT_DEPLOY_KEY }}" "submodules: true" \
   "run: git submodule update" "uses: tauri-apps/tauri-action@v0" "run: npx tauri build" "run: nix develop" \
-  "run: make package" "run: cargo  build" "run: yarn" "run: npm run build" "with: { repository: unytco/unyt }"; do
+  "run: make -C unyt package" 'run: "cargo\tbuild"' "run: yarn" "run: npm ci" "uses: actions/cache@v4" \
+  "with: { repository: unytco/unyt }"; do
   release_edit "the release key's job fails when it carries \"$marker\"" \
     "updater-manifests holds a credential that can change a release, and builds the app" \
     "s|^\(      - name: Install minisign\)\$|      - ${marker//&/\\&}\n\1|"
