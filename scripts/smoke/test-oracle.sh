@@ -1544,6 +1544,10 @@ if [ -f "$rel" ]; then
   # failed row must not hold back every other platform's installers.
   in_stage "$stage2" '          path: release-assets' "a row must upload what it staged"
   in_stage "$stage2" '          pattern: release-assets-*' "the publish job must download what the rows upload"
+  in_stage "$stage2" '          bash scripts/gather-release-assets.sh "$APP_VERSION" "$PRODUCT" rows assets' \
+    "the publish job must publish only what is a build asset of this release"
+  in_stage "$stage1" '        run: bash scripts/check-build-credentials.sh .github/workflows/*.y*ml' \
+    "the release must refuse a workflow that lets build code reach a release credential"
   in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-happ.result == 'success' }}" \
     "one failed row must not keep every other platform off the release"
   in_stage "$stage2" '    needs: [build-happ, publish-builds]' \

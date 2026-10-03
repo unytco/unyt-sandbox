@@ -22,7 +22,9 @@ staged=("$ROWS"/*/*)
 for file in "${staged[@]}"; do
   name="$(basename "$file")"
   [ -f "$file" ] || fail "a build row staged $name, which is not a file"
-  grep -qxF -- "$name" <<<"$expected" || fail "a build row staged $name, which is no build asset of this release"
+  known=""
+  while IFS= read -r asset; do [ "$asset" != "$name" ] || known=1; done <<<"$expected"
+  [ -n "$known" ] || fail "a build row staged $name, which is no build asset of this release"
   [ ! -e "$OUT/$name" ] || fail "two build rows staged $name"
   mv "$file" "$OUT/$name"
 done

@@ -38,6 +38,7 @@ json '.[] | select(endswith(".sig") | not)' <<<"$PATHS" | tr '\\' / |
     if [ -d "$artifact" ]; then
       grep -qxF "$artifact.tar.gz" <<<"$listed" && continue
       artifact="$artifact.tar.gz"
+      [ -f "$artifact" ] || fail "tauri-action packed no $artifact"
     fi
     case "$artifact" in
       *.app.tar.gz) ext=.app.tar.gz ;;

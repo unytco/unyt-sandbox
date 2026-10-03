@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # updater-signing.sh, updater-asset-names.sh, updater-provenance.sh, updater-sign.sh,
 # updater-manifests.sh and check-sha256.sh against fixtures signed with throwaway keys, and
-# check-build-credentials.sh against the workflows. Needs minisign on PATH (install-minisign.sh), and
-# node for the Tauri signer.
+# check-build-credentials.sh against the workflows. Needs minisign on PATH (install-minisign.sh), node for
+# the Tauri signer, and mikefarah's yq v4.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -374,7 +374,8 @@ staged_as_named() { [ ! -e "$tmp/misnamed" ] && [ "$(find "$tmp/bundled" -type f
 check "every build is staged under its asset name, beside its build signature" staged_as_named
 mkdir -p "$tmp/no-updater/Unyt.app" "$tmp/no-updater.out"
 recorded_app() { recorded macOS ARM64 "--target aarch64-apple-darwin" default "$tmp/no-updater.out" "$tmp/no-updater/Unyt.app"; }
-check "a macOS .app that tauri-action did not pack stages nothing" refuses "Unyt.app.tar.gz" recorded_app
+unpacked() { refuses "tauri-action packed no" recorded_app && [ -z "$(ls "$tmp/no-updater.out")" ]; }
+check "a macOS .app that tauri-action did not pack stages nothing" unpacked
 printf 'the app tauri-action packed' >"$tmp/no-updater/Unyt.app.tar.gz"
 recorded_app >/dev/null
 check "a macOS build with no updater bundle stages the one tauri-action packs" \
@@ -405,6 +406,11 @@ gather_refused "a row that stages a signature for a dmg fails" "no build asset o
   Unyt "0/$(asset default x64_darwin.dmg).sig"
 gather_refused "a row that stages another version fails" "no build asset of this release" \
   Unyt "0/unyt_1.2.2_Unyt_default-arc_amd64_linux.deb"
+gather_refused "a row that stages part of an asset name fails" "no build asset of this release" Unyt 0/x64_windows.exe
+gather_refused "a row that stages a name across two lines fails" "no build asset of this release" \
+  Unyt "0/$(asset default amd64_linux.deb)"$'\n'"$(asset default amd64_linux.deb).sig"
+gather_refused "a row that stages a directory under an asset name fails" "which is not a file" \
+  Unyt "0/$(asset default amd64_linux.deb)/inside"
 mkdir "$tmp/no-rows"
 check "rows that staged nothing fail" refuses "no build row staged anything" gathered Unyt "$tmp/no-rows"
 staged_rows renamed-rows 0/unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
@@ -431,6 +437,8 @@ check "a product name GitHub renames is recorded as the release names it" \
     cut -d' ' -f3)" = unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
 check "a build that made nothing records nothing" \
   refuses "tauri-action found nothing this build made" recorded Linux X64 "" default "$tmp"
+check "a build tauri-action reported nothing for records nothing" refuses "tauri-action found nothing this build made" \
+  env RUNNER_OS=Linux RUNNER_ARCH=X64 bash "$here/updater-provenance.sh" "$tmp/tauri.conf.json" default "" "" "$tmp"
 mkdir "$tmp/twice" "$tmp/twice.out"
 printf 'one deb' >"$tmp/twice/Unyt_1.2.3_amd64.deb"
 printf 'another deb' >"$tmp/twice/unyt_1.2.3_amd64.deb"
@@ -489,29 +497,68 @@ release_edit "a credential every job of the workflow holds fails" "the workflow,
   's/^jobs:$/env:\n  GH_TOKEN: ${{ secrets.GIT_PAT }}\n&/'
 release_edit "a credential every job holds, written after the jobs, fails" \
   "the workflow, and so every job, reads secrets.git_pat" '$a env:\n  GH_TOKEN: ${{ secrets.GIT_PAT }}'
-release_edit "a credential reached through a YAML alias fails" "uses a YAML anchor" \
-  "$(after 'nix_path: .*' 'github_access_token: *pat')"
+release_edit "a holder's credential reached through a YAML alias fails" "release-tauri-app reads secrets.git_pat" \
+  "$(after 'bodyFile: .*' 'x: \&pat ${{ secrets.GIT_PAT }}'); $(after 'APPLE_TEAM_ID: .*' 'X: *pat')"
+release_edit "a holder's credential reached through an alias in a flow sequence fails" \
+  "release-tauri-app reads secrets.git_pat" \
+  "$(after 'bodyFile: .*' 'x: [\&pat "${{ secrets.GIT_PAT }}"]'); $(after 'APPLE_TEAM_ID: .*' 'X: [*pat]')"
+release_edit "a YAML merge key fails" "uses a YAML merge key" \
+  "$(after 'bodyFile: .*' 'x: \&base {a: 1}'); $(after 'APPLE_TEAM_ID: .*' '<<: *base')"
+release_edit "a key named twice fails" "names a key twice" \
+  '0,/^      contents: read$/s//&\n      contents: write/'
+release_edit "a YAML tag fails" "uses the YAML tags !!binary" "$(after 'nix_path: .*' 'x: !!binary aGk=')"
+release_edit "a secret spelled with a YAML escape fails" "release-tauri-app reads secrets.git_pat" \
+  "$(after 'APPLE_TEAM_ID: .*' 'X: "${{ \\x73ecrets.GIT_PAT }}"')"
+release_edit "a write spelled with a YAML escape fails" "build-happ holds a token that can write" \
+  '0,/^      contents: read$/s//      contents: "\\x77rite"/'
+release_edit "permissions keyed otherwise fail the same" "build-happ holds a token that can write" \
+  '0,/^    permissions:$/{//{N;s/.*/    permissions :\n      contents: write/}}'
+release_edit "a build row that reads a holder's outputs fails" \
+  "release-tauri-app reads what a credential holder hands on: needs.publish-happ" \
+  "$(after 'APPLE_TEAM_ID: .*' 'RELEASE: ${{ needs.publish-happ.outputs.releaseId }}')"
+release_edit "a build row that reads every job's outputs fails" "release-tauri-app reads what a credential holder hands on: needs" \
+  "$(after 'APPLE_TEAM_ID: .*' 'ALL: ${{ toJSON(needs) }}')"
 release_edit "a build job whose token can write fails" "build-happ holds a token that can write" \
   '0,/^      contents: read$/s//      contents: write/'
 release_edit "a quoted write fails" "build-happ holds a token that can write" \
   '0,/^      contents: read$/s//      contents: "write"/'
 release_edit "a build job with every permission fails" "build-happ holds a token that can write" \
   '0,/^    permissions:$/{//{N;s/.*/    permissions: write-all/}}'
+release_edit "a workflow whose every token can write fails" "build-happ holds a token that can write" \
+  '0,/^    permissions:$/{//{N;s/.*/    # none/}}; s/^jobs:$/permissions: write-all\n&/'
+release_edit "a workflow whose jobs key is spelled otherwise is read the same" "release-tauri-app reads secrets.git_pat" \
+  "s/^jobs:\$/jobs :/; $(after 'APPLE_TEAM_ID: .*' 'GITHUB_TOKEN: ${{ secrets.GIT_PAT }}')"
+release_edit "a secret in a block of the workflow's env fails" "the workflow, and so every job, reads secrets.git_pat" \
+  's/^jobs:$/env:\n  X: |\n    y # ${{ secrets.GIT_PAT }}\n&/'
 release_edit "a build job that takes the default permissions fails" \
-  "build-happ takes the repository default permissions" '0,/^    permissions:$/s//    # permissions:/'
+  "build-happ takes the repository default permissions" '0,/^    permissions:$/{//{N;d}}'
 release_edit "a new job holding the release PAT fails" "extra reads secrets.git_pat" \
   's/^jobs:$/&\n  extra:\n    runs-on: ubuntu-22.04\n    permissions: {}\n    steps:\n      - run: npx tauri build\n        env:\n          GH_TOKEN: ${{ secrets.GIT_PAT }}/'
 release_edit "a workflow indented otherwise is read the same" "release-tauri-app reads secrets.git_pat" \
   '/^jobs:$/,$s/^ /   /; s/^\(            APPLE_TEAM_ID: .*\)$/\1\n            GITHUB_TOKEN: ${{ secrets.GIT_PAT }}/'
 release_edit "a credential holder that checks out the app fails" \
   "publish-happ holds a credential that can change a release, and builds the app" \
-  's/^\(    needs: build-happ\)$/\1\n    steps:\n      - uses: .\/.github\/actions\/checkout-app/'
+  's/^      - id: create-release$/      - uses: .\/.github\/actions\/checkout-app\n&/'
 release_edit "a credential holder that runs a build fails" \
   "publish-builds holds a credential that can change a release, and builds the app" \
   's/^\(          gh release upload .*\)$/\1\n      - run: yarn install/'
 release_edit "a credential holder the workflow no longer has fails" \
   "names publish-builds as a credential holder, but has no such job" 's/^  publish-builds:$/  publish-assets:/'
 check "a workflow that cannot be read fails" refuses "could not read" credentials "$tmp/workflow/absent.yaml"
+for marker in "uses: ./.github/actions/checkout-app" "run: echo \${{ secrets.UNYT_DEPLOY_KEY }}" "submodules: true" \
+  "run: git submodule update" "uses: tauri-apps/tauri-action@v0" "run: npx tauri build" "run: nix develop" \
+  "run: make package" "run: cargo  build" "run: yarn" "run: npm run build" "with: { repository: unytco/unyt }"; do
+  release_edit "the release key's job fails when it carries \"$marker\"" \
+    "updater-manifests holds a credential that can change a release, and builds the app" \
+    "s|^\(      - name: Install minisign\)\$|      - ${marker//&/\\&}\n\1|"
+done
+mkdir -p "$tmp/clean"
+cp "$workflows/ci.yaml" "$tmp/clean/"
+edited "$(after 'APPLE_TEAM_ID: .*' 'GITHUB_TOKEN: ${{ secrets.GIT_PAT }}')"
+check "a refused workflow fails the check whatever is checked after it" \
+  refuses "release-tauri-app reads secrets.git_pat" credentials "$tmp/workflow/release-tauri-app.yaml" "$tmp/clean/ci.yaml"
+check "a refused workflow fails the check whatever is checked before it" \
+  refuses "release-tauri-app reads secrets.git_pat" credentials "$tmp/clean/ci.yaml" "$tmp/workflow/release-tauri-app.yaml"
 flow_read() { edited '0,/^    permissions:$/{//{N;s/.*/    permissions: { contents: read }/}}' && credentials "$tmp/workflow/release-tauri-app.yaml"; }
 check "permissions written as a flow mapping read the same" flow_read
 
