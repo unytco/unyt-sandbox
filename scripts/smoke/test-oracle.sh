@@ -13,7 +13,7 @@ pass=0
 fail=0
 check() { # <description> <expected: yes|no> <log line(s)> <matcher>
   local desc="$1" expected="$2" log="$3" matcher="$4" got
-  if printf '%s\n' "$log" | "$matcher"; then got=yes; else got=no; fi
+  if "$matcher" <<<"$log"; then got=yes; else got=no; fi
   if [ "$got" = "$expected" ]; then
     pass=$((pass + 1))
   else
@@ -114,12 +114,12 @@ printf 'libc6 (>= 2.17)\nlibstdc++6\nlibgtk-3-0\nlibsoup-3.0-0 (>= 3.0.3)\nlibpa
 printf 'libc6 (>= 2.34)\nlibstdc++6 (>= 4.1.1)\nlibglib2.0-0 (>= 2.65.1)\nlibsoup-3.0-0 (>= 3.0.3)\nlibpango-1.0-0 (>= 1.10.0)\n' >"$dep_c"
 gaps="$(smoke_depends_gaps "$dep_d" "$dep_c")"
 expect_gap() {
-  if printf '%s\n' "$gaps" | grep -qF -e "$1"; then pass=$((pass + 1)); else
+  if grep -qF -e "$1" <<<"$gaps"; then pass=$((pass + 1)); else
     fail=$((fail + 1)); printf 'FAIL  %-58s not reported\n' "$2" >&2
     printf '      gaps were:\n%s\n' "$gaps" >&2; fi
 }
 reject_gap() {
-  if printf '%s\n' "$gaps" | grep -qF -e "$1"; then
+  if grep -qF -e "$1" <<<"$gaps"; then
     fail=$((fail + 1)); printf 'FAIL  %-58s wrongly reported\n' "$2" >&2
   else pass=$((pass + 1)); fi
 }
@@ -168,20 +168,20 @@ printf 'libgtk-3-0 (>= 3.21.5)\nlibglib2.0-0 (>= 2.66.0)\n' >"$prov_d"
 printf 'libgtk-3-0t64 (>= 3.21.5)\nlibglib2.0-0t64 (>= 2.66.0)\nlibabsent (>= 1)\n' >"$prov_c"
 printf 'libgtk-3-0t64 libgtk-3-0\nlibglib2.0-0t64 libglib2.0-0\n' >"$prov_p"
 prov_out="$(smoke_depends_gaps "$prov_d" "$prov_c" "$prov_p")"
-if printf '%s\n' "$prov_out" | grep -q 'libgtk-3-0t64'; then
+if grep -q 'libgtk-3-0t64' <<<"$prov_out"; then
   fail=$((fail + 1)); echo "FAIL  a provided name should count as declared (libgtk-3-0t64)" >&2
 else pass=$((pass + 1)); fi
-if printf '%s\n' "$prov_out" | grep -q 'libglib2.0-0t64'; then
+if grep -q 'libglib2.0-0t64' <<<"$prov_out"; then
   fail=$((fail + 1)); echo "FAIL  a provided name should count as declared (libglib2.0-0t64)" >&2
 else pass=$((pass + 1)); fi
-if printf '%s\n' "$prov_out" | grep -q 'MISSING libabsent'; then pass=$((pass + 1)); else
+if grep -q 'MISSING libabsent' <<<"$prov_out"; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  a genuinely absent dependency must still be MISSING" >&2; fi
 printf 'libgtk-3-0 (>= 1.0)\n' >"$prov_d"
 printf 'libgtk-3-0t64 (>= 3.21.5)\n' >"$prov_c"
-if smoke_depends_gaps "$prov_d" "$prov_c" "$prov_p" | grep -q '^TOOLOW '; then pass=$((pass + 1)); else
+if grep -q '^TOOLOW ' <<<"$(smoke_depends_gaps "$prov_d" "$prov_c" "$prov_p")"; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  a too-low floor must still fire through a provided name" >&2; fi
 printf 'libgtk-3-0 (>= 3.21.5)\n' >"$prov_d"
-if smoke_depends_gaps "$prov_d" "$prov_c" | grep -q '^MISSING libgtk-3-0t64'; then pass=$((pass + 1)); else
+if grep -q '^MISSING libgtk-3-0t64' <<<"$(smoke_depends_gaps "$prov_d" "$prov_c")"; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  without a provides map the t64 name should read as MISSING" >&2; fi
 rm -f "$prov_d" "$prov_c" "$prov_p"
 
@@ -252,7 +252,7 @@ for loc in C en_US.UTF-8; do
   # this pass without testing anything. `locale -a` spells them without the dash
   # and in lower case (`en_US.utf8`), hence the normalising on both sides.
   loc_key="${loc//-/}"
-  if ! locale -a 2>/dev/null | tr -d '-' | grep -qixF "$loc_key"; then
+  if ! grep -qixF "$loc_key" <<<"$(locale -a 2>/dev/null | tr -d '-')"; then
     echo "SKIP  tie-break under LC_ALL=$loc (locale not generated)" >&2
     continue
   fi
@@ -368,7 +368,7 @@ if [ -z "$sorted_out" ]; then pass=$((pass + 1)); else
 fi
 # And the gate still fires on the same sorted list when a floor really is absent.
 printf 'libpangocairo-1.0-0 (>= 1.14.0)\n' >"$sorted_c"
-if smoke_depends_gaps "$sorted_d" "$sorted_c" | grep -q '^MISSING libpangocairo-1.0-0'; then
+if grep -q '^MISSING libpangocairo-1.0-0' <<<"$(smoke_depends_gaps "$sorted_d" "$sorted_c")"; then
   pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL  the sorted real list must still report a genuinely absent dep" >&2
 fi
@@ -409,7 +409,7 @@ if command -v objdump >/dev/null 2>&1 && [ -x "$(command -v ls || true)" ]; then
   printf '[Desktop Entry]\nExec=app\n' >"$appdir/app.desktop"
   printf 'not an elf at all' >"$appdir/usr/lib/zzz-data.so.9"   # sorts last
   if out="$(bash "$here/check-appimage.sh" "$appdir" 2>&1)"; then :; fi
-  if printf '%s' "$out" | grep -q 'glibc ceiling of the bundle'; then
+  if grep -q 'glibc ceiling of the bundle' <<<"$out"; then
     pass=$((pass + 1))
   else
     fail=$((fail + 1))
@@ -428,14 +428,14 @@ if command -v objdump >/dev/null 2>&1 && [ -x "$(command -v ls || true)" ]; then
   cp "$real_elf" "$appdir2/usr/bin/app"
   cp "$real_elf" "$appdir2/usr/bin/helper"
   LC_ALL=C sed -i 's/GLIBC_2\.34/GLIBC_9.99/' "$appdir2/usr/bin/helper" 2>/dev/null || true
-  if objdump -T "$appdir2/usr/bin/helper" 2>/dev/null | grep -q 'GLIBC_9\.99'; then
+  if grep -q 'GLIBC_9\.99' <<<"$(objdump -T "$appdir2/usr/bin/helper" 2>/dev/null)"; then
     if out2="$(bash "$here/check-appimage.sh" "$appdir2" 2>&1)"; then
       fail=$((fail + 1))
       echo "FAIL  a non-Exec helper requiring GLIBC_9.99 left the ceiling GREEN" >&2
     else
       pass=$((pass + 1))
     fi
-    if printf '%s' "$out2" | grep -q 'helper'; then pass=$((pass + 1)); else
+    if grep -q 'helper' <<<"$out2"; then pass=$((pass + 1)); else
       fail=$((fail + 1))
       echo "FAIL  the too-new helper was not named as the worst offender" >&2
       printf '      output was: %s\n' "$out2" >&2
@@ -620,7 +620,7 @@ sum_case() { # <rows> <expected-rc> <description> [expected-substring] [line-end
   if [ "$rc" = "$want" ]; then pass=$((pass + 1)); else
     fail=$((fail + 1)); printf 'FAIL  %-58s exit %s, expected %s\n' "$desc" "$rc" "$want" >&2; fi
   [ -n "$want_text" ] || return 0
-  if printf '%s' "$out" | grep -qF -e "$want_text"; then pass=$((pass + 1)); else
+  if grep -qF -e "$want_text" <<<"$out"; then pass=$((pass + 1)); else
     fail=$((fail + 1)); printf 'FAIL  %-58s no "%s" in:\n%s\n' "$desc" "$want_text" "$out" >&2; fi
 }
 sum_case 'one|pass
@@ -684,7 +684,7 @@ sum_out() { # <rows> — the summary's own stdout and stderr
 }
 sum_cell() { # <rows> <expected RESULT for check `two`> <description>
   local out; out="$(sum_out "$1")"
-  if printf '%s\n' "$out" | grep -qE "^L +two +$2\$"; then pass=$((pass + 1)); else
+  if grep -qE "^L +two +$2\$" <<<"$out"; then pass=$((pass + 1)); else
     fail=$((fail + 1)); printf 'FAIL  %-58s\n%s\n' "$3" "$out" >&2; fi
 }
 sum_cell 'one|pass
@@ -733,7 +733,7 @@ if [ -f "$wf" ]; then
   for spec in container-checks.sh container-checks-appimage.sh check-macos.sh; do
     missing=""
     while read -r id; do
-      printf '%s\n' "$wired" | grep -qx -- "$id" || missing="${missing:+$missing }$id"
+      grep -qx -- "$id" <<<"$wired" || missing="${missing:+$missing }$id"
     done < <(bash "$here/$spec" --print-checks | cut -f1)
     if [ -z "$missing" ]; then pass=$((pass + 1)); else
       fail=$((fail + 1))
@@ -855,15 +855,15 @@ EOF
       /^    if:/ { inif = 1; print; next }
       inif && /^      / { print; next }
       inif { inif = 0 }')"
-    printf '%s\n' "$gate" | grep -qF -- '!cancelled()' ||
+    grep -qF -- '!cancelled()' <<<"$gate" ||
       missing="${missing:+$missing }an if: gate containing !cancelled()"
     for banned in 'inputs\.' 'github\.event' '\.result'; do
-      printf '%s\n' "$gate" | grep -qE -- "$banned" &&
+      grep -qE -- "$banned" <<<"$gate" &&
         missing="${missing:+$missing }an if: gate reading $banned"
     done
     # Without `needs:` the outputs it gates on are empty forever, so the lane
     # never runs again and nothing goes red to say so.
-    printf '%s\n' "$body" | grep -qE '^    needs: inventory$' ||
+    grep -qE '^    needs: inventory$' <<<"$body" ||
       missing="${missing:+$missing }needs: inventory"
     # AND THE GATE AND THE MATRIX MUST NAME THE SAME OUTPUT. Both names being
     # declared satisfies the correspondence check below while a lane gated on the
@@ -876,11 +876,11 @@ EOF
       missing="${missing:+$missing }gates on [$gate_ref] but builds its matrix from [$rows_ref]"
     # A launch step that never ran leaves no verdict file and no PROVE_RC, and
     # only a step that runs anyway can say so.
-    printf '%s\n' "$body" | grep -qE '^      - name: The verdict$' ||
+    grep -qE '^      - name: The verdict$' <<<"$body" ||
       missing="${missing:+$missing }a 'The verdict' step of its own"
     # The frames are what the lane produces; `ignore` would publish an empty
     # artifact as a complete one. macOS is `warn` on purpose — see the lane.
-    printf '%s\n' "$body" | grep -q 'if-no-files-found: ignore' &&
+    grep -q 'if-no-files-found: ignore' <<<"$body" &&
       missing="${missing:+$missing }if-no-files-found: ignore"
     if [ -z "$missing" ]; then pass=$((pass + 1)); else
       fail=$((fail + 1))
@@ -895,8 +895,8 @@ EOF
   while IFS='|' read -r job script arg; do
     [ -n "$job" ] || continue
     body="$(job_body "$job")"
-    if printf '%s\n' "$body" | grep -qF -- "load-proving/$script" &&
-       printf '%s\n' "$body" | grep -qF -- "$arg"; then pass=$((pass + 1)); else
+    if grep -qF -- "load-proving/$script" <<<"$body" &&
+       grep -qF -- "$arg" <<<"$body"; then pass=$((pass + 1)); else
       fail=$((fail + 1))
       printf 'FAIL  %-58s %s\n' "$job does not launch its own platform's artifact" \
         "$script with $arg" >&2
@@ -1035,7 +1035,7 @@ a_default-arc_x64_windows.msi'
   while read -r job _; do
     [ -n "$job" ] || continue
     case "$job" in opens-* | static-*) ;; *) continue ;; esac
-    printf '%s\n' "$(job_body "$job")" | grep -qE '^      matrix:' || continue
+    grep -qE '^      matrix:' <<<"$(job_body "$job")" || continue
     matrixed=$((matrixed + 1))
     name="$(job_name "$job")"
     rows="$(rows_for "$job")" || { unwired="${unwired:+$unwired }$job"; continue; }
@@ -1093,7 +1093,7 @@ EOF
   # This file cannot notice that it was never called, so it asserts the call site
   # instead.
   inv_body="$(job_body inventory)"
-  if printf '%s\n' "$inv_body" | grep -qF 'bash scripts/smoke/test-oracle.sh' &&
+  if grep -qF 'bash scripts/smoke/test-oracle.sh' <<<"$inv_body" &&
      [ "$(printf '%s\n' "$inv_body" | grep -c 'continue-on-error' || true)" -eq 0 ]; then
     pass=$((pass + 1)); else
     fail=$((fail + 1))
@@ -1191,12 +1191,12 @@ LAUNCHES
   [ "$refcount" -ge 6 ] || missing="only $refcount gate(s) read an inventory output"
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
-    printf '%s\n' "$declared" | grep -qx -- "$ref" ||
+    grep -qx -- "$ref" <<<"$declared" ||
       missing="${missing:+$missing }$ref(no such job output)"
     # `images` is the workflow's own step output; everything else comes from the
     # script, and a matrix built from an unprinted name is an empty matrix.
     [ "$ref" = images ] && continue
-    printf '%s\n' "$printed" | grep -qx -- "$ref" ||
+    grep -qx -- "$ref" <<<"$printed" ||
       missing="${missing:+$missing }$ref(release-inventory.sh prints no such line)"
   done <<EOF
 $refs
@@ -1228,18 +1228,18 @@ STUB
     }
     got="$(win_run false true)"
     if [ "$(printf '%s\n' "$got" | grep -c 'SUMMARISED')" = 1 ] &&
-       printf '%s\n' "$got" | grep -q 'SUMMARISED L/\.msi' &&
-       printf '%s\n' "$got" | grep -qx 'rc=0'; then pass=$((pass + 1)); else
+       grep -q 'SUMMARISED L/\.msi' <<<"$got" &&
+       grep -qx 'rc=0' <<<"$got"; then pass=$((pass + 1)); else
       fail=$((fail + 1))
       printf 'FAIL  %-58s %s\n' "an absent installer must not be summarised" \
         "$(printf '%s' "$got" | tr '\n' ' ')" >&2
     fi
-    if printf '%s\n' "$got" | grep -q 'exe — not in this release'; then pass=$((pass + 1)); else
+    if grep -q 'exe — not in this release' <<<"$got"; then pass=$((pass + 1)); else
       fail=$((fail + 1))
       printf 'FAIL  %-58s %s\n' "and the summary must say the lane was skipped" \
         "$(printf '%s' "$got" | tr '\n' ' ')" >&2
     fi
-    if printf '%s\n' "$(win_run false false)" | grep -qx 'rc=0'; then
+    if grep -qx 'rc=0' <<<"$(win_run false false)"; then
       fail=$((fail + 1))
       printf 'FAIL  %-58s %s\n' "a lane that smoked neither installer read clean" \
         "an empty table publishes as a passing verdict" >&2
@@ -1277,7 +1277,7 @@ STUB
   for want in 'inputs.static-checks-advisory == true' \
               'Phase 1 (does it open) is not advisory' \
               'it does fail THIS run'; do
-    printf '%s\n' "$note" | grep -qF -- "$want" || wrong="${wrong:+$wrong; }$want"
+    grep -qF -- "$want" <<<"$note" || wrong="${wrong:+$wrong; }$want"
   done
   if [ -z "$wrong" ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
@@ -1308,33 +1308,33 @@ if [ -f "$rel" ]; then
   # WHOLE lines: `# bash …--self-test` still contains the substring, and
   # `id: msiver` still contains `id: msi`.
   in_stage() { # <slice> <line, verbatim> <description>
-    if printf '%s\n' "$1" | grep -qxF -- "$2"; then pass=$((pass + 1)); else
+    if grep -qxF -- "$2" <<<"$1"; then pass=$((pass + 1)); else
       fail=$((fail + 1)); printf 'FAIL  %-58s %s\n' "$3" "$2" >&2; fi
   }
   in_stage "$stage1" '          bash scripts/msi-version.sh --self-test' \
     "stage 1 must prove the derivation still works"
   in_stage "$stage1" '        id: msi' "the derivation step must keep the id its output reads"
-  if printf '%s\n' "$stage1" | grep -qF -- 'steps.msi.outputs.MSI_VERSION'; then pass=$((pass + 1)); else
+  if grep -qF -- 'steps.msi.outputs.MSI_VERSION' <<<"$stage1"; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "stage 1 must publish the derived version" "as a job output the build can read" >&2
   fi
-  if printf '%s\n' "$stage2" | grep -qF -- 'needs.build-happ.outputs.msiVersion'; then pass=$((pass + 1)); else
+  if grep -qF -- 'needs.build-happ.outputs.msiVersion' <<<"$stage2"; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the build job must consume the stage-1 value" "not derive one of its own" >&2
   fi
-  if printf '%s\n' "$stage2" | grep -qF -- '.bundle.windows.wix.version'; then pass=$((pass + 1)); else
+  if grep -qF -- '.bundle.windows.wix.version' <<<"$stage2"; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "nothing writes the key the bundler reads" "bundle.windows.wix.version" >&2
   fi
   # BOTH halves. Without the version half a stable release writes an empty
   # wix.version and the bundler rejects it — the user-facing channel, this time.
   pin_if="$(printf '%s\n' "$stage2" | sed -n '/name: Pin the MSI product version/,/run:/p' | grep -m1 '^ *if:')"
-  if printf '%s\n' "$pin_if" | grep -qF -- "runner.os == 'Windows'" &&
-     printf '%s\n' "$pin_if" | grep -qF -- "msiVersion != ''"; then pass=$((pass + 1)); else
+  if grep -qF -- "runner.os == 'Windows'" <<<"$pin_if" &&
+     grep -qF -- "msiVersion != ''" <<<"$pin_if"; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the msi pin is not gated on Windows AND a version" "${pin_if:-<no if: found>}" >&2
   fi
-  if printf '%s\n' "$stage2" | grep -qF -- 'msi-version.sh'; then
+  if grep -qF -- 'msi-version.sh' <<<"$stage2"; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the build job derives the msi version itself" \
       "a bad tag then fails four platform builds in, not in seconds" >&2
@@ -1342,7 +1342,7 @@ if [ -f "$rel" ]; then
   # The channels msi-version.sh is written against; add one and every tag on it
   # dies in stage 1. The case patterns are QUOTED, or `[0-9]` would be read as a
   # character class and match both.
-  tags="$(sed -n '/^    tags:$/,/^jobs:$/p' "$rel" | grep -oE '"[^"]+"' | tr -d '"')"
+  tags="$(sed -n '/^    tags:$/,/^[a-z]/p' "$rel" | grep -oE '"[^"]+"' | tr -d '"')"
   unknown=""
   for tag in $tags; do
     case "$tag" in
@@ -1382,7 +1382,7 @@ if [ -f "$rel" ]; then
   # job is green, so `if: github.event_name == 'workflow_dispatch'` here would
   # leave every release calling no smoke, with nothing red anywhere.
   stage3_if="$(printf '%s\n' "$stage3" | grep -m1 '^    if:')"
-  if printf '%s\n' "$stage3_if" | grep -qF -- '!cancelled()' &&
+  if grep -qF -- '!cancelled()' <<<"$stage3_if" &&
      [ "$(printf '%s\n' "$stage3_if" | grep -cE 'github\.event|inputs\.' || true)" -eq 0 ]; then
     pass=$((pass + 1)); else
     fail=$((fail + 1))
@@ -1410,10 +1410,6 @@ if [ -f "$rel" ]; then
   # Full-line comments stripped, because the label is named in the comments that
   # explain all this; a trailing one is left, since a line that still RUNS on it
   # is exactly what this looks for.
-  #
-  # COUNTED, never `| grep -q`: under `pipefail` the -q exits on the first match
-  # and the upstream grep dies of SIGPIPE, so the pipeline reports 141 and the
-  # `if` reads it as "no match".
   if [ "$(grep -v '^[[:space:]]*#' "$wf" | grep -c 'macos-latest' || true)" -ne 0 ]; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "a smoke lane rides the rolling macOS image" \
@@ -1527,7 +1523,7 @@ if [ -f "$rel" ]; then
   checked_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'bash scripts/check-sha256.sh unyt/workdir/unyt.happ' | cut -d: -f1)"
   built_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'uses: tauri-apps/tauri-action@' | cut -d: -f1)"
   if [ -n "$happ_step" ] && [ -n "$got_at" ] && [ -n "$built_at" ] &&
-     printf '%s\n' "$happ_download" | grep -qF 'uses: actions/download-artifact@' &&
+     grep -qF 'uses: actions/download-artifact@' <<<"$happ_download" &&
      [ "$got_at" -lt "$checked_at" ] && [ "$checked_at" -lt "$built_at" ] &&
      [ "$(printf '%s\n' "$happ_step" | grep -cE '^ *if:' || true)" -eq 0 ] &&
      [ "$(printf '%s\n' "$happ_step" | grep -cF 'HAPP_SHA256: ${{ needs.build-happ.outputs.happSha256 }}' || true)" -eq 1 ] &&
@@ -1556,7 +1552,7 @@ if [ -f "$rel" ]; then
   in_stage "$stage2" "          find provenance -type f -name '*.sha256' -exec cat {} + >updater-provenance.sha256" \
     "the signing must read every build's record, however many rows recorded one"
   # One directory per row, which is how gather-release-assets.sh tells two rows' files apart.
-  if printf '%s\n' "$(step_with '          pattern: release-assets-*')" | grep -q 'merge-multiple'; then
+  if grep -q 'merge-multiple' <<<"$(step_with '          pattern: release-assets-*')"; then
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "the publish job merges the rows' builds" "a name two rows staged would pass as one" >&2
   else pass=$((pass + 1)); fi
@@ -1687,7 +1683,7 @@ x_default-arc_x64_windows.msi'
 
 got="$(inv "$full")"
 for want in 'deb=true' 'appimage=true' 'exe=true' 'msi=true'; do
-  if printf '%s\n' "$got" | grep -qx -- "$want"; then pass=$((pass + 1)); else
+  if grep -qx -- "$want" <<<"$got"; then pass=$((pass + 1)); else
     fail=$((fail + 1)); printf 'FAIL  %-58s %s\n' "full release should report $want" "$got" >&2; fi
 done
 if [ "$(printf '%s\n' "$got" | grep -o '"arch"' | grep -c .)" = 2 ]; then pass=$((pass + 1)); else
@@ -1709,7 +1705,7 @@ fi
 # release without it must lose exactly that row and keep both NSIS lanes.
 got="$(inv "$(printf '%s\n' "$full" | grep -v -- x64_windows.msi)")"
 if [ "$(rows_of "$got" prove_windows)" = 2 ] &&
-   ! printf '%s\n' "$got" | grep '^prove_windows=' | grep -q '"msi"'; then
+   ! grep -q '"msi"' <<<"$(grep '^prove_windows=' <<<"$got")"; then
   pass=$((pass + 1)); else
   fail=$((fail + 1))
   printf 'FAIL  %-58s %s\n' "a release with no .msi should lose one Windows lane" \
@@ -1717,7 +1713,7 @@ if [ "$(rows_of "$got" prove_windows)" = 2 ] &&
 fi
 got="$(inv "$(printf '%s\n' "$full" | grep -v -- linux.AppImage)")"
 if [ "$(rows_of "$got" prove_linux)" = 1 ] &&
-   printf '%s\n' "$got" | grep '^prove_linux=' | grep -q '"deb"'; then
+   grep -q '"deb"' <<<"$(grep '^prove_linux=' <<<"$got")"; then
   pass=$((pass + 1)); else
   fail=$((fail + 1))
   printf 'FAIL  %-58s %s\n' "a release with no AppImage should keep the .deb lane" \
@@ -1727,7 +1723,7 @@ fi
 # one artifact must remove more than one lane and still leave the .msi's.
 got="$(inv "$(printf '%s\n' "$full" | grep -v -- x64_windows.exe)")"
 if [ "$(rows_of "$got" prove_windows)" = 1 ] &&
-   printf '%s\n' "$got" | grep '^prove_windows=' | grep -q '"msi"'; then
+   grep -q '"msi"' <<<"$(grep '^prove_windows=' <<<"$got")"; then
   pass=$((pass + 1)); else
   fail=$((fail + 1))
   printf 'FAIL  %-58s %s\n' "a release with no .exe should lose both NSIS lanes" \
@@ -1788,7 +1784,7 @@ got="$(inv "$full")"
 while IFS='|' read -r drop key; do
   [ -n "$drop" ] || continue
   got="$(inv "$(printf '%s\n' "$full" | grep -v -- "$drop")")"
-  if printf '%s\n' "$got" | grep -qx -- "$key=false" &&
+  if grep -qx -- "$key=false" <<<"$got" &&
      [ "$(printf '%s\n' "$got" | grep -c '=true')" = 3 ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s dropped %s\n' "only $key should read absent" "$drop" >&2
@@ -1803,15 +1799,15 @@ DROPS
 got="$(inv 'x_default-arc_amd64_linuxXdeb
 x_default-arc_amd64_linux.AppImage
 x_default-arc_x64_windows.exe')"
-if printf '%s\n' "$got" | grep -qx 'deb=false'; then pass=$((pass + 1)); else
+if grep -qx 'deb=false' <<<"$got"; then pass=$((pass + 1)); else
   fail=$((fail + 1))
   printf 'FAIL  %-58s %s\n' "a suffix must match literally, not as a regex" "$got" >&2
 fi
 
 # One macOS build failing costs one matrix row, not the lane.
 got="$(inv "$(printf '%s\n' "$full" | grep -v aarch64_darwin)")"
-if printf '%s\n' "$got" | grep -q 'dmgs=\[{"runner":"macos-15-intel"' &&
-   ! printf '%s\n' "$got" | grep -q 'aarch64'; then pass=$((pass + 1)); else
+if grep -q 'dmgs=\[{"runner":"macos-15-intel"' <<<"$got" &&
+   ! grep -q 'aarch64' <<<"$got"; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "a missing arm64 DMG should drop only its row" >&2; fi
 
 # The shape of run 31800038674, where every build failed: skipping all four lanes
@@ -1932,6 +1928,70 @@ for drv in container-checks.sh container-checks-appimage.sh; do
     fail=$((fail + 1)); printf 'FAIL  %s --print-checks listed %s check(s)\n' "$drv" "$n" >&2; fi
 done
 
+# A MATCH READS A HERE-STRING, never a pipe into grep -q or a matcher built on it:
+# under pipefail grep's early exit can kill the writer with SIGPIPE, and a match
+# then reads as none on some runs only.
+piped_into_quiet_grep() { # <file>: the lines that do it
+  awk '
+    /^[[:space:]]*#/ { next }
+    { if (held == "") at = NR; line = held $0 }
+    line ~ /\|&?[[:space:]]*(#.*)?$/ || line ~ /\\$/ {
+      sub(/[[:space:]]*#[^|]*$/, "", line); sub(/\\$/, "", line); held = line " "; next
+    }
+    { held = ""; gsub(/\|\|/, "  ", line); gsub(/\|&/, "|", line); n = split(line, seg, "|")
+      for (i = 2; i <= n; i++) {
+        cmd = seg[i]; sub(/[;)}&<>].*$/, "", cmd); sub(/^[[:space:]{(!]*/, "", cmd)
+        while (match(cmd, /^(command|env|[A-Za-z_]+=[^[:space:]]*)[[:space:]]+/)) cmd = substr(cmd, RLENGTH + 1)
+        if (cmd ~ /^(smoke_match_|"?\$matcher)/ || (cmd ~ /^[ef]?grep[[:space:]]/ &&
+            (" " cmd " ") ~ /[[:space:]](-[A-Za-z0-9]*q[A-Za-z0-9]*|--q[a-z]*|--sil[a-z]*)[[:space:]]/)) {
+          print at; break
+        }
+      } }' "$1"
+}
+# Every shape it must see, numbered by line, then shapes it must pass. The pipe
+# goes in as $P, or this file would trip over its own fixture.
+P='|'
+pipe_shapes="$(mktemp)"
+cat >"$pipe_shapes" <<SHAPES
+printf x $P grep -q y
+printf x $P
+  grep -qF y
+printf x $P \\
+  grep -q y
+printf x $P # the match
+  grep -q y
+printf x $P& grep -q y
+printf x $P grep -e y -q
+printf x $P grep -m1 -q y
+printf x $P grep y -q
+printf x $P egrep -q y
+printf x $P env LC_ALL=C grep -q y
+printf x $P { grep -q y; }
+printf x $P grep --qui y
+printf x $P "\$matcher"
+printf x $P smoke_match_failed
+printf x $P command grep -q y
+grep -q y <<<"\$x"
+printf x $P grep -c y $P$P true
+[ "\$(printf x $P grep -c . $P$P true)" -eq 1 ]
+false $P$P grep -q y file
+# printf x $P grep -q y
+printf x $P smoke_count_disconnects
+printf x $P grep -v y $P wc -l
+SHAPES
+seen="$(piped_into_quiet_grep "$pipe_shapes" | tr '\n' ' ')"
+rm -f "$pipe_shapes"
+if [ "$seen" = "1 2 4 6 8 9 10 11 12 13 14 15 16 17 18 " ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "the pipe guard no longer sees every shape" "saw lines [$seen]" >&2
+fi
+if piped="$(piped_into_quiet_grep "$here/test-oracle.sh")" && [ -z "$piped" ]; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1))
+  printf 'FAIL  %-58s %s\n' "a match is piped into grep -q" \
+    "line(s) ${piped:-?, the guard could not read this file}: use a here-string" >&2
+fi
+
 echo "oracle regression: $pass passed, $fail failed"
 
 # The FAIL lines go to stderr inside a collapsed step log — so nothing sends you
@@ -1941,12 +2001,12 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 # A floor on the COUNT, not just on failures: truncate this file and it would
-# otherwise report "3 passed, 0 failed" and exit 0. Raise it when adding cases.
-# DELIBERATELY 3 BELOW a full run of 251: the GLIBC-patch branch costs exactly 2
-# on a machine that cannot patch a version, and the tie-break's en_US.UTF-8 leg
-# costs 1 where that locale is not generated. Do not "tidy" it up to match.
-if [ "$pass" -lt 248 ]; then
-  echo "::error::only $pass assertions ran; expected at least 248. The test file is truncated or a block was skipped"
+# otherwise report "3 passed, 0 failed" and exit 0. Raise it with every case
+# added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
+# exactly 2 on a machine that cannot patch a version, and the tie-break's
+# en_US.UTF-8 leg costs 1 where that locale is not generated.
+if [ "$pass" -lt 262 ]; then
+  echo "::error::only $pass assertions ran; expected at least 262. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

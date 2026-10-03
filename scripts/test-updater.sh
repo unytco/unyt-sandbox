@@ -18,23 +18,8 @@ command -v minisign >/dev/null || {
 tmp="$(mktemp -d)"
 export GITHUB_RUN_ATTEMPT=1
 trap 'rm -rf "$tmp"' EXIT
-pass=0
-fail=0
-
-check() { # <description> <command...>
-  local what="$1"
-  shift
-  if "$@"; then pass=$((pass + 1)); else
-    fail=$((fail + 1))
-    echo "FAIL  $what" >&2
-  fi
-}
-refuses() { # <error text> <command...>
-  local want="$1" out
-  shift
-  if out="$("$@" 2>&1)"; then return 1; fi
-  [[ "$out" == *"$want"* ]]
-}
+# shellcheck source-path=SCRIPTDIR source=test-assert.sh
+. "$here/test-assert.sh"
 
 # Tauri stores a public key and a signature as base64 over the minisign file.
 for k in ours other; do
@@ -574,5 +559,4 @@ check "a refused workflow fails the check whatever is checked before it" \
 flow_read() { edited '0,/^    permissions:$/{//{N;s/.*/    permissions: { contents: read }/}}' && credentials "$tmp/workflow/release-tauri-app.yaml"; }
 check "permissions written as a flow mapping read the same" flow_read
 
-echo "updater scripts: $pass passed, $fail failed"
-[ "$fail" -eq 0 ]
+report "updater scripts"
