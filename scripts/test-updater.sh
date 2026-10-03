@@ -96,12 +96,29 @@ fn release_asset(
     ))
 }
 EOF
-app_table() { # <description> <sed edit of the app's table>
-  sed "$2" "$tmp/updater.rs" >"$tmp/edited.rs"
-  check "$1" refuses "differ from updater_assets" bash "$here/updater-asset-names.sh" "$tmp/edited.rs"
+app_edit() { # <error text> <description> <sed edit of release_asset>
+  sed "$3" "$tmp/updater.rs" >"$tmp/edited.rs"
+  check "$2" refuses "$1" bash "$here/updater-asset-names.sh" "$tmp/edited.rs"
 }
+app_table() { app_edit "differ from updater_assets" "$@"; }
+app_naming() { app_edit "builds its asset names otherwise" "$@"; }
 check "an app that names its assets as the release does passes" \
   bash "$here/updater-asset-names.sh" "$tmp/updater.rs"
+sed '/^ *Some(format!($/{N;N;N;s/\n */ /g}' "$tmp/updater.rs" >"$tmp/reflowed.rs"
+check "an app that only lays its naming out otherwise passes" \
+  bash "$here/updater-asset-names.sh" "$tmp/reflowed.rs"
+app_naming "an app that orders the name otherwise fails the release" 's/{version}_{product}/{product}_{version}/'
+app_naming "an app that puts a space in the name fails the release" 's/-arc_{platform}/-arc_ {platform}/'
+app_naming "an app that names another version fails the release" \
+  's/^ *Some(format!($/    let version = "0.0.0";\n&/'
+app_naming "an app that never reaches a row fails the release" \
+  '/_ => return None,/d; s/^ *("windows-x86_64", BundleType::Nsis)/        _ => return None,\n&/'
+mkdir -p "$tmp/renamed/scripts" "$tmp/renamed/.github/workflows"
+cp "$here/updater-asset-names.sh" "$here/updater-verify.sh" "$tmp/renamed/scripts/"
+sed 's/\[version\]_\[name\]/[name]_[version]/' "$here/../.github/workflows/release-tauri-app.yaml" \
+  >"$tmp/renamed/.github/workflows/release-tauri-app.yaml"
+check "a release that renames its assets fails for an app that does not" \
+  refuses "builds its asset names otherwise" bash "$tmp/renamed/scripts/updater-asset-names.sh" "$tmp/updater.rs"
 app_table "an app expecting another nsis asset name fails the release" 's/x64_windows\.exe/x64_windows-setup.exe/'
 app_table "an app that maps another bundle to an asset fails the release" 's/BundleType::Nsis/BundleType::Msi/'
 app_table "an app with no row for a release asset fails the release" '/BundleType::Deb/d'
