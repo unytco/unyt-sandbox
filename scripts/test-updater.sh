@@ -71,7 +71,7 @@ check "a pinned key signs, and hands the key on" \
   test "$(gate "$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$(pubkey ours)\"}}}")")" = \
   "$(printf 'enabled=true\npubkey=%s' "$(pubkey ours)")"
 
-# release_asset as the app has it since #605.
+# release_asset as the app has it.
 cat >"$tmp/updater.rs" <<'EOF'
 /// Must match the name the release pipeline publishes and signs each asset under.
 fn release_asset(

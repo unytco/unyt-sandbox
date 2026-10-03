@@ -216,7 +216,7 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: "false"
       # Empty means the shipped app can never check for updates. Not a secret.
       VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
-    # Every upload and download here goes through GIT_PAT; this job's token only reads.
+    # Release assets move through GIT_PAT, so this job's token only reads.
     permissions:
       contents: read
 
