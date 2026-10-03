@@ -24,13 +24,22 @@ release_id="$(smoke_release_id "$REF" "$REPO")"
 
 # Assets are matched by SUFFIX so the caller never has to know the version: the
 # release names them unyt_<version>_Unyt_<arc>-arc_<arch>_<platform><ext>.
-matches="$(smoke_gh_api "repos/$REPO/releases/$release_id" \
-  --jq "[.assets[] | select(.name | endswith(\"$SUFFIX\"))] | .[] | \"\(.id)\t\(.name)\t\(.size)\"")"
+assets="$(smoke_gh_api "repos/$REPO/releases/$release_id" \
+  --jq '.assets[] | "\(.id)\t\(.name)\t\(.size)"')"
+ending_in_suffix() {
+  local id name size
+  while IFS=$'\t' read -r id name size; do
+    case "$name" in
+      *"$SUFFIX") printf '%s\t%s\t%s\n' "$id" "$name" "$size" ;;
+    esac
+  done
+}
+matches="$(ending_in_suffix <<<"$assets")"
 match_count="$(printf '%s' "$matches" | grep -c . || true)"
 
 if [ "$match_count" = "0" ]; then
   echo "::error::release $release_id ($REPO) has no asset ending in '$SUFFIX'. Assets present:" >&2
-  gh api "repos/$REPO/releases/$release_id" --jq '.assets[].name' >&2 || true
+  printf '%s\n' "$assets" | cut -f2 >&2
   exit 1
 fi
 # Picking one of several silently would mean smoke-testing an arbitrary variant,

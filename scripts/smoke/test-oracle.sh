@@ -1930,7 +1930,8 @@ done
 
 # ── a GitHub API call answered with a 5xx or a dropped connection is retried ──
 # A fake gh answers its Nth call from line N of the plan. A failing call still
-# writes to stdout, as gh does with an error body or a cut-off download.
+# writes to stdout, as gh does with an error body or a cut-off download. A --jq
+# filter with an unbalanced quote fails as gh fails a filter it cannot compile.
 gh_dir="$(mktemp -d)"
 mkdir "$gh_dir/bin"
 cat >"$gh_dir/bin/gh" <<'GH'
@@ -1938,12 +1939,23 @@ cat >"$gh_dir/bin/gh" <<'GH'
 n=$(($(cat "$FAKE_GH/count") + 1))
 echo "$n" >"$FAKE_GH/count"
 echo "$*" >>"$FAKE_GH/argv"
+filter=""
+prev=""
+for arg in "$@"; do
+  [ "$prev" = --jq ] && filter="$arg"
+  prev="$arg"
+done
+quotes="${filter//\\\"/}"
+quotes="${quotes//[!\"]/}"
+if [ $((${#quotes} % 2)) -ne 0 ]; then echo 'unexpected token "bad"' >&2; exit 1; fi
 answer="$(sed -n "${n}p" "$FAKE_GH/plan")"
 case "$answer" in
   '' | ok) ;;
   empty) exit 0 ;;
   drop) printf 'PARTIAL'; echo 'Get "https://api.github.com/": unexpected EOF' >&2; exit 1 ;;
   html) echo "invalid character '<' looking for beginning of value" >&2; exit 1 ;;
+  dns) printf 'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n' >&2; exit 1 ;;
+  usage) echo 'accepts 1 arg(s), received 2' >&2; exit 1 ;;
   login) echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4 ;;
   bare*) printf 'PARTIAL'; echo "gh: HTTP ${answer#bare}" >&2; exit 1 ;;
   *) printf 'PARTIAL'; echo "gh: Fake Message (HTTP $answer)" >&2; exit 1 ;;
@@ -1951,8 +1963,12 @@ esac
 case "$*" in
   *releases/assets/*) printf 'BYTES' ;;
   *'.assets[].name'*) echo unyt_0.109.0_Unyt_default-arc_amd64_linux.deb ;;
-  *'releases?per_page'*) echo 7 ;;
-  *releases/*) printf '8\tunyt_0.109.0_Unyt_default-arc_amd64_linux.deb\t5\n' ;;
+  *'releases?per_page'*) printf 'v0.109.0-rc\t6\nv0.109.0\t7\n' ;;
+  *releases/*)
+    printf '9\tunyt_0.109.0_Unyt_zero-arc_amd64_linux.deb\t4\n'
+    printf '8\tunyt_0.109.0_Unyt_default-arc_amd64_linux.deb\t5\n'
+    printf '10\tunyt_0.109.0_Unyt_default-arc_amd64_linux.deb.sig\t3\n'
+    ;;
 esac
 GH
 printf '#!/bin/sh\necho "$1" >>"$FAKE_GH/slept"\n' >"$gh_dir/bin/sleep"
@@ -2031,6 +2047,17 @@ expect_gh "a 4xx with no error message fails at once" fails 2 0
 fake_gh "login" "${dl_args[@]}"
 expect_gh "a missing login fails at once" fails 1 0
 
+fake_gh "usage" "${dl_args[@]}"
+expect_gh "a call gh refuses to make fails at once" fails 1 0
+
+fake_gh "dns ok ok" "${dl_args[@]}"
+expect_gh "a lookup that cannot reach GitHub is retried" ok 3 1
+
+fake_gh "ok" "$here/download-release-asset.sh" 402672275 _nope.deb "$gh_dir/out"
+expect_gh "a suffix nothing ends in fails after one lookup" fails 1 0
+expect_same "and lists what the release has" 1 \
+  "$(grep -c '^unyt_0.109.0_Unyt_zero-arc_amd64_linux.deb$' "$gh_dir/err")"
+
 fake_gh "503 503 503 503 503 503 503" "${dl_args[@]}"
 expect_gh "a GitHub that keeps failing is given up on" fails 5 4
 expect_same "the retries back off over seven and a half minutes" "30 60 120 240" "$(paste -sd' ' "$gh_dir/slept")"
@@ -2052,6 +2079,9 @@ expect_same "an unknown tag is named" 1 "$(grep -c "no release tagged 'v0.109.0'
 fake_gh "503 503 503 503 503" "${tag_args[@]}"
 expect_gh "a tag GitHub cannot resolve is given up on" fails 5 4
 expect_same "an outage is not reported as an unknown tag" 0 "$(grep -c 'no release tagged' "$gh_dir/err")"
+
+fake_gh "ok ok" "$here/download-release-asset.sh" 'v0.109.0"' _default-arc_amd64_linux.deb "$gh_dir/out"
+expect_gh "an invalid release reference makes one call and no sleeps" fails 1 0
 
 fake_gh "502 ok" "$here/release-inventory.sh" 402672275
 expect_gh "a 502 on the inventory's lookup is retried" ok 2 1
@@ -2135,8 +2165,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 292 ]; then
-  echo "::error::only $pass assertions ran; expected at least 292. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 297 ]; then
+  echo "::error::only $pass assertions ran; expected at least 297. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

@@ -418,9 +418,10 @@ smoke_all_logs() {
   cat "$sandbox/app-stdout.log" "$(smoke_log_dir "$sandbox")"/unyt.v*.log.* 2>/dev/null || true
 }
 
-# Any failure but a 4xx or a missing login (exit 4) is retried: a degraded GitHub
-# answers some calls with a 5xx or drops the connection, and gh prints a 5xx with
-# an HTML body under --jq as a JSON parse error naming no status.
+# Only a failure on GitHub's side or on the wire is retried. Under --jq, gh reports
+# a 5xx with an HTML body as a JSON parse error that names no status.
+SMOKE_GH_TRANSIENT='HTTP 5[0-9][0-9]|EOF|error connecting to|connection (reset|refused)|timeout|deadline exceeded|stream error|looking for beginning of value|unexpected end of JSON input'
+
 smoke_gh_api_to() { # <out-file> <gh api args...>
   local out="$1" err delay rc
   shift
@@ -433,7 +434,7 @@ smoke_gh_api_to() { # <out-file> <gh api args...>
       return 0
     fi
     cat "$err" >&2
-    if [ -z "$delay" ] || [ "$rc" -eq 4 ] || grep -q 'HTTP 4[0-9][0-9]' "$err"; then break; fi
+    if [ -z "$delay" ] || ! grep -qE "$SMOKE_GH_TRANSIENT" "$err"; then break; fi
     echo "::warning::gh api $* failed; retrying in ${delay}s" >&2
     sleep "$delay"
   done
@@ -452,16 +453,19 @@ smoke_gh_api() { # <gh api args...>: prints the answer only once a call succeeds
 
 # The releases/tags endpoint does not see drafts, so a tag resolves through the list.
 smoke_release_id() { # <release-id-or-tag> <repo>
-  local id
+  local releases tag id
   if [[ "$1" =~ ^[0-9]+$ ]]; then
     printf '%s\n' "$1"
     return
   fi
-  id="$(smoke_gh_api "repos/$2/releases?per_page=100" --paginate \
-    --jq "[.[] | select(.tag_name == \"$1\") | .id] | first // empty")" || return 1
-  if [ -z "$id" ]; then
-    echo "::error::no release tagged '$1' in $2 (drafts included: check the token's access)" >&2
-    return 1
-  fi
-  printf '%s\n' "$id"
+  releases="$(smoke_gh_api "repos/$2/releases?per_page=100" --paginate \
+    --jq '.[] | "\(.tag_name)\t\(.id)"')" || return 1
+  while IFS=$'\t' read -r tag id; do
+    if [ "$tag" = "$1" ]; then
+      printf '%s\n' "$id"
+      return
+    fi
+  done <<<"$releases"
+  echo "::error::no release tagged '$1' in $2 (drafts included: check the token's access)" >&2
+  return 1
 }
