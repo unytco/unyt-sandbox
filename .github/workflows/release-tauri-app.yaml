@@ -12,13 +12,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-happ:
-    name: Stage 1 - publish happ
+  build-happ:
+    name: Stage 1 - build happ
     permissions:
-      contents: write
+      contents: read
     runs-on: ubuntu-22.04
     outputs:
-      releaseId: ${{ steps.create-release.outputs.id }}
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
       productName: ${{ steps.product.outputs.name }}
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
@@ -33,16 +32,17 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
-          submodules: recursive
           # Full history: a UI release diffs the parent tag's submodule pointer.
           fetch-depth: 0
+
+      - uses: ./.github/actions/checkout-app
+        with:
+          deploy-key: ${{ secrets.UNYT_DEPLOY_KEY }}
 
       - name: Install nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
-          github_access_token: ${{ secrets.GIT_PAT }}
           nix_path: nixpkgs=channel:nixos-26.05
 
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
@@ -114,13 +114,12 @@ jobs:
       - name: Inherit lineage happ + repack UI (UI release, vM.m.p)
         if: steps.kind.outputs.kind == 'ui'
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           PARENT_TAG: ${{ steps.kind.outputs.parent_tag }}
         run: bash scripts/inherit-ui-release.sh "$TAG" "$PARENT_TAG"
 
       - name: Get Changelog Content
-        id: changelog
         # Through env, not interpolated into the script: a tag is attacker-shaped input
         # and `${{ }}` would splice it into the shell before bash ever sees a quote.
         env:
@@ -131,18 +130,39 @@ jobs:
             p && /^## \[/ {exit}
             p {print}
           ' unyt/CHANGELOG.md > release_notes.txt
-          {
-            echo "notes<<EOF"
-            cat release_notes.txt
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
-      # The build jobs take the happ from the release, which can be edited once this uploads it.
+      # Each build row takes the happ from a run artifact, which any job of this run can replace.
       - name: Note the happ the builds compile in
         id: happ
         run: |
           sum="$(sha256sum <unyt/workdir/unyt.happ)"
           echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
+
+      - name: Gather what the release carries from this stage
+        run: |
+          mkdir happ
+          cp unyt/workdir/unyt.happ unyt/workdir/unyt.webhapp unyt/dnas/alliance/workdir/alliance.dna \
+            unyt/target/release/unyt_cli release_notes.txt happ/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: happ
+          path: happ
+          if-no-files-found: error
+
+  publish-happ:
+    name: Stage 1 - publish happ
+    needs: build-happ
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    outputs:
+      releaseId: ${{ steps.create-release.outputs.id }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: happ
+          path: happ
 
       - id: create-release
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
@@ -150,20 +170,20 @@ jobs:
           allowUpdates: true
           artifactErrorsFailBuild: true
           artifacts: |
-            unyt/workdir/unyt.happ
-            unyt/workdir/unyt.webhapp
-            unyt/dnas/alliance/workdir/alliance.dna
-            unyt/target/release/unyt_cli
-          body: ${{ steps.changelog.outputs.notes }}
+            happ/unyt.happ
+            happ/unyt.webhapp
+            happ/alliance.dna
+            happ/unyt_cli
+          bodyFile: happ/release_notes.txt
           # The pushed tag, not APP_VERSION: a -dev.* must not ship as stable.
-          name: ${{ steps.product.outputs.name }} ${{ github.ref_name }}
+          name: ${{ needs.build-happ.outputs.productName }} ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: true
           draft: true
 
   release-tauri-app:
-    name: Stage 2 - release tauri apps (${{ matrix.config.label }})
-    needs: publish-happ
+    name: Stage 2 - build tauri apps (${{ matrix.config.label }})
+    needs: [build-happ, publish-happ]
     strategy:
       fail-fast: false
       matrix:
@@ -216,7 +236,6 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: "false"
       # Empty means the shipped app can never check for updates. Not a secret.
       VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
-    # Release assets move through GIT_PAT, so this job's token only reads.
     permissions:
       contents: read
 
@@ -228,10 +247,12 @@ jobs:
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
-          submodules: recursive
           fetch-depth: 1
+
+      - uses: ./.github/actions/checkout-app
+        with:
+          deploy-key: ${{ secrets.UNYT_DEPLOY_KEY }}
 
       - name: setup node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -276,21 +297,19 @@ jobs:
         run: |
           yarn install --frozen-lockfile --ignore-engines
 
-      - name: Download release of the .happ
-        uses: robinraju/release-downloader@c39a3b234af58f0cf85888573d361fb6fa281534 # v1.10
-        env:
-          GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
+      - name: Download the happ stage 1 built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          token: ${{ secrets.GIT_PAT }}
-          releaseId: ${{ needs.publish-happ.outputs.releaseId }}
-          fileName: "unyt.happ"
-          out-file-path: "unyt/workdir/"
+          name: happ
+          path: ${{ runner.temp }}/happ
 
-      - name: Check the happ is the one stage 1 published
+      - name: Check the happ is the one stage 1 built
         shell: bash
         env:
-          HAPP_SHA256: ${{ needs.publish-happ.outputs.happSha256 }}
-        run: bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"
+          HAPP_SHA256: ${{ needs.build-happ.outputs.happSha256 }}
+        run: |
+          cp "$RUNNER_TEMP/happ/unyt.happ" unyt/workdir/
+          bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"
 
       - name: Assert migration-service URL is set (no silently un-updatable build)
         shell: bash
@@ -304,10 +323,10 @@ jobs:
         # Written here, never committed: a wix.version in tauri.conf.json would
         # outlive the release that set it. Empty means a stable build, which
         # tauri versions itself.
-        if: runner.os == 'Windows' && needs.publish-happ.outputs.msiVersion != ''
+        if: runner.os == 'Windows' && needs.build-happ.outputs.msiVersion != ''
         shell: bash
         env:
-          MSI_VERSION: ${{ needs.publish-happ.outputs.msiVersion }}
+          MSI_VERSION: ${{ needs.build-happ.outputs.msiVersion }}
         run: |
           conf=unyt/src-tauri/tauri.conf.json
           jq --arg v "$MSI_VERSION" '.bundle.windows.wix.version = $v' "$conf" >"$conf.tmp"
@@ -316,7 +335,7 @@ jobs:
       - name: Turn on signed updater artifacts
         # Written here, never committed: the bundler refuses to build without the signing key once
         # this is on, and no local build holds it.
-        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        if: needs.build-happ.outputs.signedUpdates == 'true'
         shell: bash
         run: |
           conf=unyt/src-tauri/tauri.conf.json
@@ -326,7 +345,7 @@ jobs:
       - name: Sign the build with a key that dies with this job
         # Nothing trusts the bundler's signature: updater-manifests signs every artifact again with the
         # release key, against this job's record. So no build script ever runs beside the release key.
-        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        if: needs.build-happ.outputs.signedUpdates == 'true'
         shell: bash
         working-directory: unyt
         run: |
@@ -354,40 +373,37 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID_EMAIL }}
           APPLE_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
-          VITE_COMMIT_SHA: ${{ needs.publish-happ.outputs.productName }}-${{
-            needs.publish-happ.outputs.appVersion }}-${{ matrix.config.arc_factor }}-arc
-          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
+          VITE_COMMIT_SHA: ${{ needs.build-happ.outputs.productName }}-${{
+            needs.build-happ.outputs.appVersion }}-${{ matrix.config.arc_factor }}-arc
+          APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
             matrix.config.arc_factor || '' }}
           UNYT_JOINING_SERVICE_URL: https://joining.unyt.dev
           VITE_MIGRATION_SERVICE_URL: ${{ env.VITE_MIGRATION_SERVICE_URL }}
         with:
           projectPath: unyt
-          releaseId: ${{ needs.publish-happ.outputs.releaseId }}
-          releaseDraft: true
-          prerelease: true
           args: ${{ matrix.config.args }}
-          # updater-manifests below writes one per arc factor instead.
-          includeUpdaterJson: false
-          assetNamePattern: ${{
-            format('unyt_[version]_[name]_{0}-arc_[arch]_[platform][ext]',
-            matrix.config.arc_factor) }}
 
-      # A run artifact, not a release asset, so editing the release cannot change it.
-      - name: Record what this build published
-        if: needs.publish-happ.outputs.signedUpdates == 'true'
+      # The record is a run artifact, not a release asset, so editing the release cannot change it.
+      - name: Name each build as the release publishes it, and record it
         shell: bash
         env:
           ARC_FACTOR: ${{ matrix.config.arc_factor }}
           BUILD_ARGS: ${{ matrix.config.args }}
           ARTIFACT_PATHS: ${{ steps.build.outputs.artifactPaths }}
         run: |
+          mkdir release-assets
           bash scripts/updater-provenance.sh unyt/src-tauri/tauri.conf.json \
-            "$ARC_FACTOR" "$BUILD_ARGS" "$ARTIFACT_PATHS" >updater-provenance.sha256
+            "$ARC_FACTOR" "$BUILD_ARGS" "$ARTIFACT_PATHS" release-assets >updater-provenance.sha256
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        with:
+          name: release-assets-${{ strategy.job-index }}
+          path: release-assets
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: needs.build-happ.outputs.signedUpdates == 'true'
         with:
           name: updater-provenance-${{ strategy.job-index }}
           path: updater-provenance.sha256
@@ -397,11 +413,33 @@ jobs:
         if: always() && matrix.config.platform == 'ubuntu-22.04'
         run: df -h /
 
+  publish-builds:
+    name: "Stage 2: publish the builds"
+    needs: [publish-happ, release-tauri-app]
+    # Past a failed build too, so every other platform still ships.
+    if: ${{ !cancelled() && needs.publish-happ.result == 'success' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download every build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-assets-*
+          path: assets
+          merge-multiple: true
+
+      - name: Publish them on the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*
+
   updater-manifests:
     name: "Stage 2: updater manifests"
-    needs: [publish-happ, release-tauri-app]
+    needs: [build-happ, publish-builds]
     # Past a failed build too, so the platform it left unsigned is named rather than skipped.
-    if: ${{ !cancelled() && needs.publish-happ.outputs.signedUpdates == 'true' }}
+    if: ${{ !cancelled() && needs.build-happ.outputs.signedUpdates == 'true' }}
     # The one job that holds the release key: its secrets live in this environment alone.
     environment: release
     permissions:
@@ -442,8 +480,8 @@ jobs:
 
       - name: Sign them under their asset names
         env:
-          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
-          STARTED_AT: ${{ needs.publish-happ.outputs.startedAt }}
+          APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
+          STARTED_AT: ${{ needs.build-happ.outputs.startedAt }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
@@ -455,8 +493,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
-          PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
+          APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
+          PUBKEY: ${{ needs.build-happ.outputs.updaterPubkey }}
         run: |
           mkdir manifests
           bash scripts/updater-manifests.sh "$TAG" "$APP_VERSION" "$PUBKEY" assets manifests
@@ -476,7 +514,7 @@ jobs:
     # After the signing, and never after it failed: the smoke runs the release's installers, which could
     # replace the build records the signing trusts. A release whose signing failed is re-tagged, not
     # re-run.
-    needs: [publish-happ, release-tauri-app, updater-manifests]
+    needs: [publish-happ, publish-builds, updater-manifests]
     # Not gated on the build job: one failed row would suppress every lane. Where the release signs its
     # updates, a failed row fails the signing and so skips the smoke.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.

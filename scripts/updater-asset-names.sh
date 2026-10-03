@@ -10,9 +10,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RS="${1:?usage: updater-asset-names.sh <updater.rs>}"
 
-# assetNamePattern as a format! string, where a row names [arch]_[platform][ext].
-pattern="$(sed -n "/assetNamePattern: \${{\$/{n;s/^ *format('\(.*\)',\$/\1/p;}" "$here/../.github/workflows/release-tauri-app.yaml" |
-  sed 's/\[version\]/{version}/; s/\[name\]/{product}/; s/{0}/{}/; s/\[arch\]_\[platform\]\[ext\]$/{platform}/')"
+pattern="$(asset_name '{version}' '{product}' '{}' '{platform}')"
 naming='fn release_asset(
     product: &str,
     version: &str,
@@ -38,4 +36,4 @@ app="$(sed -n "s/$row/\1	\2	\3/p" <<<"$fn" | awk -F'\t' '{ print $1 "-" tolower(
 mismatch="$(diff <(updater_assets | sort) <(echo "$app"))" ||
   fail "the asset names in $RS differ from updater_assets in updater-verify.sh (< pipeline, > app): $(tr '\n' ' ' <<<"$mismatch")"
 [ "$(sed "1,/=> return None,/{/$row/d;}" <<<"$fn" | tokens)" = "$(tokens <<<"$naming")" ] ||
-  fail "release_asset in $RS builds its asset names otherwise than assetNamePattern in release-tauri-app.yaml"
+  fail "release_asset in $RS builds its asset names otherwise than asset_name in updater-verify.sh"

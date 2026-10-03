@@ -1,0 +1,32 @@
+name: Check out the app
+description: The unyt submodule at the commit this repo pins, read with a deploy key that cannot write.
+inputs:
+  deploy-key:
+    description: The private key of a read-only deploy key on the app's repository.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Read the pinned app
+      id: pin
+      shell: bash
+      run: |
+        url="$(git config -f .gitmodules --get submodule.unyt.url)"
+        repo="${url#*github.com[:/]}"
+        echo "repo=${repo%.git}" >>"$GITHUB_OUTPUT"
+        echo "sha=$(git rev-parse HEAD:unyt)" >>"$GITHUB_OUTPUT"
+
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        repository: ${{ steps.pin.outputs.repo }}
+        ref: ${{ steps.pin.outputs.sha }}
+        path: unyt
+        ssh-key: ${{ inputs.deploy-key }}
+        persist-credentials: false
+
+    # A deploy key reads its own repository only, so the app's submodules, all public, come anonymously.
+    - name: Check out the app's submodules
+      shell: bash
+      run: |
+        git -C unyt -c url.https://github.com/.insteadOf=git@github.com: \
+          submodule update --init --recursive --depth 1

@@ -8,6 +8,8 @@ fail() {
 
 sha256() { sha256sum <"$1" | cut -d' ' -f1; } # <file>
 
+asset_name() { echo "unyt_$1_$2_$3-arc_$4"; } # <version> <product> <arc factor> <target and extension>
+
 # Each installer the updater runs from: the `<os>-<arch>-<installer>` key the updater plugin looks up
 # for the running bundle, and the end of the name its asset is published under. release_asset in the
 # app's src-tauri/src/updater.rs holds the same table, and updater-asset-names.sh fails a release

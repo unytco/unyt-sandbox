@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # updater-signing.sh, updater-asset-names.sh, updater-provenance.sh, updater-sign.sh,
-# updater-manifests.sh and check-sha256.sh against fixtures signed with throwaway keys. Needs minisign
-# on PATH (install-minisign.sh), and node for the Tauri signer.
+# updater-manifests.sh and check-sha256.sh against fixtures signed with throwaway keys, and
+# check-build-credentials.sh against the workflows. Needs minisign on PATH (install-minisign.sh), and
+# node for the Tauri signer.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -113,12 +114,11 @@ app_naming "an app that names another version fails the release" \
   's/^ *Some(format!($/    let version = "0.0.0";\n&/'
 app_naming "an app that never reaches a row fails the release" \
   '/_ => return None,/d; s/^ *("windows-x86_64", BundleType::Nsis)/        _ => return None,\n&/'
-mkdir -p "$tmp/renamed/scripts" "$tmp/renamed/.github/workflows"
-cp "$here/updater-asset-names.sh" "$here/updater-verify.sh" "$tmp/renamed/scripts/"
-sed 's/\[version\]_\[name\]/[name]_[version]/' "$here/../.github/workflows/release-tauri-app.yaml" \
-  >"$tmp/renamed/.github/workflows/release-tauri-app.yaml"
+mkdir -p "$tmp/renamed"
+cp "$here/updater-asset-names.sh" "$tmp/renamed/"
+sed 's/"unyt_\$1_\$2_/"unyt_$2_$1_/' "$here/updater-verify.sh" >"$tmp/renamed/updater-verify.sh"
 check "a release that renames its assets fails for an app that does not" \
-  refuses "builds its asset names otherwise" bash "$tmp/renamed/scripts/updater-asset-names.sh" "$tmp/updater.rs"
+  refuses "builds its asset names otherwise" bash "$tmp/renamed/updater-asset-names.sh" "$tmp/updater.rs"
 app_table "an app expecting another nsis asset name fails the release" 's/x64_windows\.exe/x64_windows-setup.exe/'
 app_table "an app that maps another bundle to an asset fails the release" 's/BundleType::Nsis/BundleType::Msi/'
 app_table "an app with no row for a release asset fails the release" '/BundleType::Deb/d'
@@ -316,15 +316,15 @@ printf '{"productName": "Unyt", "version": "1.2.3"}' >"$tmp/tauri.conf.json"
 mkdir "$tmp/windows"
 printf '#!/bin/sh\n%s "$@" | sed "s/$/\\r/"\n' "$(command -v jq)" >"$tmp/windows/jq"
 chmod +x "$tmp/windows/jq"
-recorded() { # <runner os> <runner arch> <build args> <arc> <artifact path>...: what the job records
-  local path="$PATH" os="$1" arch="$2" args="$3" arc="$4"
-  shift 4
+recorded() { # <runner os> <runner arch> <build args> <arc> <out-dir> <artifact path>...: what the job records
+  local path="$PATH" os="$1" arch="$2" args="$3" arc="$4" out="$5"
+  shift 5
   if [ "$os" = Windows ]; then path="$tmp/windows:$PATH" && set -- "${@//\//\\}"; fi
   PATH="$path" RUNNER_OS="$os" RUNNER_ARCH="$arch" bash "$here/updater-provenance.sh" \
-    "$tmp/tauri.conf.json" "$arc" "$args" "$(jq -nc '$ARGS.positional' --args "$@")"
+    "$tmp/tauri.conf.json" "$arc" "$args" "$(jq -nc '$ARGS.positional' --args "$@")" "$out"
 }
 # A path ending in / is a directory tauri-action lists but does not upload. The bundler signs every
-# installer but the dmg.
+# installer but the dmg. Writes $tmp/misnamed for a build not published under its asset name.
 build() { # <arc> <runner os> <runner arch> <build args> <bundler's path>[:<asset suffix>]...
   local arc="$1" os="$2" arch="$3" args="$4" spec path published made=()
   shift 4
@@ -334,14 +334,18 @@ build() { # <arc> <runner os> <runner arch> <build args> <bundler's path>[:<asse
     mkdir -p "$(dirname "$path")"
     printf 'the %s-arc %s build' "$arc" "${spec%%:*}" >"$path"
     made+=("$path")
-    published="$tmp/bundled/$(asset "$arc" "${spec#*:}")"
-    cp "$path" "$published"
     [[ "$path" != *.dmg ]] || continue
     with_key build tauri signer sign --app-version 1.2.3 "$path" >/dev/null
-    cp "$path.sig" "$published.sig"
     made+=("$path.sig")
   done
-  recorded "$os" "$arch" "$args" "$arc" "${made[@]}" >>"$tmp/bundled.provenance"
+  recorded "$os" "$arch" "$args" "$arc" "$tmp/bundled" "${made[@]}" >>"$tmp/bundled.provenance"
+  for spec; do
+    [[ "$spec" == *:* ]] || continue
+    path="$tmp/target/$arc/${spec%%:*}"
+    published="$tmp/bundled/$(asset "$arc" "${spec#*:}")"
+    cmp -s "$path" "$published" || echo "$published" >>"$tmp/misnamed"
+    [[ "$path" == *.dmg ]] || cmp -s "$path.sig" "$published.sig" || echo "$published.sig" >>"$tmp/misnamed"
+  done
 }
 mkdir -p "$tmp/bundled"
 started="$(date +%s)"
@@ -361,6 +365,13 @@ for arc in default zero; do
     release/bundle/msi/Unyt_1.2.3_x64_en-US.msi:x64_windows.msi \
     release/bundle/nsis/Unyt_1.2.3_x64-setup.exe:x64_windows.exe
 done
+published_as_named() { [ ! -e "$tmp/misnamed" ] && [ "$(find "$tmp/bundled" -type f | wc -l)" -eq 28 ]; }
+check "every build is published under its asset name, beside its build signature" published_as_named
+mkdir -p "$tmp/unsigned/Unyt.app" "$tmp/unsigned.out"
+printf 'the app tauri-action packed' >"$tmp/unsigned/Unyt.app.tar.gz"
+recorded macOS ARM64 "--target aarch64-apple-darwin" default "$tmp/unsigned.out" "$tmp/unsigned/Unyt.app" >/dev/null
+check "a macOS build with no updater bundle publishes the one tauri-action packs" \
+  test "$(ls "$tmp/unsigned.out")" = "$(asset default aarch64_darwin.app.tar.gz)"
 # The release's SHA256SUMS, as the updater-manifests job writes it.
 sums_check_every_installer() { # <asset-dir> <records>
   (cd "$1" && sort -k2,2 "$2" | sha256sum --check --strict --quiet) &&
@@ -369,21 +380,22 @@ sums_check_every_installer() { # <asset-dir> <records>
 check "SHA256SUMS from the builds' records checks every installer the release publishes" \
   sums_check_every_installer "$tmp/bundled" "$tmp/bundled.provenance"
 check "a build on a runner with no known asset name records nothing" \
-  refuses 'no asset name for a macOS ARM64 build with args ""' recorded macOS ARM64 "" default
+  refuses 'no asset name for a macOS ARM64 build with args ""' recorded macOS ARM64 "" default "$tmp"
 for os in Linux Windows; do
   check "an arm64 $os build records nothing" \
-    refuses "no asset name for a $os ARM64 build" recorded "$os" ARM64 "" default
+    refuses "no asset name for a $os ARM64 build" recorded "$os" ARM64 "" default "$tmp"
 done
 printf '{"productName": "Unyt (Sandbox)", "version": "1.2.3"}' >"$tmp/renamed.conf.json"
+mkdir "$tmp/renamed.out"
 check "a product name GitHub renames is recorded as the release names it" \
   test "$(RUNNER_OS=Linux RUNNER_ARCH=X64 bash "$here/updater-provenance.sh" "$tmp/renamed.conf.json" \
-    default "" "[\"$tmp/target/default/release/bundle/deb/Unyt_1.2.3_amd64.deb\"]" | cut -d' ' -f3)" \
-  = unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
+    default "" "[\"$tmp/target/default/release/bundle/deb/Unyt_1.2.3_amd64.deb\"]" "$tmp/renamed.out" |
+    cut -d' ' -f3)" = unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
 printf 'an rpm' >"$tmp/target/x.rpm"
 cp "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
 check "a build that published a file no release names records nothing" \
   refuses "x.rpm is published, but is no installer this release names" \
-  recorded Linux X64 "" default "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
+  recorded Linux X64 "" default "$tmp" "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
 check "a release as tauri-action publishes it fails" refuses "is signed for another file" \
   manifests "$tmp/bundled" "$tmp/bundled.out" "$(cat "$tmp/build.key.pub")"
 check "a release only its build key signed fails" refuses "with the key the app pins" \
@@ -404,6 +416,36 @@ check "a zero-arc build relabelled as the default-arc one publishes nothing" \
 check "and every signature is left as its build made it" diff -r "$tmp/relabelled.built" "$tmp/relabelled"
 check "nor do the manifests publish the relabelled release" refuses "with the key the app pins" \
   manifests "$tmp/relabelled" "$tmp/relabelled.out" "$release_pubkey"
+
+workflows="$here/../.github/workflows"
+credentials() { bash "$here/check-build-credentials.sh" "$@"; }
+check "no job that builds the app holds a credential that can change a release" \
+  test "$(credentials "$workflows"/*.y*ml)" = "release-tauri-app.yaml build-happ
+release-tauri-app.yaml release-tauri-app"
+mkdir "$tmp/workflow"
+edited() { # <sed edit of release-tauri-app.yaml>: fails when the edit changed nothing
+  sed "$1" "$workflows/release-tauri-app.yaml" >"$tmp/workflow/release-tauri-app.yaml" &&
+    ! cmp -s "$workflows/release-tauri-app.yaml" "$tmp/workflow/release-tauri-app.yaml"
+}
+edit_refused() { edited "$2" && refuses "$1" credentials "$tmp/workflow/release-tauri-app.yaml"; }
+release_edit() { check "$1" edit_refused "$2" "$3"; } # <description> <error text> <sed edit>
+release_edit "the release PAT handed back to tauri-action fails" "release-tauri-app: it holds secrets.GIT_PAT" \
+  's/^\(          APPLE_TEAM_ID: .*\)$/\1\n          GITHUB_TOKEN: ${{ secrets.GIT_PAT }}/'
+release_edit "the release PAT handed to stage 1's nix fails" "build-happ: it holds secrets.GIT_PAT" \
+  's/^\(          nix_path: .*\)$/\1\n          github_access_token: ${{ secrets.GIT_PAT }}/'
+release_edit "a credential every job of the workflow holds fails" "its workflow holds secrets.GIT_PAT" \
+  's/^jobs:$/env:\n  GH_TOKEN: ${{ secrets.GIT_PAT }}\n&/'
+release_edit "a build job whose token can write fails" "build-happ: its token can write" \
+  '0,/^      contents: read$/s//      contents: write/'
+release_edit "a build job that takes the workflow's permissions fails" \
+  "build-happ: it declares no permissions of its own" '0,/^    permissions:$/s//    # permissions:/'
+release_edit "a publishing job that runs build code fails" "publish-builds: its token can write" \
+  's/^\(        run: gh release upload .*\)$/\1\n      - run: yarn install/'
+commented() {
+  edited 's/^\(          projectPath: unyt\)$/\1 # never secrets.GIT_PAT/' &&
+    credentials "$tmp/workflow/release-tauri-app.yaml" >/dev/null
+}
+check "a comment naming the release PAT in a build job holds nothing" commented
 
 echo "updater scripts: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
