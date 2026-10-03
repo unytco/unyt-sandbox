@@ -558,7 +558,7 @@ release_edit "a credential holder the workflow no longer has fails" \
 check "a workflow that cannot be read fails" refuses "could not read" credentials "$tmp/workflow/absent.yaml"
 for marker in "uses: ./.github/actions/checkout-app" "run: echo \${{ secrets.UNYT_DEPLOY_KEY }}" "submodules: true" \
   "run: git submodule update" "uses: tauri-apps/tauri-action@v0" "run: npx tauri build" "run: nix develop" \
-  "run: make -C unyt package" 'run: "cargo\tbuild"' "run: yarn" "run: npm ci" "uses: actions/cache@v4" \
+  "run: make -C unyt package" 'run: "nix\tdevelop"' "run: yarn" "run: npm ci" "uses: actions/cache@v4" \
   "with: { repository: unytco/unyt }"; do
   release_edit "the release key's job fails when it carries \"$marker\"" \
     "updater-manifests holds a credential that can change a release, and builds the app" \
