@@ -10,6 +10,12 @@ sha256() { sha256sum <"$1" | cut -d' ' -f1; } # <file>
 
 asset_name() { echo "unyt_$1_$2_$3-arc_$4"; } # <version> <product> <arc factor> <target and extension>
 
+# A product name as GitHub renames it in an uploaded asset's name.
+release_product() { # <productName>
+  local product="${1//[ ()\[\]\{\}]/.}"
+  echo "${product//../.}"
+}
+
 # Each installer the updater runs from: the `<os>-<arch>-<installer>` key the updater plugin looks up
 # for the running bundle, and the end of the name its asset is published under. release_asset in the
 # app's src-tauri/src/updater.rs holds the same table, and updater-asset-names.sh fails a release
@@ -22,6 +28,19 @@ updater_assets() {
     darwin-x86_64-app x64_darwin.app.tar.gz \
     windows-x86_64-msi x64_windows.msi \
     windows-x86_64-nsis x64_windows.exe
+}
+
+# Every name a build row may stage for a release.
+build_assets() { # <version> <product as the release names it>
+  local arc suffix
+  for arc in default zero; do
+    while IFS=$'\t' read -r _ suffix; do
+      asset_name "$1" "$2" "$arc" "$suffix"
+      asset_name "$1" "$2" "$arc" "$suffix.sig"
+    done < <(updater_assets)
+    asset_name "$1" "$2" "$arc" aarch64_darwin.dmg
+    asset_name "$1" "$2" "$arc" x64_darwin.dmg
+  done
 }
 
 # The trusted comment of <dir>/<name>.sig, one field per line, once it verifies <dir>/<name> with

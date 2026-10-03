@@ -1432,11 +1432,10 @@ if [ -f "$rel" ]; then
       "[$build_macos] — pinning what ships is its own decision, not a test change" >&2
   fi
 
-  # EVERY BUILD ROW NAMES ITS ARC FACTOR AND ITS LABEL. `assetNamePattern`
-  # interpolates the arc factor, so a row without one publishes `..._-arc_...`
-  # that no lane claims and the inventory then fails the release; a row without a
-  # label renders the job name its twin renders, and the Checks list stops saying
-  # which variant went red.
+  # EVERY BUILD ROW NAMES ITS ARC FACTOR AND ITS LABEL. A row without an arc
+  # factor fails in updater-provenance.sh, which names every asset by one; a row
+  # without a label renders the job name its twin renders, and the Checks list
+  # stops saying which variant went red.
   matrix_rows="$(printf '%s\n' "$stage2" | grep -c '^          - platform:' || true)"
   arcs="$(printf '%s\n' "$stage2" | sed -n 's/^            arc_factor: *//p' | tr -d '"')"
   labels="$(printf '%s\n' "$stage2" | sed -n 's/^            label: *//p' | tr -d '"')"
@@ -1478,16 +1477,16 @@ if [ -f "$rel" ]; then
       END { flush() }'
   }
 
-  # AND EVERY ROW NAMES ITS BUILDS FOR ITS OWN ARC FACTOR. Publishing replaces an
-  # asset of the same name, so rows that named their builds alike would leave the
-  # release holding one set of names whose contents came from whichever row was
-  # published last. Nothing else here goes red for it: those names are exactly the
-  # ones every lane expects. test-updater.sh pins the rest of the name.
+  # AND EVERY ROW NAMES ITS BUILDS FOR ITS OWN ARC FACTOR. publish-builds merges
+  # every row's builds into one directory, so rows that named their builds alike
+  # would leave one file per name, from whichever row's artifact landed last.
+  # Nothing else here goes red for it: those names are exactly the ones every lane
+  # expects. test-updater.sh pins the rest of the name.
   naming_step="$(step_with 'bash scripts/updater-provenance.sh')"
   if [ -n "$naming_step" ] &&
      [ "$(printf '%s\n' "$naming_step" | grep -cE '^ *if:' || true)" -eq 0 ] &&
      [ "$(printf '%s\n' "$naming_step" | grep -cxF '          ARC_FACTOR: ${{ matrix.config.arc_factor }}' || true)" -eq 1 ] &&
-     [ "$(printf '%s\n' "$naming_step" | grep -cF '"$ARC_FACTOR"' || true)" -eq 1 ]; then
+     [ "$(printf '%s\n' "$naming_step" | grep -cF '"$ARC_FACTOR" "$BUILD_ARGS" "$ARTIFACT_PATHS" release-assets' || true)" -eq 1 ]; then
     pass=$((pass + 1)); else
     fail=$((fail + 1))
     printf 'FAIL  %-58s %s\n' "a row does not name its builds for its arc factor" \
@@ -1525,10 +1524,12 @@ if [ -f "$rel" ]; then
   # artifact, which any job of the run can replace. Checked between the download and the build,
   # in every row.
   happ_step="$(step_with 'bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"')"
+  happ_download="$(step_with '          name: happ')"
   got_at="$(printf '%s\n' "$stage2" | grep -nxF -m1 '          name: happ' | cut -d: -f1)"
   checked_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'bash scripts/check-sha256.sh unyt/workdir/unyt.happ' | cut -d: -f1)"
   built_at="$(printf '%s\n' "$stage2" | grep -nF -m1 'uses: tauri-apps/tauri-action@' | cut -d: -f1)"
   if [ -n "$happ_step" ] && [ -n "$got_at" ] && [ -n "$built_at" ] &&
+     printf '%s\n' "$happ_download" | grep -qF 'uses: actions/download-artifact@' &&
      [ "$got_at" -lt "$checked_at" ] && [ "$checked_at" -lt "$built_at" ] &&
      [ "$(printf '%s\n' "$happ_step" | grep -cE '^ *if:' || true)" -eq 0 ] &&
      [ "$(printf '%s\n' "$happ_step" | grep -cF 'HAPP_SHA256: ${{ needs.build-happ.outputs.happSha256 }}' || true)" -eq 1 ] &&
@@ -1538,6 +1539,15 @@ if [ -f "$rel" ]; then
     printf 'FAIL  %-58s %s\n' "a row can build in a happ stage 1 did not build" \
       "download at line ${got_at:-?}, check at ${checked_at:-?}, build at ${built_at:-?} of stage 2" >&2
   fi
+
+  # AND WHAT THE ROWS BUILT REACHES THE RELEASE, and only then is it signed. A
+  # failed row must not hold back every other platform's installers.
+  in_stage "$stage2" '          path: release-assets' "a row must upload what it staged"
+  in_stage "$stage2" '          pattern: release-assets-*' "the publish job must download what the rows upload"
+  in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-happ.result == 'success' }}" \
+    "one failed row must not keep every other platform off the release"
+  in_stage "$stage2" '    needs: [build-happ, publish-builds]' \
+    "the signing must not start before the builds are on the release"
 
   # THE EXACT SET OF ROWS, not a count of them. A matrix that swapped a zero-arc
   # row for a second default-arc one satisfies every check above: eight rows,
@@ -1807,8 +1817,8 @@ else pass=$((pass + 1)); fi
 
 # ── the release the arc-factor matrix actually produces ──────────────────────
 # THE ASSET NAMES ARE THE PUBLISHED ONES, v0.101.0's under today's product name,
-# crossed with the arc factors stage 2 builds, which is all `assetNamePattern`
-# varies between two rows. So a fifth matrix row on a new arc factor lands in
+# crossed with the arc factors stage 2 builds, which is all asset_name in
+# updater-verify.sh varies between two rows. So a fifth matrix row on a new arc factor lands in
 # this fixture on its own, though adding one is still a deliberate change:
 # `want_targets` above names the rows that ship.
 release_extras='alliance.dna

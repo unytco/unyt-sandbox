@@ -5,8 +5,8 @@
 # <out-dir> gets updater-default-arc.json and updater-zero-arc.json, which the app fetches from the
 # release. Needs minisign on PATH (install-minisign.sh).
 #
-# One per arc factor so a build is only ever offered its own variant: tauri-action's single
-# latest.json keeps whichever arc's build uploaded last.
+# One per arc factor so a build is only ever offered its own variant: a manifest names one installer
+# per platform.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh

@@ -13,8 +13,9 @@ runs:
       run: |
         url="$(git config -f .gitmodules --get submodule.unyt.url)"
         repo="${url#*github.com[:/]}"
+        sha="$(git rev-parse --verify HEAD:unyt)"
         echo "repo=${repo%.git}" >>"$GITHUB_OUTPUT"
-        echo "sha=$(git rev-parse HEAD:unyt)" >>"$GITHUB_OUTPUT"
+        echo "sha=$sha" >>"$GITHUB_OUTPUT"
 
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:

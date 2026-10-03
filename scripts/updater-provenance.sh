@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Every installer one build job made, as the `<sha256>  <asset>` lines updater-sign.sh and the release's
-# SHA256SUMS read, each copied with its build signature into <out-dir> under its asset name:
+# SHA256SUMS read, each copied, with its build signature where it has one, into <out-dir> under its
+# asset name:
 #   updater-provenance.sh <tauri.conf.json> <arc factor> <build args> <artifact paths> <out-dir>
 # <build args> are the job's tauri-action args and <artifact paths> its artifactPaths output.
 # Env: RUNNER_OS and RUNNER_ARCH. Needs jq.
@@ -13,10 +14,9 @@ usage="usage: updater-provenance.sh <tauri.conf.json> <arc factor> <build args> 
 CONF="${1:?$usage}"
 ARC="${2:?$usage}"
 ARGS="${3?$usage}"
-PATHS="${4:?$usage}"
+PATHS="${4?$usage}"
 OUT="${5:?$usage}"
 
-# [arch]_[platform], as tauri-action renders them for this build.
 case "$RUNNER_OS $RUNNER_ARCH $ARGS" in
   "macOS "*" --target aarch64-apple-darwin") target=aarch64_darwin ;;
   "macOS "*" --target x86_64-apple-darwin") target=x64_darwin ;;
@@ -24,19 +24,17 @@ case "$RUNNER_OS $RUNNER_ARCH $ARGS" in
   "Windows X64 "*) target=x64_windows ;;
   *) fail "no asset name for a $RUNNER_OS $RUNNER_ARCH build with args \"$ARGS\"" ;;
 esac
+[ -n "$PATHS" ] && [ "$PATHS" != "[]" ] || fail "tauri-action found nothing this build made"
 
 # On Windows, jq ends its lines with a carriage return and tauri-action's paths use backslashes.
 json() { jq -r "$@" | tr -d '\r'; }
 version="$(json -e .version "$CONF")"
-product="$(json -e .productName "$CONF")"
-# GitHub renames these in an uploaded asset's name.
-product="${product//[ ()\[\]\{\}]/.}"
-product="${product//../.}"
+product="$(release_product "$(json -e .productName "$CONF")")"
 listed="$(json '.[]' <<<"$PATHS" | tr '\\' /)"
 json '.[] | select(endswith(".sig") | not)' <<<"$PATHS" | tr '\\' / |
   while IFS= read -r artifact; do
-    # tauri-action lists the macOS .app directory, and packs it into a .app.tar.gz unless it also
-    # lists the one the bundler made.
+    # tauri-action lists the macOS .app directory. When the bundler made no .app.tar.gz, tauri-action
+    # packs one, uploading or not.
     if [ -d "$artifact" ]; then
       grep -qxF "$artifact.tar.gz" <<<"$listed" && continue
       artifact="$artifact.tar.gz"
@@ -48,9 +46,10 @@ json '.[] | select(endswith(".sig") | not)' <<<"$PATHS" | tr '\\' / |
       *.msi) ext=.msi ;;
       *.exe) ext=.exe ;;
       *.dmg) ext=.dmg ;;
-      *) fail "$artifact is published, but is no installer this release names" ;;
+      *) fail "$artifact is no installer this release names" ;;
     esac
     name="$(asset_name "$version" "$product" "$ARC" "$target$ext")"
+    [ ! -e "$OUT/$name" ] || fail "two of this build's artifacts are named $name"
     cp "$artifact" "$OUT/$name"
     [ ! -f "$artifact.sig" ] || cp "$artifact.sig" "$OUT/$name.sig"
     echo "$(sha256 "$artifact")  $name"

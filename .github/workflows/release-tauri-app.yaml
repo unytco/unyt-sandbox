@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build-happ:
-    name: Stage 1 - build happ
+    name: "Stage 1: build happ"
     permissions:
       contents: read
     runs-on: ubuntu-22.04
@@ -35,6 +35,9 @@ jobs:
           persist-credentials: false
           # Full history: a UI release diffs the parent tag's submodule pointer.
           fetch-depth: 0
+
+      - name: No code that builds the app can reach a credential that can change a release
+        run: bash scripts/check-build-credentials.sh .github/workflows/*.y*ml
 
       - uses: ./.github/actions/checkout-app
         with:
@@ -144,14 +147,16 @@ jobs:
           cp unyt/workdir/unyt.happ unyt/workdir/unyt.webhapp unyt/dnas/alliance/workdir/alliance.dna \
             unyt/target/release/unyt_cli release_notes.txt happ/
 
+      # Public, as every artifact of a public repository is, so kept a day rather than ninety.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: happ
           path: happ
           if-no-files-found: error
+          retention-days: 1
 
   publish-happ:
-    name: Stage 1 - publish happ
+    name: "Stage 1: publish happ"
     needs: build-happ
     permissions:
       contents: write
@@ -182,7 +187,7 @@ jobs:
           draft: true
 
   release-tauri-app:
-    name: Stage 2 - build tauri apps (${{ matrix.config.label }})
+    name: "Stage 2: build tauri apps (${{ matrix.config.label }})"
     needs: [build-happ, publish-happ]
     strategy:
       fail-fast: false
@@ -384,7 +389,6 @@ jobs:
           projectPath: unyt
           args: ${{ matrix.config.args }}
 
-      # The record is a run artifact, not a release asset, so editing the release cannot change it.
       - name: Name each build as the release publishes it, and record it
         shell: bash
         env:
@@ -401,7 +405,9 @@ jobs:
           name: release-assets-${{ strategy.job-index }}
           path: release-assets
           if-no-files-found: error
+          retention-days: 1
 
+      # A run artifact, not a release asset, so editing the release cannot change the record.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: needs.build-happ.outputs.signedUpdates == 'true'
         with:
@@ -415,31 +421,39 @@ jobs:
 
   publish-builds:
     name: "Stage 2: publish the builds"
-    needs: [publish-happ, release-tauri-app]
+    needs: [build-happ, publish-happ, release-tauri-app]
     # Past a failed build too, so every other platform still ships.
     if: ${{ !cancelled() && needs.publish-happ.result == 'success' }}
     permissions:
       contents: write
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
       - name: Download every build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-assets-*
-          path: assets
-          merge-multiple: true
+          path: rows
 
       - name: Publish them on the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*
+          APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
+          PRODUCT: ${{ needs.build-happ.outputs.productName }}
+        run: |
+          mkdir assets
+          bash scripts/gather-release-assets.sh "$APP_VERSION" "$PRODUCT" rows assets
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*
 
   updater-manifests:
     name: "Stage 2: updater manifests"
     needs: [build-happ, publish-builds]
     # Past a failed build too, so the platform it left unsigned is named rather than skipped.
-    if: ${{ !cancelled() && needs.build-happ.outputs.signedUpdates == 'true' }}
+    if: ${{ !cancelled() && needs.publish-builds.result == 'success' && needs.build-happ.outputs.signedUpdates == 'true' }}
     # The one job that holds the release key: its secrets live in this environment alone.
     environment: release
     permissions:
@@ -472,7 +486,7 @@ jobs:
               --pattern "$(basename "$sig" .sig)"
           done
 
-      - name: Download what each build recorded publishing
+      - name: Download each build's record
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: updater-provenance-*
