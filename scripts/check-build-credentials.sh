@@ -23,9 +23,9 @@ credential_holders() { # <workflow file name>
 bad=""
 for workflow; do
   name="$(basename "$workflow")"
-  found="$(awk -v allowed=" ${build_secrets//$'\n'/ } " -v holders=" $(credential_holders "$name") " -v sq="'" '
+  found="$(awk -v allowed=" ${build_secrets//$'\n'/ } " -v holders=" $(credential_holders "$name") " '
     function indent(s) { match(s, /^ */); return RLENGTH }
-    function strip(s) { sub(/(^|[[:space:]])#.*$/, "", s); gsub(/"/, "", s); gsub(sq, "", s); return s }
+    function strip(s) { sub(/(^|[[:space:]])#.*$/, "", s); return s }
     function reads(text,   t, name, out) { # every read of the secrets context beyond the build secrets
       t = tolower(text)
       while (match(t, /secrets\.[a-z0-9_]+/)) {

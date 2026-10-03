@@ -1548,6 +1548,13 @@ if [ -f "$rel" ]; then
     "one failed row must not keep every other platform off the release"
   in_stage "$stage2" '    needs: [build-happ, publish-builds]' \
     "the signing must not start before the builds are on the release"
+  in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-builds.result == 'success' && needs.build-happ.outputs.signedUpdates == 'true' }}" \
+    "the signing must not sign a release its builds did not all reach"
+  # One directory per row, which is how gather-release-assets.sh tells two rows' files apart.
+  if printf '%s\n' "$(step_with '          pattern: release-assets-*')" | grep -q 'merge-multiple'; then
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the publish job merges the rows' builds" "a name two rows staged would pass as one" >&2
+  else pass=$((pass + 1)); fi
 
   # THE EXACT SET OF ROWS, not a count of them. A matrix that swapped a zero-arc
   # row for a second default-arc one satisfies every check above: eight rows,

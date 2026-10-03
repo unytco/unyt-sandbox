@@ -511,6 +511,7 @@ release_edit "a credential holder that runs a build fails" \
   's/^\(          gh release upload .*\)$/\1\n      - run: yarn install/'
 release_edit "a credential holder the workflow no longer has fails" \
   "names publish-builds as a credential holder, but has no such job" 's/^  publish-builds:$/  publish-assets:/'
+check "a workflow that cannot be read fails" refuses "could not read" credentials "$tmp/workflow/absent.yaml"
 flow_read() { edited '0,/^    permissions:$/{//{N;s/.*/    permissions: { contents: read }/}}' && credentials "$tmp/workflow/release-tauri-app.yaml"; }
 check "permissions written as a flow mapping read the same" flow_read
 
