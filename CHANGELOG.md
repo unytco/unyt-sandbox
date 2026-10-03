@@ -19,6 +19,7 @@ Application-level changes belong in
 - **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
 - Zero-arc installers ship alongside the default-arc ones, on all four platforms.
 - **When the pinned app declares an updater, a release carries updater signatures and one update manifest per arc factor for the app's Update now.** The installers themselves are signed no differently.
+- A release with signed updates carries a `SHA256SUMS` file to check a downloaded installer against.
 
 ### Changed
 

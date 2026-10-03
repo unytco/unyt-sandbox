@@ -76,9 +76,11 @@ jobs:
 
       - name: Decide whether this release signs its updates
         id: updater
-        env:
-          HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: bash scripts/updater-signing.sh unyt/src-tauri/tauri.conf.json >> "$GITHUB_OUTPUT"
+
+      - name: The release names each updater asset as the app expects
+        if: steps.updater.outputs.enabled == 'true'
+        run: bash scripts/updater-asset-names.sh unyt/src-tauri/src/updater.rs
 
       - name: Resolve release kind (tag patch → migration | UI)
         id: kind
@@ -214,7 +216,9 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: "false"
       # Empty means the shipped app can never check for updates. Not a secret.
       VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
-    permissions: write-all
+    # Every upload and download here goes through GIT_PAT; this job's token only reads.
+    permissions:
+      contents: read
 
     runs-on: ${{ matrix.config.platform }}
     steps:
@@ -232,7 +236,7 @@ jobs:
       - name: setup node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: 22.23.3
 
       - name: install Rust 1.95.0
         # A floor: holochain 0.7.0 needs `cfg_select!`, stabilised in 1.95.
@@ -319,6 +323,21 @@ jobs:
           jq '.bundle.createUpdaterArtifacts = true' "$conf" >"$conf.tmp"
           mv "$conf.tmp" "$conf"
 
+      - name: Sign the build with a key that dies with this job
+        # Nothing trusts the bundler's signature: updater-manifests signs every artifact again with the
+        # release key, against this job's record. So no build script ever runs beside the release key.
+        if: needs.publish-happ.outputs.signedUpdates == 'true'
+        shell: bash
+        working-directory: unyt
+        run: |
+          password="$(openssl rand -hex 32)"
+          echo "::add-mask::$password"
+          yarn --silent tauri signer generate --ci -p "$password" -w "$RUNNER_TEMP/build-signing.key" >/dev/null
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=$(cat "$RUNNER_TEMP/build-signing.key")"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$password"
+          } >>"$GITHUB_ENV"
+
       - name: Free disk before the build (linux)
         # The number to size a fix from when this ENOSPCs. No RUSTFLAGS strip alongside it:
         # that changes the binary users get, not just what CI costs.
@@ -335,8 +354,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID_EMAIL }}
           APPLE_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GIT_PAT }}
           VITE_COMMIT_SHA: ${{ needs.publish-happ.outputs.productName }}-${{
             needs.publish-happ.outputs.appVersion }}-${{ matrix.config.arc_factor }}-arc
@@ -358,7 +375,7 @@ jobs:
             matrix.config.arc_factor) }}
 
       # A run artifact, not a release asset, so editing the release cannot change it.
-      - name: Record what this build published for the updater
+      - name: Record what this build published
         if: needs.publish-happ.outputs.signedUpdates == 'true'
         shell: bash
         env:
@@ -385,6 +402,8 @@ jobs:
     needs: [publish-happ, release-tauri-app]
     # Past a failed build too, so the platform it left unsigned is named rather than skipped.
     if: ${{ !cancelled() && needs.publish-happ.outputs.signedUpdates == 'true' }}
+    # The one job that holds the release key: its secrets live in this environment alone.
+    environment: release
     permissions:
       contents: write
     runs-on: ubuntu-22.04
@@ -398,7 +417,10 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: 22.23.3
+
+      - name: Install the signer
+        run: npm ci --prefix scripts/tauri-signer --ignore-scripts --no-audit --no-fund
 
       - name: Download the updater artifacts and their build signatures
         env:
@@ -421,15 +443,15 @@ jobs:
       - name: Sign them under their asset names
         env:
           APP_VERSION: ${{ needs.publish-happ.outputs.appVersion }}
-          PUBKEY: ${{ needs.publish-happ.outputs.updaterPubkey }}
           STARTED_AT: ${{ needs.publish-happ.outputs.startedAt }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           cat provenance/*/updater-provenance.sha256 >updater-provenance.sha256
-          bash scripts/updater-sign.sh "$APP_VERSION" "$PUBKEY" assets "$STARTED_AT" updater-provenance.sha256
+          bash scripts/updater-sign.sh "$APP_VERSION" assets "$STARTED_AT" updater-provenance.sha256
 
-      - name: Publish them with one manifest per arc factor
+      # SHA256SUMS comes from the build records, not the release, so it names the bytes each build made.
+      - name: Publish them with one manifest per arc factor, and SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -438,7 +460,8 @@ jobs:
         run: |
           mkdir manifests
           bash scripts/updater-manifests.sh "$TAG" "$APP_VERSION" "$PUBKEY" assets manifests
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.sig manifests/*.json
+          sort -k2,2 updater-provenance.sha256 >manifests/SHA256SUMS
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.sig manifests/*
 
   # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
   # human publishes it, so the run's colour is what tells them. Phase 2 keeps the

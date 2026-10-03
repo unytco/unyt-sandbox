@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# updater-signing.sh, updater-provenance.sh, updater-sign.sh, updater-manifests.sh and check-sha256.sh
-# against fixtures signed with throwaway keys. Needs minisign on PATH (install-minisign.sh), and npx for
-# the Tauri signer.
+# updater-signing.sh, updater-asset-names.sh, updater-provenance.sh, updater-sign.sh,
+# updater-manifests.sh and check-sha256.sh against fixtures signed with throwaway keys. Needs minisign
+# on PATH (install-minisign.sh), and node for the Tauri signer.
 set -euo pipefail
 
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 command -v minisign >/dev/null || {
   echo "minisign not found: scripts/install-minisign.sh puts the pinned one on PATH" >&2
   exit 1
 }
+[ -x "$here/tauri-signer/node_modules/.bin/tauri" ] || {
+  echo "the Tauri signer is not installed: npm ci --prefix scripts/tauri-signer --ignore-scripts" >&2
+  exit 1
+}
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
 export GITHUB_RUN_ATTEMPT=1
 trap 'rm -rf "$tmp"' EXIT
@@ -42,8 +46,7 @@ conf() { printf '%s' "$1" >"$tmp/conf.json" && echo "$tmp/conf.json"; }
 gate() { bash "$here/updater-signing.sh" "$@"; }
 gate_refuses() { # <description> <pubkey>
   check "$1" refuses "is not a minisign public key" \
-    env HAS_SIGNING_KEY=true bash "$here/updater-signing.sh" \
-    "$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$2\"}}}")"
+    bash "$here/updater-signing.sh" "$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$2\"}}}")"
 }
 
 check "an app with no updater releases unsigned" \
@@ -64,13 +67,50 @@ ${key_line:0:40}")"
 gate_refuses "a key for another algorithm fails the release" \
   "$(b64 "untrusted comment: minisign public key
 $({ printf XX; printf '%s' "$key_line" | base64 -d | tail -c +3; } | base64 -w0)")"
-real_conf="$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$(pubkey ours)\"}}}")"
-check "a pinned key with no signing secret fails the release" \
-  refuses "secret is not set" env -u HAS_SIGNING_KEY bash "$here/updater-signing.sh" "$real_conf"
-check "a pinned key whose secret CI reports absent fails the release" \
-  refuses "secret is not set" env HAS_SIGNING_KEY=false bash "$here/updater-signing.sh" "$real_conf"
-check "a pinned key with its secret signs, and hands the key on" \
-  test "$(HAS_SIGNING_KEY=true gate "$real_conf")" = "$(printf 'enabled=true\npubkey=%s' "$(pubkey ours)")"
+check "a pinned key signs, and hands the key on" \
+  test "$(gate "$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$(pubkey ours)\"}}}")")" = \
+  "$(printf 'enabled=true\npubkey=%s' "$(pubkey ours)")"
+
+# release_asset as the app has it since #605.
+cat >"$tmp/updater.rs" <<'EOF'
+/// Must match the name the release pipeline publishes and signs each asset under.
+fn release_asset(
+    product: &str,
+    version: &str,
+    arc_factor: &str,
+    target: &str,
+    bundle: BundleType,
+) -> Option<String> {
+    let platform = match (target, bundle) {
+        ("linux-x86_64", BundleType::Deb) => "amd64_linux.deb",
+        ("linux-x86_64", BundleType::AppImage) => "amd64_linux.AppImage",
+        ("darwin-aarch64", BundleType::App) => "aarch64_darwin.app.tar.gz",
+        ("darwin-x86_64", BundleType::App) => "x64_darwin.app.tar.gz",
+        ("windows-x86_64", BundleType::Msi) => "x64_windows.msi",
+        ("windows-x86_64", BundleType::Nsis) => "x64_windows.exe",
+        _ => return None,
+    };
+    Some(format!(
+        "unyt_{version}_{product}_{}-arc_{platform}",
+        arc(arc_factor)
+    ))
+}
+EOF
+app_table() { # <description> <sed edit of the app's table>
+  sed "$2" "$tmp/updater.rs" >"$tmp/edited.rs"
+  check "$1" refuses "differ from updater_assets" bash "$here/updater-asset-names.sh" "$tmp/edited.rs"
+}
+check "an app that names its assets as the release does passes" \
+  bash "$here/updater-asset-names.sh" "$tmp/updater.rs"
+app_table "an app expecting another nsis asset name fails the release" 's/x64_windows\.exe/x64_windows-setup.exe/'
+app_table "an app that maps another bundle to an asset fails the release" 's/BundleType::Nsis/BundleType::Msi/'
+app_table "an app with no row for a release asset fails the release" '/BundleType::Deb/d'
+app_table "an app with a row the release publishes nothing for fails the release" \
+  's/^\( *\)_ => return None,/\1("linux-x86_64", BundleType::Rpm) => "x86_64_linux.rpm",\n&/'
+app_table "an app that looks an asset up under another target fails the release" 's/"darwin-x86_64"/"darwin-aarch64"/'
+sed '/fn release_asset(/,/^}/d' "$tmp/updater.rs" >"$tmp/untabled.rs"
+check "an app with no asset name table fails the release" \
+  refuses "has no release_asset table" bash "$here/updater-asset-names.sh" "$tmp/untabled.rs"
 
 targets="linux-x86_64-deb:amd64_linux.deb linux-x86_64-appimage:amd64_linux.AppImage
 darwin-aarch64-app:aarch64_darwin.app.tar.gz darwin-x86_64-app:x64_darwin.app.tar.gz
@@ -113,15 +153,18 @@ for arc in default zero; do
   done
 done
 
-# Stands in for npx, so a refusal is proven to come before anything is signed.
-mkdir "$tmp/stub"
-printf '#!/bin/sh\ntouch "$0.called"\nexit 1\n' >"$tmp/stub/npx"
-chmod +x "$tmp/stub/npx"
-signs_nothing() { # <error text> <asset-dir> [<started>]
-  rm -f "$tmp/stub/npx.called"
-  refuses "$1" env PATH="$tmp/stub:$PATH" \
-    bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$2" "${3-0}" "$2.provenance" &&
-    [ ! -e "$tmp/stub/npx.called" ]
+# updater-sign.sh beside a stand-in for the signer, so a refusal is proven to come before anything is
+# signed.
+signer="$tmp/stub/tauri-signer/node_modules/.bin/tauri"
+mkdir -p "$(dirname "$signer")"
+cp "$here/updater-sign.sh" "$here/updater-verify.sh" "$tmp/stub/"
+printf '#!/bin/sh\ntouch "$0.called"\nexit 1\n' >"$signer"
+chmod +x "$signer"
+signs_nothing() { # <error text> <asset-dir> [<started>]; env RELEASE_KEY, unset for a stand-in
+  rm -f "$signer.called"
+  refuses "$1" env TAURI_SIGNING_PRIVATE_KEY="${RELEASE_KEY-stand-in}" \
+    bash "$tmp/stub/updater-sign.sh" 1.2.3 "$2" "${3-0}" "$2.provenance" &&
+    [ ! -e "$signer.called" ]
 }
 case_with() { # <setup>: sets $dir to a new release with <setup> applied
   dir="$tmp/case$((pass + fail))"
@@ -153,6 +196,7 @@ legacy() {
   base64 -w0 <"$tmp/sig" >"$1/$name.sig"
 }
 garbled() { printf '*' >>"$1/$(asset zero amd64_linux.deb).sig"; }
+untimed() { sign "$1" "$(asset zero amd64_linux.deb)" ours "file:$(asset zero amd64_linux.deb)	version:1.2.3"; }
 published_as() { cp "$1" "$2" && cp "$1.sig" "$2.sig"; } # <signed artifact> <asset path>
 built_as() { # <asset-dir> <bundler's file name> <asset>
   sign "$tmp" "$2"
@@ -174,16 +218,17 @@ refused "a missing signature fails rather than drop a platform" \
   "no zero-arc signature ending in x64_windows.msi.sig" drop_sig
 refused "a signature whose artifact is not on the release fails" "is not on the release" \
   drop_artifact signing
-refused "a signature by a key the app does not pin fails" "with the key the app pins" other_key signing
-refused "an artifact changed after signing fails" "with the key the app pins" tampered signing
-refused "a signature paired with another artifact fails" "with the key the app pins" swapped signing
-refused "a signature for another version fails" "is not signed for 1.2.3" stale signing
-refused "a signature that names no version fails" "is not signed for 1.2.3" unversioned signing
+refused "a signature by a key the app does not pin fails" "with the key the app pins" other_key
+refused "an artifact changed after signing fails" "with the key the app pins" tampered
+refused "a signature paired with another artifact fails" "with the key the app pins" swapped
+refused "a signature for another version fails" "is not signed for 1.2.3" stale
+refused "a signature that names no version fails" "is not signed for 1.2.3" unversioned
 refused "two signatures for one platform fail" \
   "2 default-arc signatures end in amd64_linux.deb.sig" doubled
-refused "a signature in minisign's legacy mode fails" "Legacy (non-prehashed) signature found" \
-  legacy signing
+refused "a signature in minisign's legacy mode fails" "Legacy (non-prehashed) signature found" legacy
 refused "a signature that is not base64 fails" "is not base64" garbled signing
+sign_refused "a build signature that names no signing time is refused before signing" \
+  "$(asset zero amd64_linux.deb).sig names no signing time" untimed
 check "a pinned key that is not base64 fails the release" \
   refuses "the pinned public key is not base64" manifests "$tmp/full" "$tmp/badkey.out" "*"
 refused "a signature under the bundler's name fails the manifests" "is signed for another file" \
@@ -193,6 +238,8 @@ refused "a signature naming the other arc's asset fails the manifests" \
 refused "a signature naming another installer's asset fails the manifests" \
   "is signed for another file" other_installer
 unclaimed() { echo "$1 is not the build this run published under that name"; } # <asset>
+sign_refused "an artifact changed after its build recorded it is refused before signing" \
+  "$(unclaimed "$(asset zero amd64_linux.AppImage)")" tampered
 sign_refused "a deb build under the AppImage's name is refused before signing" \
   "$(unclaimed "$(asset default amd64_linux.AppImage)")" deb_as_appimage
 sign_refused "an exe build under the msi's name is refused before signing" \
@@ -213,14 +260,18 @@ sign_refused "an asset recorded twice is refused before signing" \
 sign_refused "an earlier run's build among this run's is refused before signing" \
   "$(asset zero x64_windows.msi).sig was signed before this run started" earlier_run 1
 check "a run start that never reached the script is refused before signing" \
-  signs_nothing "4: usage:" "$tmp/full" ""
+  signs_nothing "3: usage:" "$tmp/full" ""
 rerun() { GITHUB_RUN_ATTEMPT=2 signs_nothing "$@"; }
 check "a re-run of the release run is refused before signing" \
   rerun "attempt 2 of this run: only a run's first attempt signs" "$tmp/full"
+keyless() { RELEASE_KEY='' signs_nothing "$@"; }
+check "a run without the release environment's key is refused before signing" \
+  keyless "TAURI_SIGNING_PRIVATE_KEY is not set" "$tmp/full"
 
 mkdir -p "$tmp/unsigned"
 check "signing a release with no signatures fails" \
-  refuses "no signatures in" bash "$here/updater-sign.sh" 1.2.3 "$(pubkey ours)" "$tmp/unsigned" 0 /dev/null
+  refuses "no signatures in" env TAURI_SIGNING_PRIVATE_KEY=stand-in \
+  bash "$here/updater-sign.sh" 1.2.3 "$tmp/unsigned" 0 /dev/null
 
 printf 'the happ stage 1 built' >"$tmp/unyt.happ"
 printf 'another happ' >"$tmp/other.happ"
@@ -231,11 +282,17 @@ check "a build row refuses any other happ" \
 check "a build row refuses a happ when stage 1 published no digest" \
   refuses "2: usage:" bash "$here/check-sha256.sh" "$tmp/unyt.happ" ""
 
-# A release as tauri-action publishes it: the bundler signs both arc factors' builds under one file
-# name, the upload renames them, and each build job records what it published.
-tauri() { npx --yes @tauri-apps/cli@2.11.5 "$@"; }
-tauri signer generate --ci -p test -w "$tmp/tauri.key" >/dev/null
-with_key() { TAURI_SIGNING_PRIVATE_KEY="$(cat "$tmp/tauri.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=test "$@"; }
+# A release as tauri-action publishes it: each build job signs with a key it generates, the bundler
+# signs both arc factors' builds under one file name, the upload renames them, and each build job
+# records what it published. The release key then signs them again.
+tauri() { "$here/tauri-signer/node_modules/.bin/tauri" "$@"; }
+for k in build release; do tauri signer generate --ci -p test -w "$tmp/$k.key" >/dev/null; done
+with_key() { # <build|release> <command...>
+  local key="$tmp/$1.key"
+  shift
+  TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=test "$@"
+}
+release_pubkey="$(cat "$tmp/release.key.pub")"
 printf '{"productName": "Unyt", "version": "1.2.3"}' >"$tmp/tauri.conf.json"
 # jq.exe as a Windows runner's Git Bash runs it.
 mkdir "$tmp/windows"
@@ -248,17 +305,22 @@ recorded() { # <runner os> <runner arch> <build args> <arc> <artifact path>...: 
   PATH="$path" RUNNER_OS="$os" RUNNER_ARCH="$arch" bash "$here/updater-provenance.sh" \
     "$tmp/tauri.conf.json" "$arc" "$args" "$(jq -nc '$ARGS.positional' --args "$@")"
 }
+# A path ending in / is a directory tauri-action lists but does not upload. The bundler signs every
+# installer but the dmg.
 build() { # <arc> <runner os> <runner arch> <build args> <bundler's path>[:<asset suffix>]...
-  local arc="$1" os="$2" arch="$3" args="$4" spec path made=()
+  local arc="$1" os="$2" arch="$3" args="$4" spec path published made=()
   shift 4
   for spec; do
     path="$tmp/target/$arc/${spec%%:*}"
+    if [ "$path" != "${path%/}" ]; then mkdir -p "$path" && made+=("${path%/}") && continue; fi
     mkdir -p "$(dirname "$path")"
     printf 'the %s-arc %s build' "$arc" "${spec%%:*}" >"$path"
     made+=("$path")
-    [ "$spec" != "${spec#*:}" ] || continue
-    with_key tauri signer sign --app-version 1.2.3 "$path" >/dev/null
-    published_as "$path" "$tmp/bundled/$(asset "$arc" "${spec#*:}")"
+    published="$tmp/bundled/$(asset "$arc" "${spec#*:}")"
+    cp "$path" "$published"
+    [[ "$path" != *.dmg ]] || continue
+    with_key build tauri signer sign --app-version 1.2.3 "$path" >/dev/null
+    cp "$path.sig" "$published.sig"
     made+=("$path.sig")
   done
   recorded "$os" "$arch" "$args" "$arc" "${made[@]}" >>"$tmp/bundled.provenance"
@@ -267,10 +329,12 @@ mkdir -p "$tmp/bundled"
 started="$(date +%s)"
 for arc in default zero; do
   build "$arc" macOS ARM64 "--target aarch64-apple-darwin" \
-    aarch64-apple-darwin/release/bundle/dmg/Unyt_1.2.3_aarch64.dmg \
+    aarch64-apple-darwin/release/bundle/dmg/Unyt_1.2.3_aarch64.dmg:aarch64_darwin.dmg \
+    aarch64-apple-darwin/release/bundle/macos/Unyt.app/ \
     aarch64-apple-darwin/release/bundle/macos/Unyt.app.tar.gz:aarch64_darwin.app.tar.gz
   build "$arc" macOS ARM64 "--target x86_64-apple-darwin" \
-    x86_64-apple-darwin/release/bundle/dmg/Unyt_1.2.3_x64.dmg \
+    x86_64-apple-darwin/release/bundle/dmg/Unyt_1.2.3_x64.dmg:x64_darwin.dmg \
+    x86_64-apple-darwin/release/bundle/macos/Unyt.app/ \
     x86_64-apple-darwin/release/bundle/macos/Unyt.app.tar.gz:x64_darwin.app.tar.gz
   build "$arc" Linux X64 "--bundles deb,appimage" \
     release/bundle/deb/Unyt_1.2.3_amd64.deb:amd64_linux.deb \
@@ -279,6 +343,13 @@ for arc in default zero; do
     release/bundle/msi/Unyt_1.2.3_x64_en-US.msi:x64_windows.msi \
     release/bundle/nsis/Unyt_1.2.3_x64-setup.exe:x64_windows.exe
 done
+# The release's SHA256SUMS, as the updater-manifests job writes it.
+sums_check_every_installer() { # <asset-dir> <records>
+  (cd "$1" && sort -k2,2 "$2" | sha256sum --check --strict --quiet) &&
+    [ "$(wc -l <"$2")" -eq "$(find "$1" -type f ! -name '*.sig' | wc -l)" ]
+}
+check "SHA256SUMS from the builds' records checks every installer the release publishes" \
+  sums_check_every_installer "$tmp/bundled" "$tmp/bundled.provenance"
 check "a build on a runner with no known asset name records nothing" \
   refuses 'no asset name for a macOS ARM64 build with args ""' recorded macOS ARM64 "" default
 for os in Linux Windows; do
@@ -288,32 +359,33 @@ done
 printf '{"productName": "Unyt (Sandbox)", "version": "1.2.3"}' >"$tmp/renamed.conf.json"
 check "a product name GitHub renames is recorded as the release names it" \
   test "$(RUNNER_OS=Linux RUNNER_ARCH=X64 bash "$here/updater-provenance.sh" "$tmp/renamed.conf.json" \
-    default "" "[\"$tmp/target/default/release/bundle/deb/Unyt_1.2.3_amd64.deb.sig\"]" | cut -d' ' -f3)" \
+    default "" "[\"$tmp/target/default/release/bundle/deb/Unyt_1.2.3_amd64.deb\"]" | cut -d' ' -f3)" \
   = unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
 printf 'an rpm' >"$tmp/target/x.rpm"
 cp "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
-check "a build that signed an artifact the updater never installs records nothing" \
-  refuses "x.rpm is signed, but no updater installs it" \
+check "a build that published a file no release names records nothing" \
+  refuses "x.rpm is published, but is no installer this release names" \
   recorded Linux X64 "" default "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
 check "a release as tauri-action publishes it fails" refuses "is signed for another file" \
-  manifests "$tmp/bundled" "$tmp/bundled.out" "$(cat "$tmp/tauri.key.pub")"
+  manifests "$tmp/bundled" "$tmp/bundled.out" "$(cat "$tmp/build.key.pub")"
+check "a release only its build key signed fails" refuses "with the key the app pins" \
+  manifests "$tmp/bundled" "$tmp/bundled.out" "$release_pubkey"
 cp -r "$tmp/bundled" "$tmp/relabelled"
 published_as "$tmp/relabelled/$(asset zero amd64_linux.AppImage)" "$tmp/relabelled/$(asset default amd64_linux.AppImage)"
 cp -r "$tmp/relabelled" "$tmp/relabelled.built"
-signed_and_published() { # <asset-dir> <pubkey>
-  with_key bash "$here/updater-sign.sh" 1.2.3 "$2" "$1" "$started" "$tmp/bundled.provenance" &&
-    manifests "$1" "$1.out" "$2"
+signed_and_published() { # <asset-dir>
+  with_key release bash "$here/updater-sign.sh" 1.2.3 "$1" "$started" "$tmp/bundled.provenance" &&
+    manifests "$1" "$1.out" "$release_pubkey"
 }
-check "signed by the Tauri signer under its asset names, it publishes its manifests" \
-  signed_and_published "$tmp/bundled" "$(cat "$tmp/tauri.key.pub")"
+check "built under a throwaway key and signed again with the release key, it publishes its manifests" \
+  signed_and_published "$tmp/bundled"
 check "signing again signs the signatures the first signing left under the asset names" \
-  signed_and_published "$tmp/bundled" "$(cat "$tmp/tauri.key.pub")"
+  signed_and_published "$tmp/bundled"
 check "a zero-arc build relabelled as the default-arc one publishes nothing" \
-  refuses "$(unclaimed "$(asset default amd64_linux.AppImage)")" \
-  signed_and_published "$tmp/relabelled" "$(cat "$tmp/tauri.key.pub")"
+  refuses "$(unclaimed "$(asset default amd64_linux.AppImage)")" signed_and_published "$tmp/relabelled"
 check "and every signature is left as its build made it" diff -r "$tmp/relabelled.built" "$tmp/relabelled"
-check "nor do the manifests publish the relabelled release" refuses "is signed for another file" \
-  manifests "$tmp/relabelled" "$tmp/relabelled.out" "$(cat "$tmp/tauri.key.pub")"
+check "nor do the manifests publish the relabelled release" refuses "with the key the app pins" \
+  manifests "$tmp/relabelled" "$tmp/relabelled.out" "$release_pubkey"
 
 echo "updater scripts: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
