@@ -11,6 +11,10 @@ concurrency:
   group: release-tauri-app-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # Moves with the Rust the app's rust.yaml pins: stage 1 fails the release otherwise.
+  RUST_TOOLCHAIN: 1.98.1
+
 jobs:
   build-happ:
     name: "Stage 1: build happ"
@@ -42,6 +46,9 @@ jobs:
       - uses: ./.github/actions/checkout-app
         with:
           deploy-key: ${{ secrets.UNYT_DEPLOY_KEY }}
+
+      - name: The release and the app's CI pin the same Rust
+        run: bash scripts/check-rust-toolchain.sh unyt/.github/workflows/rust.yaml "$RUST_TOOLCHAIN"
 
       - name: Install nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
@@ -107,6 +114,11 @@ jobs:
         if: steps.kind.outputs.kind == 'migration'
         run: |
           cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Build unyt_cli
         if: steps.kind.outputs.kind == 'migration'
@@ -264,11 +276,10 @@ jobs:
         with:
           node-version: 22.23.3
 
-      - name: install Rust 1.95.0
-        # A floor: holochain 0.7.0 needs `cfg_select!`, stabilised in 1.95.
+      - name: install Rust ${{ env.RUST_TOOLCHAIN }}
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: 1.95.0
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: install x86_64 target
         if: matrix.config.args == '--target x86_64-apple-darwin'

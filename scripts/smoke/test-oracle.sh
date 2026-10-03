@@ -1342,7 +1342,7 @@ if [ -f "$rel" ]; then
   # The channels msi-version.sh is written against; add one and every tag on it
   # dies in stage 1. The case patterns are QUOTED, or `[0-9]` would be read as a
   # character class and match both.
-  tags="$(sed -n '/^    tags:$/,/^jobs:$/p' "$rel" | grep -oE '"[^"]+"' | tr -d '"')"
+  tags="$(sed -n '/^    tags:$/,/^[a-z]/p' "$rel" | grep -oE '"[^"]+"' | tr -d '"')"
   unknown=""
   for tag in $tags; do
     case "$tag" in

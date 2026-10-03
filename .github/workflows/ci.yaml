@@ -108,6 +108,9 @@ jobs:
       - name: "the smoke oracle"
         run: bash scripts/smoke/test-oracle.sh
 
+      - name: "the Rust toolchain check"
+        run: bash scripts/test-rust-toolchain.sh
+
       - name: Install minisign
         run: bash scripts/install-minisign.sh
 
