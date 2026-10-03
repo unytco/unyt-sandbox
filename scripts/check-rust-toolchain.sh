@@ -23,7 +23,7 @@ WANT="$2"
 [[ "$(yq --version 2>&1 || true)" == *mikefarah/yq*" version v4."* ]] || fail "this check needs mikefarah yq v4 on PATH"
 
 steps="$(yq '.jobs[].steps[]? | select((.uses // "") | test("(?i)^dtolnay/rust-toolchain@")) |
-  (.uses | sub("^[^@]*@", "")) + "\t" + ((.with.toolchain // "") | tostring)' "$CI")" ||
+  [(.uses | sub("^[^@]*@", "")), ((.with.toolchain // "") | tostring)] | @tsv' "$CI")" ||
   fail "$CI does not read as a workflow, and this release installs Rust $WANT"
 
 # A version ref is a branch with the version built in, which takes no toolchain input.
