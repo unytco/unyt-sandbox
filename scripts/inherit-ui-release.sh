@@ -33,7 +33,7 @@ expected_cli_sha="$(jq -r '.cli_sha256' "$PIN")"
 #    of these assets, fails here — there is no fallback to rebuilding the DNA.
 tmp="$(mktemp -d)"
 gh release download "$PARENT_TAG" --repo "$REPO" --dir "$tmp" --pattern unyt.happ --pattern alliance.dna --pattern unyt_cli ||
-  fail "could not download unyt.happ / alliance.dna / unyt_cli from parent release $PARENT_TAG (a UI release never rebuilds the DNA)"
+  fail "could not download unyt.happ / alliance.dna / unyt_cli from parent release $PARENT_TAG, which must be published (a UI release never rebuilds the DNA)"
 [ -f "$tmp/unyt.happ" ] || fail "parent release $PARENT_TAG has no unyt.happ asset"
 # `gh release download` succeeds if only ONE --pattern matches, so check each of the others
 # explicitly — a UI release must republish them byte-identical, and both are declared artifacts.
@@ -67,7 +67,7 @@ cp "$tmp/unyt_cli" "$ROOT/unyt/target/release/unyt_cli"
 chmod 755 "$ROOT/unyt/target/release/unyt_cli"
 #    `--ignore-engines` for the same reason as the White-label UI workflow: hc-spin's native helper
 #    declares `engines.node >= 24` and this nix shell ships node 22, and yarn aborts the WHOLE install
-#    on an engine mismatch. Without it a UI release dies here — in publish-happ, the first job — so
+#    on an engine mismatch. Without it a UI release dies here, in build-happ, the first job, so
 #    there would be no release object at all, not merely no installers.
 ( cd "$ROOT/unyt" && nix develop --no-update-lock-file --accept-flake-config --command bash -c \
   "yarn install --frozen-lockfile --ignore-engines && yarn workspace white-label package && hc web-app pack workdir" )

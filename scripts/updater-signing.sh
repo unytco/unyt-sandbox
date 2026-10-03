@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Whether this release signs its updates, as $GITHUB_OUTPUT lines:
 #   updater-signing.sh <tauri.conf.json>      prints  enabled=true|false  [pubkey=<key>]
-# Env: HAS_SIGNING_KEY, "true" when the TAURI_SIGNING_PRIVATE_KEY secret is set.
 #
 # An app with no updater config releases unsigned. One with it updates in-app only to a release
-# signed with its pinned key, so a release that cannot sign fails here.
+# signed with its pinned key, so a release that pins no usable key fails here.
 set -euo pipefail
 
 CONF="${1:?usage: updater-signing.sh <tauri.conf.json>}"
@@ -33,8 +32,6 @@ is_minisign_pubkey() {
 pubkey="$(jq -r '.pubkey // empty' <<<"$updater")"
 is_minisign_pubkey "$pubkey" ||
   fail "plugins.updater.pubkey in $CONF is not a minisign public key: pin the one \`cargo tauri signer generate\` printed"
-[ "${HAS_SIGNING_KEY:-}" = true ] ||
-  fail "$CONF pins an updater public key but the TAURI_SIGNING_PRIVATE_KEY secret is not set"
 
 echo "enabled=true"
 echo "pubkey=$pubkey"

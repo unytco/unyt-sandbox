@@ -41,7 +41,7 @@ unyt_<version>_Unyt_<variant>_<architecture>_<platform><extension>
 | `<platform>` | `darwin` for macOS, `linux`, `windows` |
 | `<extension>` | macOS `.dmg`, Linux `.deb` or `.AppImage`, Windows `.exe` (setup) or `.msi` |
 
-A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. When the pinned app declares an updater, a release also carries `.sig` signatures and the `updater-default-arc.json` and `updater-zero-arc.json` manifests, which the app's Update now reads. Installing Unyt needs none of them.
+A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. When the pinned app declares an updater, a release also carries `.sig` signatures and the `updater-default-arc.json` and `updater-zero-arc.json` manifests, which the app's Update now reads, and a `SHA256SUMS` file with the checksum of every installer. Installing Unyt needs none of them.
 
 ### On Linux, swapping between the two variants
 
