@@ -125,6 +125,7 @@ app_table "an app with no row for a release asset fails the release" '/BundleTyp
 app_table "an app with a row the release publishes nothing for fails the release" \
   's/^\( *\)_ => return None,/\1("linux-x86_64", BundleType::Rpm) => "x86_64_linux.rpm",\n&/'
 app_table "an app that looks an asset up under another target fails the release" 's/"darwin-x86_64"/"darwin-aarch64"/'
+app_table "an app that looks an asset up under its target in another case fails the release" 's/"linux-x86_64"/"Linux-x86_64"/'
 sed '/fn release_asset(/,/^}/d' "$tmp/updater.rs" >"$tmp/untabled.rs"
 check "an app with no asset name table fails the release" \
   refuses "has no release_asset table" bash "$here/updater-asset-names.sh" "$tmp/untabled.rs"
