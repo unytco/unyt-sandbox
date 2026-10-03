@@ -1477,11 +1477,9 @@ if [ -f "$rel" ]; then
       END { flush() }'
   }
 
-  # AND EVERY ROW NAMES ITS BUILDS FOR ITS OWN ARC FACTOR. publish-builds merges
-  # every row's builds into one directory, so rows that named their builds alike
-  # would leave one file per name, from whichever row's artifact landed last.
-  # Nothing else here goes red for it: those names are exactly the ones every lane
-  # expects. test-updater.sh pins the rest of the name.
+  # AND EVERY ROW NAMES ITS BUILDS FOR ITS OWN ARC FACTOR. Rows that named their
+  # builds alike would first fail in a release, when the gather refuses a name two
+  # rows staged. test-updater.sh pins the rest of the name.
   naming_step="$(step_with 'bash scripts/updater-provenance.sh')"
   if [ -n "$naming_step" ] &&
      [ "$(printf '%s\n' "$naming_step" | grep -cE '^ *if:' || true)" -eq 0 ] &&

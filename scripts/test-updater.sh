@@ -380,7 +380,7 @@ printf 'the app tauri-action packed' >"$tmp/no-updater/Unyt.app.tar.gz"
 recorded_app >/dev/null
 check "a macOS build with no updater bundle stages the one tauri-action packs" \
   test "$(ls "$tmp/no-updater.out")" = "$(asset default aarch64_darwin.app.tar.gz)"
-# publish-builds gathers what the rows staged, one directory per row.
+# publish-builds gathers what the rows staged: one directory per row, or a lone row's files unnested.
 gathered() { # <productName> <rows-dir>: gathers it into <rows-dir>.out
   mkdir -p "$2.out" && bash "$here/gather-release-assets.sh" 1.2.3 "$1" "$2" "$2.out"
 }
