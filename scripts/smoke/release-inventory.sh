@@ -57,17 +57,10 @@ if [ -n "${UNYT_SMOKE_ASSETS+set}" ]; then
   assets="$UNYT_SMOKE_ASSETS"
 else
   command -v gh >/dev/null || { echo "::error::gh CLI not found" >&2; exit 1; }
-  if [[ "$REF" =~ ^[0-9]+$ ]]; then
-    release_id="$REF"
-  else
-    release_id="$(gh api "repos/$REPO/releases?per_page=100" --paginate \
-      --jq "[.[] | select(.tag_name == \"$REF\") | .id] | first // empty")"
-    if [ -z "$release_id" ]; then
-      echo "::error::no release tagged '$REF' in $REPO (drafts included — check the token's access)" >&2
-      exit 1
-    fi
-  fi
-  assets="$(gh api "repos/$REPO/releases/$release_id" --jq '.assets[].name')"
+  # shellcheck source-path=SCRIPTDIR source=common.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+  release_id="$(smoke_release_id "$REF" "$REPO")"
+  assets="$(smoke_gh_api "repos/$REPO/releases/$release_id" --jq '.assets[].name')"
 fi
 
 # A case glob, not a regex: every suffix contains a `.`, which as an ERE

@@ -32,4 +32,5 @@ Application-level changes belong in
 
 ### Fixed
 
+- A brief GitHub API outage no longer fails a smoke lane.
 - **Several smoke checks could pass without testing anything:** a webview gate a cold install could never satisfy, a dependency check that misread a correctly-declared package, macOS scenarios sharing state with the release around them, and a handful of platform-specific parse and path faults. Each now fails when the thing it checks is broken.

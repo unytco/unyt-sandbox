@@ -1928,6 +1928,126 @@ for drv in container-checks.sh container-checks-appimage.sh; do
     fail=$((fail + 1)); printf 'FAIL  %s --print-checks listed %s check(s)\n' "$drv" "$n" >&2; fi
 done
 
+# ── a GitHub API call answered with a 5xx or a dropped connection is retried ──
+# A fake gh answers its Nth call from line N of the plan. A failing call still
+# writes to stdout, as gh does with an error body or a cut-off download.
+gh_dir="$(mktemp -d)"
+mkdir "$gh_dir/bin"
+cat >"$gh_dir/bin/gh" <<'GH'
+#!/usr/bin/env bash
+n=$(($(cat "$FAKE_GH/count") + 1))
+echo "$n" >"$FAKE_GH/count"
+echo "$*" >>"$FAKE_GH/argv"
+answer="$(sed -n "${n}p" "$FAKE_GH/plan")"
+case "$answer" in
+  '' | ok) ;;
+  empty) exit 0 ;;
+  drop) printf 'PARTIAL'; echo 'Get "https://api.github.com/": unexpected EOF' >&2; exit 1 ;;
+  login) echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4 ;;
+  bare*) printf 'PARTIAL'; echo "gh: HTTP ${answer#bare}" >&2; exit 1 ;;
+  *) printf 'PARTIAL'; echo "gh: Fake Message (HTTP $answer)" >&2; exit 1 ;;
+esac
+case "$*" in
+  *releases/assets/*) printf 'BYTES' ;;
+  *'.assets[].name'*) echo unyt_0.109.0_Unyt_default-arc_amd64_linux.deb ;;
+  *'releases?per_page'*) echo 7 ;;
+  *releases/*) printf '8\tunyt_0.109.0_Unyt_default-arc_amd64_linux.deb\t5\n' ;;
+esac
+GH
+printf '#!/bin/sh\necho "$1" >>"$FAKE_GH/slept"\n' >"$gh_dir/bin/sleep"
+chmod +x "$gh_dir/bin/gh" "$gh_dir/bin/sleep"
+
+fake_gh() { # <plan> <bash args...>: sets fg_rc, fg_out, fg_calls, fg_slept
+  local plan="$1"
+  shift
+  rm -rf "$gh_dir/out"
+  echo 0 >"$gh_dir/count"
+  : >"$gh_dir/slept"
+  : >"$gh_dir/argv"
+  tr ' ' '\n' <<<"$plan" >"$gh_dir/plan"
+  fg_out="$(PATH="$gh_dir/bin:$PATH" FAKE_GH="$gh_dir" UNYT_SMOKE_REPO=o/r bash "$@" 2>"$gh_dir/err")"
+  fg_rc=$?
+  fg_calls="$(cat "$gh_dir/count")"
+  fg_slept="$(grep -c . "$gh_dir/slept" || true)"
+}
+expect_gh() { # <description> <rc: ok|fails> <calls> <sleeps>
+  local got want="$2 calls=$3 slept=$4"
+  got="$([ "$fg_rc" -eq 0 ] && echo ok || echo fails) calls=$fg_calls slept=$fg_slept"
+  if [ "$got" = "$want" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s want %s, got %s\n' "$1" "$want" "$got" >&2
+    sed 's/^/      /' "$gh_dir/err" >&2
+  fi
+}
+call() { sed -n "$1p" "$gh_dir/argv"; }
+expect_same() { # <description> <want> <got>
+  if [ "$2" = "$3" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s want [%s], got [%s]\n' "$1" "$2" "$3" >&2
+  fi
+}
+dl_args=("$here/download-release-asset.sh" 402672275 _default-arc_amd64_linux.deb "$gh_dir/out")
+deb_out="$gh_dir/out/unyt_0.109.0_Unyt_default-arc_amd64_linux.deb"
+
+fake_gh "ok ok" "${dl_args[@]}"
+expect_gh "a healthy download makes two calls and no retry" ok 2 0
+expect_same "a download prints the path it wrote" "$deb_out" "$fg_out"
+
+fake_gh "503 ok ok" "${dl_args[@]}"
+expect_gh "a 503 on the release lookup is retried" ok 3 1
+
+fake_gh "ok 504 ok" "${dl_args[@]}"
+expect_gh "a 504 on the asset is retried" ok 3 1
+expect_same "a retried download replaces the partial file" BYTES "$(cat "$deb_out" 2>/dev/null)"
+expect_same "a retried download prints only the path" "$deb_out" "$fg_out"
+expect_same "the asset is asked for as bytes" \
+  "api -H Accept: application/octet-stream repos/o/r/releases/assets/8" "$(call 2)"
+expect_same "a retry repeats the call it retries" "$(call 2)" "$(call 3)"
+
+fake_gh "ok drop ok" "${dl_args[@]}"
+expect_gh "a dropped connection is retried" ok 3 1
+
+fake_gh "404" "${dl_args[@]}"
+expect_gh "a 404 fails at once" fails 1 0
+expect_same "a call given up on is named" 1 "$(grep -c '^::error::gh api repos/o/r/releases/402672275 ' "$gh_dir/err")"
+
+fake_gh "ok 401" "${dl_args[@]}"
+expect_gh "a 401 on the asset fails at once" fails 2 0
+expect_same "gh's own message reaches the log" 1 "$(grep -c '^gh: Fake Message (HTTP 401)$' "$gh_dir/err")"
+
+fake_gh "ok bare403" "${dl_args[@]}"
+expect_gh "a 4xx with no error message fails at once" fails 2 0
+
+fake_gh "login" "${dl_args[@]}"
+expect_gh "a missing login fails at once" fails 1 0
+
+fake_gh "503 503 503 503 503 503 503" "${dl_args[@]}"
+expect_gh "a GitHub that keeps failing is given up on" fails 5 4
+expect_same "the retries back off over seven and a half minutes" "30 60 120 240" "$(paste -sd' ' "$gh_dir/slept")"
+
+fake_gh "404" -c '. "$1/common.sh" && smoke_gh_api repos/o/r/releases/8' _ "$here"
+expect_gh "smoke_gh_api reports a failed call" fails 1 0
+expect_same "smoke_gh_api prints nothing of a failed answer" "" "$fg_out"
+
+tag_args=("$here/download-release-asset.sh" v0.109.0 _default-arc_amd64_linux.deb "$gh_dir/out")
+fake_gh "503 ok ok ok" "${tag_args[@]}"
+expect_gh "a 503 resolving a tag is retried" ok 4 1
+expect_same "a tag resolves through every page of releases" 1 "$(call 2 | grep -c -- '--paginate')"
+expect_same "the release is read under the id the tag resolved to" 1 "$(call 3 | grep -c 'repos/o/r/releases/7 ')"
+
+fake_gh "empty" "${tag_args[@]}"
+expect_gh "an unknown tag fails at once" fails 1 0
+expect_same "an unknown tag is named" 1 "$(grep -c "no release tagged 'v0.109.0'" "$gh_dir/err")"
+
+fake_gh "503 503 503 503 503" "${tag_args[@]}"
+expect_gh "a tag GitHub cannot resolve is given up on" fails 5 4
+expect_same "an outage is not reported as an unknown tag" 0 "$(grep -c 'no release tagged' "$gh_dir/err")"
+
+fake_gh "502 ok" "$here/release-inventory.sh" 402672275
+expect_gh "a 502 on the inventory's lookup is retried" ok 2 1
+expect_same "the retried inventory still finds the .deb" deb=true "$(grep -x 'deb=true' <<<"$fg_out")"
+rm -rf "$gh_dir"
+
 # A MATCH READS A HERE-STRING, never a pipe into grep -q or a matcher built on it:
 # under pipefail grep's early exit can kill the writer with SIGPIPE, and a match
 # then reads as none on some runs only.
@@ -2005,8 +2125,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 262 ]; then
-  echo "::error::only $pass assertions ran; expected at least 262. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 291 ]; then
+  echo "::error::only $pass assertions ran; expected at least 291. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

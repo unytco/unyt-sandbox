@@ -417,3 +417,50 @@ smoke_all_logs() {
   local sandbox="${1:?sandbox root required}"
   cat "$sandbox/app-stdout.log" "$(smoke_log_dir "$sandbox")"/unyt.v*.log.* 2>/dev/null || true
 }
+
+# Any failure but a 4xx or a missing login (exit 4) is retried: a degraded GitHub
+# answers some calls with a 5xx or drops the connection, and gh prints a 5xx with
+# an HTML body under --jq as a JSON parse error naming no status.
+smoke_gh_api_to() { # <out-file> <gh api args...>
+  local out="$1" delay rc
+  shift
+  for delay in 30 60 120 240 ""; do
+    rc=0
+    gh api "$@" >"$out" 2>"$out.err" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      rm -f "$out.err"
+      return 0
+    fi
+    cat "$out.err" >&2
+    if [ -z "$delay" ] || [ "$rc" -eq 4 ] || grep -q 'HTTP 4[0-9][0-9]' "$out.err"; then break; fi
+    echo "::warning::gh api $* failed; retrying in ${delay}s" >&2
+    sleep "$delay"
+  done
+  rm -f "$out.err"
+  echo "::error::gh api $* failed" >&2
+  return 1
+}
+
+smoke_gh_api() { # <gh api args...>: prints the answer only once a call succeeds
+  local out rc=0
+  out="$(mktemp)"
+  if smoke_gh_api_to "$out" "$@"; then cat "$out"; else rc=1; fi
+  rm -f "$out"
+  return "$rc"
+}
+
+# The releases/tags endpoint does not see drafts, so a tag resolves through the list.
+smoke_release_id() { # <release-id-or-tag> <repo>
+  local id
+  if [[ "$1" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$1"
+    return
+  fi
+  id="$(smoke_gh_api "repos/$2/releases?per_page=100" --paginate \
+    --jq "[.[] | select(.tag_name == \"$1\") | .id] | first // empty")" || return 1
+  if [ -z "$id" ]; then
+    echo "::error::no release tagged '$1' in $2 (drafts included: check the token's access)" >&2
+    return 1
+  fi
+  printf '%s\n' "$id"
+}
