@@ -1943,6 +1943,7 @@ case "$answer" in
   '' | ok) ;;
   empty) exit 0 ;;
   drop) printf 'PARTIAL'; echo 'Get "https://api.github.com/": unexpected EOF' >&2; exit 1 ;;
+  html) echo "invalid character '<' looking for beginning of value" >&2; exit 1 ;;
   login) echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4 ;;
   bare*) printf 'PARTIAL'; echo "gh: HTTP ${answer#bare}" >&2; exit 1 ;;
   *) printf 'PARTIAL'; echo "gh: Fake Message (HTTP $answer)" >&2; exit 1 ;;
@@ -2006,6 +2007,15 @@ expect_same "a retry repeats the call it retries" "$(call 2)" "$(call 3)"
 
 fake_gh "ok drop ok" "${dl_args[@]}"
 expect_gh "a dropped connection is retried" ok 3 1
+
+fake_gh "html ok ok" "${dl_args[@]}"
+expect_gh "a 5xx that --jq reports as a parse error is retried" ok 3 1
+
+mkdir -p "$gh_dir/keep"
+echo mine >"$gh_dir/keep/unyt_0.109.0_Unyt_default-arc_amd64_linux.deb.err"
+fake_gh "ok 503 ok" "$here/download-release-asset.sh" 402672275 _default-arc_amd64_linux.deb "$gh_dir/keep"
+expect_same "a download leaves the caller's other files alone" mine \
+  "$(cat "$gh_dir/keep/unyt_0.109.0_Unyt_default-arc_amd64_linux.deb.err" 2>/dev/null)"
 
 fake_gh "404" "${dl_args[@]}"
 expect_gh "a 404 fails at once" fails 1 0
@@ -2125,8 +2135,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 291 ]; then
-  echo "::error::only $pass assertions ran; expected at least 291. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 292 ]; then
+  echo "::error::only $pass assertions ran; expected at least 292. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

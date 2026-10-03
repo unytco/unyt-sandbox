@@ -422,21 +422,22 @@ smoke_all_logs() {
 # answers some calls with a 5xx or drops the connection, and gh prints a 5xx with
 # an HTML body under --jq as a JSON parse error naming no status.
 smoke_gh_api_to() { # <out-file> <gh api args...>
-  local out="$1" delay rc
+  local out="$1" err delay rc
   shift
+  err="$(mktemp)"
   for delay in 30 60 120 240 ""; do
     rc=0
-    gh api "$@" >"$out" 2>"$out.err" || rc=$?
+    gh api "$@" >"$out" 2>"$err" || rc=$?
     if [ "$rc" -eq 0 ]; then
-      rm -f "$out.err"
+      rm -f "$err"
       return 0
     fi
-    cat "$out.err" >&2
-    if [ -z "$delay" ] || [ "$rc" -eq 4 ] || grep -q 'HTTP 4[0-9][0-9]' "$out.err"; then break; fi
+    cat "$err" >&2
+    if [ -z "$delay" ] || [ "$rc" -eq 4 ] || grep -q 'HTTP 4[0-9][0-9]' "$err"; then break; fi
     echo "::warning::gh api $* failed; retrying in ${delay}s" >&2
     sleep "$delay"
   done
-  rm -f "$out.err"
+  rm -f "$err"
   echo "::error::gh api $* failed" >&2
   return 1
 }
