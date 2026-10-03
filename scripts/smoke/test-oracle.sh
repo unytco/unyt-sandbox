@@ -1554,6 +1554,9 @@ if [ -f "$rel" ]; then
     "the signing must not start before the builds are on the release"
   in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-builds.result == 'success' && needs.build-happ.outputs.signedUpdates == 'true' }}" \
     "the signing must not sign a release its builds did not all reach"
+  # download-artifact leaves a lone row's record unnested.
+  in_stage "$stage2" "          find provenance -type f -name '*.sha256' -exec cat {} + >updater-provenance.sha256" \
+    "the signing must read every build's record, however many rows recorded one"
   # One directory per row, which is how gather-release-assets.sh tells two rows' files apart.
   if printf '%s\n' "$(step_with '          pattern: release-assets-*')" | grep -q 'merge-multiple'; then
     fail=$((fail + 1))
