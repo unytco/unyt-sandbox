@@ -1956,6 +1956,7 @@ case "$answer" in
   html) echo "invalid character '<' looking for beginning of value" >&2; exit 1 ;;
   dns) printf 'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n' >&2; exit 1 ;;
   usage) echo 'accepts 1 arg(s), received 2' >&2; exit 1 ;;
+  filter) echo 'unexpected token "bad"' >&2; exit 1 ;;
   login) echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4 ;;
   bare*) printf 'PARTIAL'; echo "gh: HTTP ${answer#bare}" >&2; exit 1 ;;
   *) printf 'PARTIAL'; echo "gh: Fake Message (HTTP $answer)" >&2; exit 1 ;;
@@ -2050,6 +2051,9 @@ expect_gh "a missing login fails at once" fails 1 0
 fake_gh "usage" "${dl_args[@]}"
 expect_gh "a call gh refuses to make fails at once" fails 1 0
 
+fake_gh "filter" "${dl_args[@]}"
+expect_gh "a filter gh cannot compile fails at once" fails 1 0
+
 fake_gh "dns ok ok" "${dl_args[@]}"
 expect_gh "a lookup that cannot reach GitHub is retried" ok 3 1
 
@@ -2082,6 +2086,7 @@ expect_same "an outage is not reported as an unknown tag" 0 "$(grep -c 'no relea
 
 fake_gh "ok ok" "$here/download-release-asset.sh" 'v0.109.0"' _default-arc_amd64_linux.deb "$gh_dir/out"
 expect_gh "an invalid release reference makes one call and no sleeps" fails 1 0
+expect_same "and is reported as a tag the release list lacks" 1 "$(grep -c "no release tagged 'v0.109.0\"'" "$gh_dir/err")"
 
 fake_gh "502 ok" "$here/release-inventory.sh" 402672275
 expect_gh "a 502 on the inventory's lookup is retried" ok 2 1
@@ -2165,8 +2170,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 297 ]; then
-  echo "::error::only $pass assertions ran; expected at least 297. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 299 ]; then
+  echo "::error::only $pass assertions ran; expected at least 299. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]
