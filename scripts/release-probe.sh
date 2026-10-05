@@ -40,7 +40,7 @@ probe dna "the app commits the hashes a migration release holds its DNA to" \
   bash "$here/check-dna-pin.sh" "$APP_DIR" --committed
 probe rust "the app's CI builds with the Rust the release builds with" bash "$here/check-rust-toolchain.sh" \
   "$APP_DIR/.github/workflows/rust.yaml" "$(yq '.env.RUST_TOOLCHAIN' "$here/../.github/workflows/release-tauri-app.yaml")"
-if refusal="$(bash "$here/release-app.sh" build-env 2>&1 >/dev/null)"; then
+if refusal="$(bash "$here/release-app.sh" build-env v9.9.9-dev.1 2>&1 >/dev/null)"; then
   line ok release "identity.json and network.json set every value: $product on $(jq -r .name "$here/../network.json")"
   probe signing "signs its updates with the key identity.json pins" \
     bash "$here/updater-signing.sh" "$tmp/merged.json"

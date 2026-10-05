@@ -52,7 +52,7 @@ jobs:
         run: |
           bash scripts/set-app-version.sh "$TAG"
           bash scripts/release-app.sh identity unyt tauri.merged.json
-          bash scripts/release-app.sh build-env >>"$GITHUB_ENV"
+          bash scripts/release-app.sh build-env "$TAG" >>"$GITHUB_ENV"
           bash scripts/release-app.sh reads unyt
 
       - name: The release and the app's CI pin the same Rust
@@ -152,8 +152,10 @@ jobs:
             echo "::warning::unyt/CHANGELOG.md has no section [$APP_VERSION], so the release notes name only the network"
 
       - name: Note the network in the release notes
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          bash scripts/release-app.sh notes >> release_notes.txt
+          bash scripts/release-app.sh notes "$TAG" >> release_notes.txt
           cat release_notes.txt
 
       # Each build row takes the happ from a run artifact, which any job of this run can replace.
@@ -353,7 +355,7 @@ jobs:
           bash scripts/set-app-version.sh "$TAG"
           bash scripts/check-version-contract.sh "$TAG"
           bash scripts/release-app.sh identity unyt tauri.merged.json
-          bash scripts/release-app.sh build-env >>"$GITHUB_ENV"
+          bash scripts/release-app.sh build-env "$TAG" >>"$GITHUB_ENV"
 
       - name: Install and prepare
         working-directory: unyt
@@ -592,8 +594,8 @@ jobs:
   draft-installers:
     name: "Stage 3: take the installers back from the draft"
     # After the signing, and never after it failed: the smoke runs the release's installers, which could
-    # replace the build records the signing trusts. A release whose signing failed is re-tagged, not
-    # re-run.
+    # replace the build records the signing trusts. A release whose signing failed has its draft and
+    # tag deleted and the tag pushed again, not re-run.
     needs: [release-environment, build-happ, publish-happ, publish-builds, updater-manifests]
     # Not gated on the build rows: one failed row would suppress every lane. A failed row fails the
     # signing, and so skips the smoke.

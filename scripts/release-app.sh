@@ -3,11 +3,14 @@
 #   release-app.sh identity <app-dir> <merged-out>  writes <app-dir>'s Tauri configuration with
 #                                                   identity.json merged over it, as
 #                                                   `tauri build --config` merges it
-#   release-app.sh build-env                        the values its build reads, as $GITHUB_ENV lines
+#   release-app.sh build-env <tag>                  the values its build reads, as $GITHUB_ENV lines
 #   release-app.sh reads <app-dir>                  fails unless <app-dir> reads each of those values
-#   release-app.sh notes                            its network, as release notes
+#   release-app.sh notes <tag>                      its network, as release notes
 # Each refuses a file that is malformed. build-env and notes also refuse a value the files have not set
 # yet. Env: GITHUB_REPOSITORY, the repo the app updates from (build-env).
+# A service each release runs its own of is at the tag's version: build-env and notes prepend the version,
+# its dots as dashes, to its subdomain, so v0.111.0-dev.0 builds https://relay.example as
+# https://0-111-0-dev-0-relay.example.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
@@ -27,7 +30,9 @@ merge='def merge_patch($patch):
 origin='https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9](:[1-9][0-9]{0,4})?'
 url_re="^$origin(/[!-~]*)?\$"
 origin_re="^$origin/?\$"
-values='["UNYT_JOINING_SERVICE_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL"]'
+values='["UNYT_AUTH_RELAY","UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL"]'
+# The services at the tag's version. The migration router and the bridge serve every release.
+versioned='["UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL"]'
 
 problems=()
 report() {
@@ -87,6 +92,9 @@ check_network() {
       VITE_HOT_LOCK_VAULT\ *) [[ "$value" =~ ^0x[0-9a-f]{40}$ && "$value" =~ [1-9a-f] ]] && continue ;;
       VITE_HOT_BRIDGE_URL\ *) [[ "$value" =~ $origin_re ]] && continue ;;
       UNYT_JOINING_SERVICE_URL\ * | VITE_MIGRATION_SERVICE_URL\ *) [[ "$value" =~ $url_re ]] && continue ;;
+      # Empty: the app's default.
+      UNYT_BOOTSTRAP_URL\ * | UNYT_RELAY_URL\ * | UNYT_AUTH_SERVER_URL\ *) [[ -z "$value" || "$value" =~ $url_re ]] && continue ;;
+      UNYT_AUTH_RELAY\ 0 | UNYT_AUTH_RELAY\ 1) continue ;;
     esac
     problems+=("network.json builds with $name $value, which is no value it can take")
   done < <(jq -r '.build | objects | to_entries[] | [.key, (.value | tostring)] | @tsv' "$NETWORK")
@@ -114,6 +122,26 @@ set_values() {
   report
 }
 
+build=""
+at_version() { # <tag>: sets $build to network.json's build values, each of $versioned at the tag's version
+  # set-app-version.sh holds the tag to its form. This holds what it builds to a URL.
+  local version="${1#v}" name value label
+  build="$(jq -c --arg version "${version//./-}" --argjson versioned "$versioned" '.build | with_entries(
+    if (.key | IN($versioned[])) and .value != "" then .value |= "https://\($version)-\(ltrimstr("https://"))" else . end)' \
+    "$NETWORK")"
+  while IFS=$'\t' read -r name value; do
+    label="${value#https://}"
+    label="${label%%[.:/]*}"
+    if ! [[ "$value" =~ $url_re ]]; then
+      problems+=("at tag $1, network.json builds $name as $value, which is no URL")
+    elif [ "${#label}" -gt 63 ]; then
+      problems+=("at tag $1, network.json builds $name as $value, whose subdomain is longer than the 63 characters a DNS label holds")
+    fi
+  done < <(jq -r --argjson versioned "$versioned" 'to_entries[] | select((.key | IN($versioned[])) and .value != "")
+    | [.key, .value] | @tsv' <<<"$build")
+  report
+}
+
 case "${1:-}" in
   identity)
     usage="usage: release-app.sh identity <app-dir> <merged-out>"
@@ -123,12 +151,14 @@ case "${1:-}" in
     jq "$merge"' merge_patch($identity[0])' --slurpfile identity "$IDENTITY" "$APP/src-tauri/tauri.conf.json" >"$OUT"
     ;;
   build-env)
+    TAG="${2:?usage: release-app.sh build-env <tag>}"
     REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name the repo the app updates from}"
     [[ "$REPO" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ && "${REPO#*/}" != . && "${REPO#*/}" != .. ]] ||
       fail "GITHUB_REPOSITORY is $REPO, not a GitHub owner/name"
     checked
     set_values
-    jq -r '.build | to_entries[] | "\(.key)=\(.value)"' "$NETWORK"
+    at_version "$TAG"
+    jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$build"
     echo "UNYT_RELEASE_REPO=$REPO"
     ;;
   reads)
@@ -144,12 +174,14 @@ case "${1:-}" in
     [ -z "$unread" ] || fail "the app in $APP reads no $unread, so its build would not take this release's value"
     ;;
   notes)
+    TAG="${2:?usage: release-app.sh notes <tag>}"
     checked
     set_values
+    at_version "$TAG"
     echo
     echo "### Network: $(jq -r .name "$NETWORK")"
     echo
-    jq -r '.build | to_entries[] | "- `\(.key)`: \(.value)"' "$NETWORK"
+    jq -r 'to_entries[] | "- `\(.key)`: \(if .value == "" then "the app'"'"'s default" else .value end)"' <<<"$build"
     ;;
-  *) fail "usage: release-app.sh identity <app-dir> <merged-out> | build-env | reads <app-dir> | notes" ;;
+  *) fail "usage: release-app.sh identity <app-dir> <merged-out> | build-env <tag> | reads <app-dir> | notes <tag>" ;;
 esac
