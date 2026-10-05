@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # updater-signing.sh, updater-asset-names.sh, updater-provenance.sh, updater-sign.sh,
-# updater-manifests.sh, release-sums.sh and check-sha256.sh against fixtures signed with throwaway keys, and
+# updater-manifests.sh, release-sums.sh, check-dna-pin.sh and check-sha256.sh against fixtures signed with
+# throwaway keys, and
 # check-build-credentials.sh against the workflows. Needs minisign on PATH (install-minisign.sh), node for
 # the Tauri signer, and mikefarah's yq v4.
 set -euo pipefail
@@ -457,9 +458,12 @@ check "nor do the manifests publish the relabelled release" refuses "with the ke
 mkdir "$tmp/stage1"
 for name in unyt.happ unyt.webhapp alliance.dna unyt_cli; do printf 'stage 1 built %s' "$name" >"$tmp/stage1/$name"; done
 stage1_sums="$(cd "$tmp/stage1" && sha256sum -- *)"
-summed() { # <out-dir> [<stage-1 sums> [<key> [<provenance>]]]
+# What the manifests job downloads from the release: the installers and their signatures, and stage 1's files.
+mkdir "$tmp/published"
+cp "$tmp/bundled"/* "$tmp/stage1"/* "$tmp/published/"
+summed() { # <out-dir> [<stage-1 sums> [<key> [<provenance> [<asset-dir>]]]]
   mkdir -p "$1" && with_key "${3:-release}" bash "$here/release-sums.sh" 1.2.3 Unyt "$release_pubkey" \
-    "${4:-$tmp/bundled.provenance}" "${2-$stage1_sums}" "$1"
+    "${4:-$tmp/bundled.provenance}" "${2-$stage1_sums}" "${5:-$tmp/published}" "$1"
 }
 check "a release's SHA256SUMS is written and signed" summed "$tmp/sums"
 # As the README tells a user to check it.
@@ -477,6 +481,23 @@ unsigned() { refuses "$1" summed "$tmp/unsums$((pass + fail))" "${@:2}" && [ -z 
 check "a key the app does not pin signs no SHA256SUMS" \
   unsigned "does not verify SHA256SUMS with the key the app pins" "$stage1_sums" build
 check "no stage 1 sums signs no SHA256SUMS" unsigned "5: usage:" ""
+published_with() { # <edit of the published copy>: prints the copy's path
+  local dir="$tmp/published$((pass + fail))"
+  cp -r "$tmp/published" "$dir" && (cd "$dir" && eval "$1") && echo "$dir"
+}
+check "a stage 1 file changed on the release signs no SHA256SUMS" \
+  unsigned "unyt.happ on the release is not the build this run recorded" "$stage1_sums" release "" \
+  "$(published_with 'printf x >>unyt.happ')"
+check "a dmg changed on the release signs no SHA256SUMS" \
+  unsigned "$(asset zero x64_darwin.dmg) on the release is not the build this run recorded" "$stage1_sums" release "" \
+  "$(published_with "printf x >>$(asset zero x64_darwin.dmg)")"
+check "a stage 1 file missing from the release signs no SHA256SUMS" \
+  unsigned "unyt_cli, which this run recorded building, is not on the release" "$stage1_sums" release "" \
+  "$(published_with 'rm unyt_cli')"
+grep -vF " $(asset default aarch64_darwin.dmg)" "$tmp/bundled.provenance" >"$tmp/no-dmg.provenance"
+check "a dmg on the release that no build of this run recorded signs no SHA256SUMS" \
+  unsigned "$(asset default aarch64_darwin.dmg) is on the release, but no build of this run recorded it" \
+  "$stage1_sums" release "$tmp/no-dmg.provenance"
 check "stage 1 sums missing a file sign no SHA256SUMS" unsigned "stage 1 recorded alliance.dna unyt.happ unyt.webhapp rather" \
   "$(grep -v ' unyt_cli$' <<<"$stage1_sums")"
 check "a stage 1 sum for another file signs no SHA256SUMS" unsigned "stage 1 recorded alliance.dna anything.exe unyt.happ" \
@@ -491,6 +512,22 @@ check "a line that checks no asset signs no SHA256SUMS" unsigned "would carry li
 utf8_unsigned() { LANG=C.UTF-8 LC_ALL=C.UTF-8 unsigned "$@"; }
 check "a line with a byte no UTF-8 reads signs no SHA256SUMS" utf8_unsigned "would carry lines that check no release asset" \
   "$(sed $'s/ unyt_cli$/ unyt_cli \xff/' <<<"$stage1_sums")"
+
+# check-dna-pin.sh beside a stand-in for nix that runs the command it is handed, and records that it ran.
+mkdir -p "$tmp/nix" "$tmp/app/scripts" "$tmp/app/dnas/alliance"
+printf '#!/bin/sh\ntouch "$0.called"\nwhile [ "$1" != --command ]; do shift; done\nshift\nexec "$@"\n' >"$tmp/nix/nix"
+chmod +x "$tmp/nix/nix"
+pin() { rm -f "$tmp/nix/nix.called"; PATH="$tmp/nix:$PATH" bash "$here/check-dna-pin.sh" "$tmp/app"; }
+printf 'exit 0\n' >"$tmp/app/scripts/check-dna-hashes.sh"
+check "a pinned app with no build-hashes fails the release before nix runs" \
+  eval 'refuses "the pinned app has no dnas/alliance/build-hashes" pin && [ ! -e "$tmp/nix/nix.called" ]'
+printf 'hashes\n' >"$tmp/app/dnas/alliance/build-hashes"
+check "a pinned app whose DNA has its committed hashes passes" pin
+printf 'echo "differs from build-hashes" >&2; exit 1\n' >"$tmp/app/scripts/check-dna-hashes.sh"
+check "a pinned app whose DNA has other hashes fails the release" refuses "differs from build-hashes" pin
+rm "$tmp/app/scripts/check-dna-hashes.sh"
+check "a pinned app with no check-dna-hashes.sh fails the release before nix runs" \
+  eval 'refuses "the pinned app has no scripts/check-dna-hashes.sh" pin && [ ! -e "$tmp/nix/nix.called" ]'
 
 workflows="$here/../.github/workflows"
 credentials() { bash "$here/check-build-credentials.sh" "$@"; }

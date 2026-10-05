@@ -59,7 +59,7 @@ if [ -n "${UNYT_SMOKE_ASSETS+set}" ]; then
 elif [ -n "${UNYT_SMOKE_FROM:-}" ]; then
   assets="$(ls -A "$UNYT_SMOKE_FROM" 2>/dev/null)" || assets=""
   [ -n "$assets" ] || {
-    echo "::error::no installers came from this run's artifacts: none matched, or they expired before the signing was approved. Re-tag to smoke this release." >&2
+    echo "::error::no installers came from the calling run's draft-installers artifact: it is empty, or it expired. Re-run that job, which runs the smoke again." >&2
     exit 1
   }
 else

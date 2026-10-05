@@ -1391,11 +1391,14 @@ if [ -f "$rel" ]; then
   fi
   in_stage "$stage3" '    uses: ./.github/workflows/release-smoke.yaml' \
     "the release must call the smoke workflow"
-  in_stage "$stage3" '    needs: [publish-builds, updater-manifests]' \
+  in_stage "$stage3" '    needs: [draft-installers]' "the smoke must run what the draft carries"
+  in_stage "$stage3" '      installers: draft-installers' "the smoke must take the draft's installers"
+  draft="$(sed -n '/^  draft-installers:/,/^  [a-z]/p' "$rel")"
+  in_stage "$draft" '    needs: [publish-happ, publish-builds, updater-manifests]' \
     "the smoke must not run the release's installers before its updates are signed"
-  in_stage "$stage3" '      installers: release-assets-*' \
-    "the release must smoke the builds its rows uploaded, not its draft"
-  smoke_if="    if: \${{ !cancelled() && needs.publish-builds.result == 'success' && needs.updater-manifests.result != 'failure' }}"
+  in_stage "$draft" "    if: \${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result != 'failure' }}" \
+    "the smoke runs the installers after a failed signing"
+  smoke_if="    if: \${{ !cancelled() && needs.draft-installers.result == 'success' }}"
   if [ "$stage3_if" = "$smoke_if" ]; then
     pass=$((pass + 1)); else
     fail=$((fail + 1))
@@ -1723,7 +1726,7 @@ if from_run="$(UNYT_SMOKE_FROM="$builds" bash "$here/release-inventory.sh" 000 2
    [ "$from_run" = "$(inv "$(ls -A "$builds")")" ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "the inventory does not read the release run's builds" >&2; fi
 if ! none="$(UNYT_SMOKE_FROM="$builds.none" bash "$here/release-inventory.sh" 000 2>&1)" &&
-   [[ "$none" == *"no installers came from this run's artifacts"* ]]; then pass=$((pass + 1)); else
+   [[ "$none" == *"no installers came from the calling run's draft-installers artifact"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "the inventory does not say no builds were downloaded" >&2; fi
 taken="$(take _default-arc_amd64_linux.deb)" || taken=""
 if [ "$taken" = "$builds.out/x_default-arc_amd64_linux.deb" ] &&
@@ -2030,8 +2033,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 268 ]; then
-  echo "::error::only $pass assertions ran; expected at least 268. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 270 ]; then
+  echo "::error::only $pass assertions ran; expected at least 270. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

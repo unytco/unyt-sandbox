@@ -7,8 +7,9 @@
 #
 # Env: GH_TOKEN, UNYT_SMOKE_REPO (default unytco/unyt-sandbox). A draft release
 # is readable only with a token that can write, which no smoke job holds, so
-# UNYT_SMOKE_FROM names a directory to take the asset from instead: the release
-# run's own builds, as download-artifact left them.
+# UNYT_SMOKE_FROM names a directory to take the asset from instead: the
+# installers the release run took back from its draft, as download-artifact left
+# them.
 set -euo pipefail
 
 REF="${1:?usage: download-release-asset.sh <release-id-or-tag> <asset-suffix> <out-dir>}"
