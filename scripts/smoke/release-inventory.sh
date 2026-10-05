@@ -57,7 +57,11 @@ windows-2025	msi	$MSI_SUFFIX"
 if [ -n "${UNYT_SMOKE_ASSETS+set}" ]; then
   assets="$UNYT_SMOKE_ASSETS"
 elif [ -n "${UNYT_SMOKE_FROM:-}" ]; then
-  assets="$(ls -A "$UNYT_SMOKE_FROM")"
+  assets="$(ls -A "$UNYT_SMOKE_FROM" 2>/dev/null)" || assets=""
+  [ -n "$assets" ] || {
+    echo "::error::no installers came from this run's artifacts: none matched, or they expired before the signing was approved. Re-tag to smoke this release." >&2
+    exit 1
+  }
 else
   command -v gh >/dev/null || { echo "::error::gh CLI not found" >&2; exit 1; }
   if [[ "$REF" =~ ^[0-9]+$ ]]; then

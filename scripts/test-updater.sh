@@ -463,7 +463,7 @@ summed() { # <out-dir> [<stage-1 sums> [<key> [<provenance>]]]
 }
 check "a release's SHA256SUMS is written and signed" summed "$tmp/sums"
 # As the README tells a user to check it.
-user_verifies() { minisign -Vm "$tmp/sums/SHA256SUMS" -P "$(base64 -d <<<"$release_pubkey" | sed -n 2p)"; }
+user_verifies() { minisign -VHm "$tmp/sums/SHA256SUMS" -P "$(base64 -d <<<"$release_pubkey" | sed -n 2p)"; }
 check "SHA256SUMS.minisig verifies SHA256SUMS with the key the app pins" user_verifies
 names_version() { [[ "$(user_verifies)" == *$'\t'version:1.2.3* ]]; }
 check "and its trusted comment names the release's version" names_version
@@ -488,6 +488,9 @@ check "an asset named twice signs no SHA256SUMS" unsigned "would name $(asset de
   "$stage1_sums"$'\n'"$(grep -F " $(asset default amd64_linux.deb)" "$tmp/bundled.provenance")"
 check "a line that checks no asset signs no SHA256SUMS" unsigned "would carry lines that check no release asset" \
   "$stage1_sums"$'\n'"$(head -1 <<<"$stage1_sums" | cut -d' ' -f1)  ../alliance.dna"
+utf8_unsigned() { LANG=C.UTF-8 LC_ALL=C.UTF-8 unsigned "$@"; }
+check "a line with a byte no UTF-8 reads signs no SHA256SUMS" utf8_unsigned "would carry lines that check no release asset" \
+  "$(sed $'s/ unyt_cli$/ unyt_cli \xff/' <<<"$stage1_sums")"
 
 workflows="$here/../.github/workflows"
 credentials() { bash "$here/check-build-credentials.sh" "$@"; }

@@ -1719,9 +1719,12 @@ builds="$(mktemp -d)"
 while IFS= read -r name; do printf '%s' "$name" >"$builds/$name"; done <<<"$full"
 printf 'zero-arc' >"$builds/x_zero-arc_amd64_linux.deb"
 take() { UNYT_SMOKE_FROM="$builds" bash "$here/download-release-asset.sh" 000 "$1" "$builds.out" 2>/dev/null; }
-if [ "$(UNYT_SMOKE_FROM="$builds" bash "$here/release-inventory.sh" 000 2>/dev/null)" = \
-     "$(inv "$(ls -A "$builds")")" ]; then pass=$((pass + 1)); else
+if from_run="$(UNYT_SMOKE_FROM="$builds" bash "$here/release-inventory.sh" 000 2>/dev/null)" &&
+   [ "$from_run" = "$(inv "$(ls -A "$builds")")" ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "the inventory does not read the release run's builds" >&2; fi
+if UNYT_SMOKE_FROM="$builds.none" bash "$here/release-inventory.sh" 000 >/dev/null 2>&1; then
+  fail=$((fail + 1)); printf 'FAIL  %s\n' "the inventory passed with no builds downloaded" >&2
+else pass=$((pass + 1)); fi
 taken="$(take _default-arc_amd64_linux.deb)" || taken=""
 if [ "$taken" = "$builds.out/x_default-arc_amd64_linux.deb" ] &&
    cmp -s "$taken" "$builds/x_default-arc_amd64_linux.deb"; then pass=$((pass + 1)); else
@@ -2027,8 +2030,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 267 ]; then
-  echo "::error::only $pass assertions ran; expected at least 267. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 268 ]; then
+  echo "::error::only $pass assertions ran; expected at least 268. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

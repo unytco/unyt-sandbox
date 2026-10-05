@@ -431,7 +431,8 @@ jobs:
           name: release-assets-${{ strategy.job-index }}
           path: release-assets
           if-no-files-found: error
-          retention-days: 1
+          # The smoke takes the installers from here once the signing is approved, which can take days.
+          retention-days: 7
 
       # A run artifact, not a release asset, so editing the release cannot change the record.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

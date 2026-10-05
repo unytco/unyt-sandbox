@@ -24,8 +24,11 @@ OUT="${6:?$usage}"
 [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] ||
   fail "TAURI_SIGNING_PRIVATE_KEY is not set: the release environment holds it and its password"
 sums="$(sort -k2,2 - "$PROVENANCE" <<<"$STAGE1")"
-odd="$(grep -vE '^[0-9a-f]{64}  [^/[:space:]]+$' <<<"$sums" || true)"
-[ -z "$odd" ] || fail "SHA256SUMS would carry lines that check no release asset: ${odd//$'\n'/ | }"
+if odd="$(LC_ALL=C grep -avE '^[0-9a-f]{64}  [^/[:space:]]+$' <<<"$sums")"; then
+  fail "SHA256SUMS would carry lines that check no release asset: ${odd//$'\n'/ | }"
+elif [ "$?" -ne 1 ]; then
+  fail "could not read the lines SHA256SUMS would carry"
+fi
 twice="$(awk '{ print $2 }' <<<"$sums" | uniq -d)"
 [ -z "$twice" ] || fail "SHA256SUMS would name ${twice//$'\n'/ } more than once"
 stage1="$(awk '{ print $2 }' <<<"$STAGE1" | LC_ALL=C sort | tr '\n' ' ')"
