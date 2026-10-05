@@ -185,7 +185,8 @@ check "it writes the app package's Cargo.lock entry, and no other" \
 check "and leaves the workspace version, which the zomes build with" diff "$tmp/unyt.before/Cargo.toml" "$versioned/unyt/Cargo.toml"
 app_tree crlf
 check "a Windows checkout's Cargo files are written too" eval 'set_version v0.1.0 && test "$(contract v0.1.0)" = 0.1.0'
-check "and keep their line endings" test "$(grep -c $'\r$' "$versioned/unyt/Cargo.lock")" = 17
+cr_lines() { grep -c $'\r$' "$versioned/unyt/$1"; } # <file>
+check "and keep their line endings" test "$(cr_lines Cargo.lock) $(cr_lines src-tauri/Cargo.toml)" = "17 6"
 app_tree
 sed -i 's/^name = "unyt-app"$/name = "renamed"/' "$versioned/unyt/Cargo.lock"
 check "an app whose Cargo.lock has no entry for its package is refused" refuses "has no one entry for unyt-app" set_version v0.1.0
@@ -447,8 +448,8 @@ check "the release key is a secret of that environment, and only the signing job
   and ([.jobs | to_entries[] | select(.value | tojson | test("secrets\\.TAURI_SIGNING")) | .key] == ["updater-manifests"])'
 check "no step splices an expression into its script" wired '[.jobs[].steps[]?.run // empty | select(test("\\$\\{\\{"))] == []'
 check "no workflow or release script names this repo, so a fork releases into itself" eval '
-  ! grep -rlE "unytco/unyt-sandbox|co\.unyt\." "$here/../.github" "$here"/*.sh "$here/smoke" "$here/../lineage.json" |
-    grep -v "/test-"'
+  ! grep -rlE --include="*.y*ml" --include="*.sh" --include="*.py" --include="*.ps1" --include="*.json" \
+    "unytco/unyt-sandbox|co\.unyt\." "$here/../.github" "$here" "$here/../lineage.json" | grep -vE "/test[-_]"'
 probe_wf="$(yq -o=json "$here/../.github/workflows/release-probe.yaml")"
 probe_wired() { jq -e "$1" <<<"$probe_wf" >/dev/null; } # <condition on the probe workflow>
 check "every pull request probes the pinned app as the release takes it" probe_wired '
