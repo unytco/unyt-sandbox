@@ -1722,9 +1722,9 @@ take() { UNYT_SMOKE_FROM="$builds" bash "$here/download-release-asset.sh" 000 "$
 if from_run="$(UNYT_SMOKE_FROM="$builds" bash "$here/release-inventory.sh" 000 2>/dev/null)" &&
    [ "$from_run" = "$(inv "$(ls -A "$builds")")" ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); printf 'FAIL  %s\n' "the inventory does not read the release run's builds" >&2; fi
-if UNYT_SMOKE_FROM="$builds.none" bash "$here/release-inventory.sh" 000 >/dev/null 2>&1; then
-  fail=$((fail + 1)); printf 'FAIL  %s\n' "the inventory passed with no builds downloaded" >&2
-else pass=$((pass + 1)); fi
+if ! none="$(UNYT_SMOKE_FROM="$builds.none" bash "$here/release-inventory.sh" 000 2>&1)" &&
+   [[ "$none" == *"no installers came from this run's artifacts"* ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL  %s\n' "the inventory does not say no builds were downloaded" >&2; fi
 taken="$(take _default-arc_amd64_linux.deb)" || taken=""
 if [ "$taken" = "$builds.out/x_default-arc_amd64_linux.deb" ] &&
    cmp -s "$taken" "$builds/x_default-arc_amd64_linux.deb"; then pass=$((pass + 1)); else
