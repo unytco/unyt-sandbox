@@ -111,6 +111,9 @@ jobs:
       - name: "the Rust toolchain check"
         run: bash scripts/test-rust-toolchain.sh
 
+      - name: "the release app scripts"
+        run: bash scripts/test-release-app.sh
+
       - name: Install minisign
         run: bash scripts/install-minisign.sh
 

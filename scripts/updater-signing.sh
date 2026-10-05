@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Whether this release signs its updates, as $GITHUB_OUTPUT lines:
-#   updater-signing.sh <tauri.conf.json>      prints  enabled=true|false  [pubkey=<key>]
+#   updater-signing.sh <tauri config>      prints  enabled=true|false  [pubkey=<key>]
+# <tauri config> is the app's Tauri configuration with the released app's identity merged over it,
+# as `release-app.sh identity` writes it, so the key is the one the build pins.
 #
 # An app with no updater config releases unsigned. One with it updates in-app only to a release
 # signed with its pinned key, so a release that pins no usable key fails here.
 set -euo pipefail
 
-CONF="${1:?usage: updater-signing.sh <tauri.conf.json>}"
+CONF="${1:?usage: updater-signing.sh <tauri config>}"
 
 fail() {
   echo "::error::$*" >&2

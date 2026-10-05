@@ -14,6 +14,9 @@
 #   run-smoke.sh --summary                    the table, and the did-it-run guard
 #   run-smoke.sh --stop                       tear the container down
 #
+# Env: UNYT_BUNDLE_ID, the app's identifier, under which the launch check reads
+# its log. Unset, it is identity.json's. Needs jq then.
+#
 # PRISTINE containers, not a CI runner: a runner already carries hundreds of
 # libraries, so an under-declared dependency is satisfied there and the run goes
 # green while a user's machine fails.
@@ -183,7 +186,11 @@ cmd_exec() { # <check-id>
     return 1
   fi
 
+  local bundle
+  bundle="${UNYT_BUNDLE_ID:-$(jq -er .identifier "$here/../../identity.json")}" ||
+    { echo "::error::UNYT_BUNDLE_ID is unset and identity.json names no identifier" >&2; return 2; }
   local -a run=(docker exec
+    -e "UNYT_BUNDLE_ID=$bundle"
     -e UNYT_SMOKE_STATE=/tmp/unyt-smoke-state
     -e UNYT_SMOKE_RESULTS=/tmp/unyt-smoke-state/results
     "$cid" bash "/smoke/$driver" --only "$id" "/artifact/$(basename "$artifact")")

@@ -42,6 +42,7 @@ check "a config that does not parse fails the release" \
   refuses "parse error" bash "$here/updater-signing.sh" "$(conf '{"plugins":')"
 gate_refuses "an updater with no key fails the release" ""
 gate_refuses "a placeholder public key fails the release" "REPLACE_ME"
+gate_refuses "a placeholder key in words fails the release" "TO BE SET: the updater key"
 gate_refuses "a key that is only its comment line fails the release" \
   "$(b64 'untrusted comment: minisign public key')"
 key_line="$(sed -n 2p "$tmp/ours.pub")"
@@ -58,31 +59,7 @@ check "a pinned key signs, and hands the key on" \
   test "$(gate "$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$(pubkey ours)\"}}}")")" = \
   "$(printf 'enabled=true\npubkey=%s' "$(pubkey ours)")"
 
-# release_asset as the app has it.
-cat >"$tmp/updater.rs" <<'EOF'
-/// Must match the name the release pipeline publishes and signs each asset under.
-fn release_asset(
-    product: &str,
-    version: &str,
-    arc_factor: &str,
-    target: &str,
-    bundle: BundleType,
-) -> Option<String> {
-    let platform = match (target, bundle) {
-        ("linux-x86_64", BundleType::Deb) => "amd64_linux.deb",
-        ("linux-x86_64", BundleType::AppImage) => "amd64_linux.AppImage",
-        ("darwin-aarch64", BundleType::App) => "aarch64_darwin.app.tar.gz",
-        ("darwin-x86_64", BundleType::App) => "x64_darwin.app.tar.gz",
-        ("windows-x86_64", BundleType::Msi) => "x64_windows.msi",
-        ("windows-x86_64", BundleType::Nsis) => "x64_windows.exe",
-        _ => return None,
-    };
-    Some(format!(
-        "unyt_{version}_{product}_{}-arc_{platform}",
-        arc(arc_factor)
-    ))
-}
-EOF
+cp "$here/fixtures/updater.rs" "$tmp/updater.rs"
 app_edit() { # <error text> <description> <sed edit of release_asset>
   sed "$3" "$tmp/updater.rs" >"$tmp/edited.rs"
   check "$2" refuses "$1" bash "$here/updater-asset-names.sh" "$tmp/edited.rs"
@@ -115,6 +92,22 @@ app_table "an app that looks an asset up under its target in another case fails 
 sed '/fn release_asset(/,/^}/d' "$tmp/updater.rs" >"$tmp/untabled.rs"
 check "an app with no asset name table fails the release" \
   refuses "has no release_asset table" bash "$here/updater-asset-names.sh" "$tmp/untabled.rs"
+unrenamed='/^fn release_product(/,/^}/d; s/release_product(&app.package_info().name)/app.package_info().name.clone()/'
+sed "$unrenamed" "$tmp/updater.rs" >"$tmp/unrenamed.rs"
+check "an app needs no renaming for a product name GitHub keeps" bash "$here/updater-asset-names.sh" "$tmp/unrenamed.rs" Unyt
+check "an app that renames a product name as GitHub does passes" \
+  bash "$here/updater-asset-names.sh" "$tmp/updater.rs" "Unyt Sandbox"
+product_edit() { # <error text> <description> <sed edit of the app>
+  sed "$3" "$tmp/updater.rs" >"$tmp/edited.rs"
+  check "$2" refuses "$1" bash "$here/updater-asset-names.sh" "$tmp/edited.rs" "Unyt Sandbox"
+}
+product_edit "renames no product name as release_product" \
+  "an app that does not rename a product name GitHub renames fails the release" "$unrenamed"
+product_edit "renames no product name as release_product" \
+  "an app that renames other characters than GitHub fails the release" "s/' ', '('/' ', '-', '('/"
+product_edit "looks them up under the product name as it is" \
+  "an app that looks an asset up under the product name as it is fails the release" \
+  's/release_product(&app.package_info().name)/app.package_info().name.clone()/'
 
 targets="linux-x86_64-deb:amd64_linux.deb linux-x86_64-appimage:amd64_linux.AppImage
 darwin-aarch64-app:aarch64_darwin.app.tar.gz darwin-x86_64-app:x64_darwin.app.tar.gz
@@ -137,7 +130,7 @@ release() { # <dir>: also writes <dir>.provenance, what its builds recorded publ
 }
 manifests() { # <asset-dir> <out-dir> [<pubkey>]
   mkdir -p "$2"
-  env -u GITHUB_REPOSITORY bash "$here/updater-manifests.sh" v1.2.3 1.2.3 "${3:-$(pubkey ours)}" "$1" "$2"
+  GITHUB_REPOSITORY=example/fork bash "$here/updater-manifests.sh" v1.2.3 1.2.3 "${3:-$(pubkey ours)}" "$1" "$2"
 }
 
 release "$tmp/full"
@@ -151,7 +144,7 @@ for arc in default zero; do
     name="$(asset "$arc" "${t#*:}")"
     check "$arc-arc ${t%%:*} points at its own asset on the release" \
       test "$(jq -r --arg t "${t%%:*}" '.platforms[$t].url' "$m")" = \
-      "https://github.com/unytco/unyt-sandbox/releases/download/v1.2.3/$name"
+      "https://github.com/example/fork/releases/download/v1.2.3/$name"
     check "$arc-arc ${t%%:*} carries that asset's signature" \
       test "$(jq -r --arg t "${t%%:*}" '.platforms[$t].signature' "$m")" = "$(cat "$tmp/full/$name.sig")"
   done
@@ -412,22 +405,32 @@ for os in Linux Windows; do
   check "an arm64 $os build records nothing" \
     refuses "no asset name for a $os ARM64 build" recorded "$os" ARM64 "" default "$tmp"
 done
-printf '{"productName": "Unyt (Sandbox)", "version": "1.2.3"}' >"$tmp/renamed.conf.json"
-mkdir "$tmp/renamed.out"
+recorded_as() { # <productName> [<bundled productName>]: the name a Linux build's deb is recorded under
+  local out="$tmp/as.$((pass + fail))" deb="$tmp/as.$((pass + fail)).in/${2:-$1}_1.2.3_amd64.deb"
+  mkdir -p "$out" "$(dirname "$deb")"
+  printf 'a deb' >"$deb"
+  jq -n --arg name "$1" '{productName: $name, version: "1.2.3"}' >"$out.conf.json"
+  RUNNER_OS=Linux RUNNER_ARCH=X64 bash "$here/updater-provenance.sh" "$out.conf.json" default "" \
+    "$(jq -nc '$ARGS.positional' --args "$deb")" "$out" | cut -d' ' -f3
+}
+check "Unyt Sandbox's builds are recorded as the release names them" \
+  test "$(recorded_as "Unyt Sandbox")" = unyt_1.2.3_Unyt.Sandbox_default-arc_amd64_linux.deb
 check "a product name GitHub renames is recorded as the release names it" \
-  test "$(RUNNER_OS=Linux RUNNER_ARCH=X64 bash "$here/updater-provenance.sh" "$tmp/renamed.conf.json" \
-    default "" "[\"$tmp/target/default/release/bundle/deb/Unyt_1.2.3_amd64.deb\"]" "$tmp/renamed.out" |
-    cut -d' ' -f3)" = unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
+  test "$(recorded_as "Unyt (Sandbox)")" = unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
+check "a build of another product than identity.json names records nothing" \
+  refuses "_1.2.3_amd64.deb is no Unyt Sandbox bundle" recorded_as "Unyt Sandbox" Unyt
+check "nor does a build of a product whose name only starts like it" \
+  refuses "is no Unyt bundle" recorded_as Unyt "Unyt Sandbox"
 check "a build that made nothing records nothing" \
   refuses "tauri-action found nothing this build made" recorded Linux X64 "" default "$tmp"
 check "a build tauri-action reported nothing for records nothing" refuses "tauri-action found nothing this build made" \
   env RUNNER_OS=Linux RUNNER_ARCH=X64 bash "$here/updater-provenance.sh" "$tmp/tauri.conf.json" default "" "" "$tmp"
-mkdir "$tmp/twice" "$tmp/twice.out"
-printf 'one deb' >"$tmp/twice/Unyt_1.2.3_amd64.deb"
-printf 'another deb' >"$tmp/twice/unyt_1.2.3_amd64.deb"
+mkdir -p "$tmp/twice/a" "$tmp/twice/b" "$tmp/twice.out"
+printf 'one deb' >"$tmp/twice/a/Unyt_1.2.3_amd64.deb"
+printf 'another deb' >"$tmp/twice/b/Unyt_1.2.3_amd64.deb"
 check "a build with two artifacts under one asset name records nothing" \
   refuses "two of this build's artifacts are named $(asset default amd64_linux.deb)" \
-  recorded Linux X64 "" default "$tmp/twice.out" "$tmp/twice/Unyt_1.2.3_amd64.deb" "$tmp/twice/unyt_1.2.3_amd64.deb"
+  recorded Linux X64 "" default "$tmp/twice.out" "$tmp/twice/a/Unyt_1.2.3_amd64.deb" "$tmp/twice/b/Unyt_1.2.3_amd64.deb"
 printf 'an rpm' >"$tmp/target/x.rpm"
 cp "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
 check "a build that lists a file no release names records nothing" \

@@ -9,7 +9,8 @@
 # Every assertion below is the backend's: what the webview drew is not asserted
 # here.
 #
-# Env: UNYT_SMOKE_SANDBOX (default /tmp/ut-smoke) · UNYT_SMOKE_TIMEOUT (default
+# Env: UNYT_BUNDLE_ID (the app's identifier, required) ·
+#      UNYT_SMOKE_SANDBOX (default /tmp/ut-smoke) · UNYT_SMOKE_TIMEOUT (default
 #      240) · UNYT_SMOKE_SETTLE (default 45, must exceed the 5s first backoff) ·
 #      UNYT_SMOKE_PROC_NAME (process to watch; defaults to the binary's basename)
 set -euo pipefail
@@ -20,6 +21,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BIN="${1:?usage: launch-and-assert.sh <installed-binary>}"
 [ -x "$BIN" ] || { echo "::error::not executable: $BIN" >&2; exit 1; }
+[ -n "${UNYT_BUNDLE_ID:-}" ] ||
+  { echo "::error::UNYT_BUNDLE_ID is unset, so there is no telling where the app writes its log" >&2; exit 1; }
 
 SANDBOX="${UNYT_SMOKE_SANDBOX:-/tmp/ut-smoke}"
 TIMEOUT="${UNYT_SMOKE_TIMEOUT:-240}"

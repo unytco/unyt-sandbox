@@ -23,11 +23,12 @@ Application-level changes belong in
 
 ### Changed
 
-- **A release, and every installer in it, is named Unyt. Unyt installs as a new app, next to Unyt Sandbox.**
+- **A release, and every installer in it, is Unyt Sandbox, which installs as its own app beside Unyt.**
+- **A release's notes name the network it was built for.**
 - **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
 - **No job that builds the app holds a credential that can change a release, and no job that runs a built installer holds a token that can write.**
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
-- **Release kinds come from the tag, and the version from one file (UNYT-946/948).** `vM.m.0` builds the DNA, `vM.m.p` inherits it and repacks only the UI, and `unyt/src-tauri/Cargo.toml` is the single source of truth for the version — a tag or a config that disagrees fails the release before an artifact is built. Pre-releases ship on a `-dev.*` channel the update router ignores, so one is never offered to users as an update.
+- **A release's kind and version come from its tag (UNYT-946/948).** `vM.m.0` builds the DNA, `vM.m.p` inherits it and repacks only the UI, and the release writes the version into the app before it builds. Pre-releases ship on a `-dev.*` channel the update router ignores, so one is never offered to users as an update.
 - **Installers and unyt_cli build with Rust 1.98.1, and a release stops when the app's CI pins another.**
 
 ### Fixed

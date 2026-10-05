@@ -3,13 +3,13 @@
 #   release-inventory.sh <release-id-or-tag>
 # Lanes gate on these, so a platform whose build failed skips instead of running
 # checks that all report "the file isn't there".
-# Env: GH_TOKEN, UNYT_SMOKE_REPO. UNYT_SMOKE_FROM (a directory) answers from the
-# files in it, as download-release-asset.sh takes them. UNYT_SMOKE_ASSETS
-# (newline list of names) answers from itself, as test-oracle.sh drives it.
+# Env: GH_TOKEN, UNYT_SMOKE_REPO (default GITHUB_REPOSITORY). UNYT_SMOKE_FROM
+# (a directory) answers from the files in it, as download-release-asset.sh takes
+# them. UNYT_SMOKE_ASSETS (newline list of names) answers from itself, as
+# test-oracle.sh drives it.
 set -euo pipefail
 
 REF="${1:?usage: release-inventory.sh <release-id-or-tag>}"
-REPO="${UNYT_SMOKE_REPO:-${GITHUB_REPOSITORY:-unytco/unyt-sandbox}}"
 
 # Keep these in lockstep with the suffixes the phase-2 lanes pass to
 # download-release-asset.sh: a typo here silently skips a lane forever, which is
@@ -63,6 +63,7 @@ elif [ -n "${UNYT_SMOKE_FROM:-}" ]; then
     exit 1
   }
 else
+  REPO="${UNYT_SMOKE_REPO:-${GITHUB_REPOSITORY:?UNYT_SMOKE_REPO or GITHUB_REPOSITORY must name the release repo}}"
   command -v gh >/dev/null || { echo "::error::gh CLI not found" >&2; exit 1; }
   if [[ "$REF" =~ ^[0-9]+$ ]]; then
     release_id="$REF"
