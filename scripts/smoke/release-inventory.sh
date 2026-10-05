@@ -5,7 +5,7 @@
 # checks that all report "the file isn't there".
 # Env: GH_TOKEN, UNYT_SMOKE_REPO. UNYT_SMOKE_FROM (a directory) answers from the
 # files in it, as download-release-asset.sh takes them. UNYT_SMOKE_ASSETS
-# (newline list of names) answers from itself — how test-oracle.sh drives this.
+# (newline list of names) answers from itself, as test-oracle.sh drives it.
 set -euo pipefail
 
 REF="${1:?usage: release-inventory.sh <release-id-or-tag>}"

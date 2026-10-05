@@ -523,6 +523,7 @@ jobs:
         env:
           APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
           STARTED_AT: ${{ needs.build-happ.outputs.startedAt }}
+          PRODUCT: ${{ needs.build-happ.outputs.productName }}
           PUBKEY: ${{ needs.build-happ.outputs.updaterPubkey }}
           STAGE1_SUMS: ${{ needs.build-happ.outputs.stage1Sums }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -531,7 +532,7 @@ jobs:
           find provenance -type f -name '*.sha256' -exec cat {} + >updater-provenance.sha256
           bash scripts/updater-sign.sh "$APP_VERSION" assets "$STARTED_AT" updater-provenance.sha256
           mkdir sums
-          bash scripts/release-sums.sh "$APP_VERSION" "$PUBKEY" updater-provenance.sha256 "$STAGE1_SUMS" sums
+          bash scripts/release-sums.sh "$APP_VERSION" "$PRODUCT" "$PUBKEY" updater-provenance.sha256 "$STAGE1_SUMS" sums
 
       - name: Publish them with one manifest per arc factor, and SHA256SUMS
         env:

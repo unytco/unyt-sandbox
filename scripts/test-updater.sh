@@ -457,9 +457,9 @@ check "nor do the manifests publish the relabelled release" refuses "with the ke
 mkdir "$tmp/stage1"
 for name in unyt.happ unyt.webhapp alliance.dna unyt_cli; do printf 'stage 1 built %s' "$name" >"$tmp/stage1/$name"; done
 stage1_sums="$(cd "$tmp/stage1" && sha256sum -- *)"
-summed() { # <out-dir> [<stage-1 sums> [<key>]]
-  mkdir -p "$1" && with_key "${3:-release}" bash "$here/release-sums.sh" 1.2.3 "$release_pubkey" \
-    "$tmp/bundled.provenance" "${2-$stage1_sums}" "$1"
+summed() { # <out-dir> [<stage-1 sums> [<key> [<provenance>]]]
+  mkdir -p "$1" && with_key "${3:-release}" bash "$here/release-sums.sh" 1.2.3 Unyt "$release_pubkey" \
+    "${4:-$tmp/bundled.provenance}" "${2-$stage1_sums}" "$1"
 }
 check "a release's SHA256SUMS is written and signed" summed "$tmp/sums"
 # As the README tells a user to check it.
@@ -476,7 +476,14 @@ check "SHA256SUMS checks every installer and every file stage 1 publishes, and n
 unsigned() { refuses "$1" summed "$tmp/unsums$((pass + fail))" "${@:2}" && [ -z "$(ls "$tmp/unsums$((pass + fail))")" ]; }
 check "a key the app does not pin signs no SHA256SUMS" \
   unsigned "does not verify SHA256SUMS with the key the app pins" "$stage1_sums" build
-check "no stage 1 sums signs no SHA256SUMS" unsigned "4: usage:" ""
+check "no stage 1 sums signs no SHA256SUMS" unsigned "5: usage:" ""
+check "stage 1 sums missing a file sign no SHA256SUMS" unsigned "stage 1 recorded alliance.dna unyt.happ unyt.webhapp rather" \
+  "$(grep -v ' unyt_cli$' <<<"$stage1_sums")"
+check "a stage 1 sum for another file signs no SHA256SUMS" unsigned "stage 1 recorded alliance.dna anything.exe unyt.happ" \
+  "$(sed 's/ unyt\.webhapp$/ anything.exe/' <<<"$stage1_sums")"
+sed 's/_default-arc_amd64_linux\.deb$/_default-arc_arm64_linux.deb/' "$tmp/bundled.provenance" >"$tmp/renamed.provenance"
+check "a build record of no build asset signs no SHA256SUMS" \
+  unsigned "recorded $(asset default arm64_linux.deb), which is no build asset" "$stage1_sums" release "$tmp/renamed.provenance"
 check "an asset named twice signs no SHA256SUMS" unsigned "would name $(asset default amd64_linux.deb) more than once" \
   "$stage1_sums"$'\n'"$(grep -F " $(asset default amd64_linux.deb)" "$tmp/bundled.provenance")"
 check "a line that checks no asset signs no SHA256SUMS" unsigned "would carry lines that check no release asset" \
