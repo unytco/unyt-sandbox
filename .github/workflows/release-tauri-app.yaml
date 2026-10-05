@@ -1,14 +1,36 @@
 name: "release-tauri-app"
+# Releases the app's version taken from unyt/src-tauri/tauri.conf.json.
+#
+# The URL inputs are built into the app. An empty input uses the app's default.
 on:
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
-      # A throwaway build that proves the pipeline. Never something a user installs.
-      - "v[0-9]+.[0-9]+.[0-9]+-dev.*"
+  workflow_dispatch:
+    inputs:
+      joining_service_url:
+        description: "UNYT_JOINING_SERVICE_URL (empty: open mode, no joining service)"
+        type: string
+        default: https://joining.unyt.dev
+      migration_service_url:
+        description: "VITE_MIGRATION_SERVICE_URL (required: without it the app never checks for updates)"
+        type: string
+        required: true
+        default: https://migration.unyt.dev
+      bootstrap_url:
+        description: "UNYT_BOOTSTRAP_URL (empty: app default)"
+        type: string
+      relay_url:
+        description: "UNYT_RELAY_URL (empty: app default)"
+        type: string
+      auth_server_url:
+        description: "UNYT_AUTH_SERVER_URL (empty: app default)"
+        type: string
+      auth_relay:
+        description: "UNYT_AUTH_RELAY: attach hc-auth to relay requests"
+        type: boolean
+        default: true
 
-# One run per tag at a time: two would replace each other's builds on the one release.
+# One release at a time: two of one version would replace each other's builds on the one release.
 concurrency:
-  group: release-tauri-app-${{ github.ref }}
+  group: release-tauri-app
   cancel-in-progress: false
 
 env:
@@ -23,6 +45,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
+      tag: ${{ steps.version.outputs.TAG }}
       productName: ${{ steps.product.outputs.name }}
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
       signedUpdates: ${{ steps.updater.outputs.enabled }}
@@ -61,13 +84,17 @@ jobs:
           name: holochain-ci
           extraPullNames: darksoil-studio
 
-      - name: Assert version contract (tag == src-tauri Cargo.toml == tauri.conf.json)
+      - name: Read the release version (src-tauri Cargo.toml == tauri.conf.json), never released before
         id: version
-        env:
-          TAG: ${{ github.ref_name }}
         run: |
+          TAG="v$(jq -er .version unyt/src-tauri/tauri.conf.json)"
           APP_VERSION="$(bash scripts/check-version-contract.sh "$TAG")"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG is already released: bump the app's version first"
+            exit 1
+          fi
           echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Read the product name
         id: product
@@ -96,7 +123,7 @@ jobs:
       - name: Resolve release kind (tag patch → migration | UI)
         id: kind
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.TAG }}
         run: bash scripts/release-kind.sh "$TAG" >> "$GITHUB_OUTPUT"
 
       # Here, not in the Windows job: a tag the msi cannot carry then fails in seconds rather
@@ -135,7 +162,7 @@ jobs:
         if: steps.kind.outputs.kind == 'ui'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.TAG }}
           PARENT_TAG: ${{ steps.kind.outputs.parent_tag }}
         run: bash scripts/inherit-ui-release.sh "$TAG" "$PARENT_TAG"
 
@@ -150,6 +177,27 @@ jobs:
             p && /^## \[/ {exit}
             p {print}
           ' unyt/CHANGELOG.md > release_notes.txt
+
+      # The inputs live only in this run, so the release states the network it was built for.
+      - name: Note the network in the release notes
+        env:
+          UNYT_JOINING_SERVICE_URL: ${{ inputs.joining_service_url }}
+          VITE_MIGRATION_SERVICE_URL: ${{ inputs.migration_service_url }}
+          UNYT_BOOTSTRAP_URL: ${{ inputs.bootstrap_url }}
+          UNYT_RELAY_URL: ${{ inputs.relay_url }}
+          UNYT_AUTH_SERVER_URL: ${{ inputs.auth_server_url }}
+          UNYT_AUTH_RELAY: ${{ inputs.auth_relay }}
+        run: |
+          {
+            echo
+            echo "### Network"
+            echo
+            for var in UNYT_JOINING_SERVICE_URL VITE_MIGRATION_SERVICE_URL UNYT_BOOTSTRAP_URL \
+              UNYT_RELAY_URL UNYT_AUTH_SERVER_URL UNYT_AUTH_RELAY; do
+              echo "- \`$var\`: ${!var:-app default}"
+            done
+          } >> release_notes.txt
+          cat release_notes.txt
 
       # Each build row takes the happ from a run artifact, which any job of this run can replace.
       - name: Note the happ the builds compile in
@@ -204,9 +252,10 @@ jobs:
             happ/alliance.dna
             happ/unyt_cli
           bodyFile: happ/release_notes.txt
-          # The pushed tag, not APP_VERSION: a -dev.* must not ship as stable.
-          name: ${{ needs.build-happ.outputs.productName }} ${{ github.ref_name }}
-          tag: ${{ github.ref_name }}
+          name: ${{ needs.build-happ.outputs.productName }} ${{ needs.build-happ.outputs.tag }}
+          tag: ${{ needs.build-happ.outputs.tag }}
+          # Where the tag is cut when the draft is published: the commit that was built.
+          commit: ${{ github.sha }}
           prerelease: true
           draft: true
 
@@ -264,7 +313,7 @@ jobs:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       CARGO_PROFILE_RELEASE_LTO: "false"
       # Empty means the shipped app can never check for updates. Not a secret.
-      VITE_MIGRATION_SERVICE_URL: https://migration.unyt.dev
+      VITE_MIGRATION_SERVICE_URL: ${{ inputs.migration_service_url }}
     permissions:
       contents: read
 
@@ -406,8 +455,13 @@ jobs:
           APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
           HOLOCHAIN_ARC_FACTOR: ${{ matrix.config.arc_factor != 'default' &&
             matrix.config.arc_factor || '' }}
-          UNYT_JOINING_SERVICE_URL: https://joining.unyt.dev
           VITE_MIGRATION_SERVICE_URL: ${{ env.VITE_MIGRATION_SERVICE_URL }}
+          # Empty reads as unset in the app's build.rs, so its default applies.
+          UNYT_JOINING_SERVICE_URL: ${{ inputs.joining_service_url }}
+          UNYT_BOOTSTRAP_URL: ${{ inputs.bootstrap_url }}
+          UNYT_RELAY_URL: ${{ inputs.relay_url }}
+          UNYT_AUTH_SERVER_URL: ${{ inputs.auth_server_url }}
+          UNYT_AUTH_RELAY: ${{ inputs.auth_relay }}
         with:
           projectPath: unyt
           args: ${{ matrix.config.args }}
@@ -464,7 +518,7 @@ jobs:
       - name: Publish them on the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.build-happ.outputs.tag }}
           APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
           PRODUCT: ${{ needs.build-happ.outputs.productName }}
         run: |
@@ -500,7 +554,7 @@ jobs:
       - name: Download the updater artifacts, their build signatures, and the rest SHA256SUMS covers
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.build-happ.outputs.tag }}
         run: |
           mkdir assets
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir assets
@@ -537,7 +591,7 @@ jobs:
       - name: Publish them with one manifest per arc factor, and SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.build-happ.outputs.tag }}
           APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
           PUBKEY: ${{ needs.build-happ.outputs.updaterPubkey }}
         run: |
