@@ -25,6 +25,9 @@ PIN="$ROOT/lineage.json"
 expected_sha="$(jq -r '.happ_sha256' "$PIN")"
 { [ -n "$expected_sha" ] && [ "$expected_sha" != "null" ]; } ||
   fail "lineage.json has no happ_sha256 — prepare the pin from the published $PARENT_TAG asset first"
+expected_dna_sha="$(jq -r '.dna_sha256' "$PIN")"
+{ [ -n "$expected_dna_sha" ] && [ "$expected_dna_sha" != "null" ]; } ||
+  fail "lineage.json has no dna_sha256: prepare the pin from the published $PARENT_TAG asset first"
 expected_cli_sha="$(jq -r '.cli_sha256' "$PIN")"
 { [ -n "$expected_cli_sha" ] && [ "$expected_cli_sha" != "null" ]; } ||
   fail "lineage.json has no cli_sha256 — prepare the pin from the published $PARENT_TAG asset first"
@@ -45,6 +48,9 @@ gh release download "$PARENT_TAG" --repo "$REPO" --dir "$tmp" --pattern unyt.hap
 got_sha="$(sha256sum "$tmp/unyt.happ" | awk '{print $1}')"
 [ "$got_sha" = "$expected_sha" ] ||
   fail "inherited unyt.happ sha256 $got_sha != committed lineage.json $expected_sha (mutated or wrong-tag release asset)"
+got_dna_sha="$(sha256sum "$tmp/alliance.dna" | awk '{print $1}')"
+[ "$got_dna_sha" = "$expected_dna_sha" ] ||
+  fail "inherited alliance.dna sha256 $got_dna_sha != committed lineage.json $expected_dna_sha (mutated or wrong-tag release asset)"
 got_cli_sha="$(sha256sum "$tmp/unyt_cli" | awk '{print $1}')"
 [ "$got_cli_sha" = "$expected_cli_sha" ] ||
   fail "inherited unyt_cli sha256 $got_cli_sha != committed lineage.json $expected_cli_sha (mutated or wrong-tag release asset)"
@@ -59,7 +65,7 @@ got_cli_sha="$(sha256sum "$tmp/unyt_cli" | awk '{print $1}')"
 #    NOT --recursive: that makes hc ignore the pre-built ./unyt.happ and rebuild the whole chain from
 #    the manifests down to the zome wasm, which a UI release never compiles.
 cp "$tmp/unyt.happ" "$ROOT/unyt/workdir/unyt.happ"
-[ -f "$tmp/alliance.dna" ] && cp "$tmp/alliance.dna" "$ROOT/unyt/dnas/alliance/workdir/alliance.dna"
+cp "$tmp/alliance.dna" "$ROOT/unyt/dnas/alliance/workdir/alliance.dna"
 #    unyt_cli goes where a migration release's `cargo build --release` leaves it, so the workflow
 #    declares one artifact path for both release kinds. A release asset carries no mode bit; restore it.
 mkdir -p "$ROOT/unyt/target/release"

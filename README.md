@@ -41,7 +41,16 @@ unyt_<version>_Unyt_<variant>_<architecture>_<platform><extension>
 | `<platform>` | `darwin` for macOS, `linux`, `windows` |
 | `<extension>` | macOS `.dmg`, Linux `.deb` or `.AppImage`, Windows `.exe` (setup) or `.msi` |
 
-A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. When the pinned app declares an updater, a release also carries `.sig` signatures and the `updater-default-arc.json` and `updater-zero-arc.json` manifests, which the app's Update now reads, and a `SHA256SUMS` file with the checksum of every installer. Installing Unyt needs none of them.
+A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. When the pinned app declares an updater, a release also carries `.sig` signatures and the `updater-default-arc.json` and `updater-zero-arc.json` manifests, which the app's Update now reads, and a `SHA256SUMS` file with the checksum of every installer, of the Holochain files and of `unyt_cli`. `SHA256SUMS.minisig` is its signature by the key the app's updates are signed with. Installing Unyt needs none of them.
+
+To check a download, put it in one folder with `SHA256SUMS` and `SHA256SUMS.minisig`, and run [minisign](https://jedisct1.github.io/minisign/) and then `sha256sum` there:
+
+```sh
+minisign -VHm SHA256SUMS -P RWTMgl5pLxSOVpkRiS5CMlFkrn7enASWilDEzRpfPeTBcBBJXcdu/rFO
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+minisign prints a trusted comment that names the release's version. On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS`.
 
 ### On Linux, swapping between the two variants
 

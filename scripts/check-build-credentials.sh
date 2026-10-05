@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Fails when a workflow lets code that builds the app reach a credential that can change a release:
 #   check-build-credentials.sh <workflow>...
-# Build code can read every secret and token its job holds. So every job but the named credential
-# holders below reads no secret beyond the build's and no holder's outputs, and has permissions
-# declared, none of them write; and a credential holder runs no build. YAML that parsers may read
-# differently, such as an anchor, fails it. Needs mikefarah's yq v4 and jq.
+# Build code can read every secret and token its job holds, and so can an installer the smoke runs. So
+# every job but the named credential holders below reads no secret beyond the build's and no holder's
+# outputs, only its result, and has permissions declared, none of them write; and a credential holder
+# runs no build. YAML that parsers may read differently, such as an anchor, fails it. Needs mikefarah's
+# yq v4 and jq.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
@@ -14,12 +15,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 yq --version 2>/dev/null | grep -q 'mikefarah.* v4\.' || fail "this check needs mikefarah's yq v4 on PATH"
 build_secrets='["unyt_deploy_key", "apple_certificate", "apple_certificate_password", "apple_dev_identity",
   "apple_id_email", "apple_id_password", "apple_team_id"]'
-# The smoke's jobs read the draft release with GIT_PAT and run the installers on it.
 credential_holders() { # <workflow file name>
   case "$1" in
-    release-tauri-app.yaml) echo '["publish-happ", "publish-builds", "updater-manifests", "smoke-test"]' ;;
-    release-smoke.yaml) echo '["inventory", "opens-linux", "opens-macos", "opens-windows", "static-linux",
-      "static-macos", "static-windows"]' ;;
+    release-tauri-app.yaml) echo '["publish-happ", "publish-builds", "updater-manifests", "draft-installers"]' ;;
     *) echo '[]' ;;
   esac
 }
@@ -46,6 +44,7 @@ judge='
         else
           ($j | tojson | secrets_read | if . != [] then "\($job) reads \(join(" "))" else empty end),
           ($j | del(.needs) | tojson | ascii_downcase
+            | gsub("needs\\s*\\.\\s*[a-z0-9_-]+\\s*\\.\\s*result\\b"; "")
             | gsub("needs\\s*\\.\\s*(?<n>[a-z0-9_-]+)"; if (.n | IN($others[])) then "" else "needs." + .n + " " end)
             | if test("needs") then "\($job) reads what a credential holder hands on" else empty end),
           (if $j | has("permissions") then $j.permissions else $top_permissions end

@@ -3,8 +3,9 @@
 #   release-inventory.sh <release-id-or-tag>
 # Lanes gate on these, so a platform whose build failed skips instead of running
 # checks that all report "the file isn't there".
-# Env: GH_TOKEN, UNYT_SMOKE_REPO. UNYT_SMOKE_ASSETS (newline list of names)
-# answers from itself instead of the API — how test-oracle.sh drives this.
+# Env: GH_TOKEN, UNYT_SMOKE_REPO. UNYT_SMOKE_FROM (a directory) answers from the
+# files in it, as download-release-asset.sh takes them. UNYT_SMOKE_ASSETS
+# (newline list of names) answers from itself, as test-oracle.sh drives it.
 set -euo pipefail
 
 REF="${1:?usage: release-inventory.sh <release-id-or-tag>}"
@@ -55,6 +56,12 @@ windows-2025	msi	$MSI_SUFFIX"
 
 if [ -n "${UNYT_SMOKE_ASSETS+set}" ]; then
   assets="$UNYT_SMOKE_ASSETS"
+elif [ -n "${UNYT_SMOKE_FROM:-}" ]; then
+  assets="$(ls -A "$UNYT_SMOKE_FROM" 2>/dev/null)" || assets=""
+  [ -n "$assets" ] || {
+    echo "::error::no installers came from the calling run's draft-installers artifact: it is empty, or it expired. Re-run that job, which runs the smoke again." >&2
+    exit 1
+  }
 else
   command -v gh >/dev/null || { echo "::error::gh CLI not found" >&2; exit 1; }
   if [[ "$REF" =~ ^[0-9]+$ ]]; then
@@ -63,7 +70,7 @@ else
     release_id="$(gh api "repos/$REPO/releases?per_page=100" --paginate \
       --jq "[.[] | select(.tag_name == \"$REF\") | .id] | first // empty")"
     if [ -z "$release_id" ]; then
-      echo "::error::no release tagged '$REF' in $REPO (drafts included — check the token's access)" >&2
+      echo "::error::no published release tagged '$REF' in $REPO: a draft is smoked by the run that made it" >&2
       exit 1
     fi
   fi
