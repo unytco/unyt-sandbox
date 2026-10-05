@@ -3,8 +3,9 @@
 # SHA256SUMS read, each copied, with its build signature where it has one, into <out-dir> under its
 # asset name:
 #   updater-provenance.sh <tauri config> <arc factor> <build args> <artifact paths> <out-dir>
-# <tauri config> is the configuration the job built, as `release-app.sh identity` merges it. <build
-# args> are the job's tauri-action args and <artifact paths> its artifactPaths output.
+# <tauri config> is the app's Tauri configuration with identity.json merged over it, as `release-app.sh
+# identity` writes it. <build args> are the job's tauri-action args and <artifact paths> its
+# artifactPaths output.
 # Env: RUNNER_OS and RUNNER_ARCH. Needs jq.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

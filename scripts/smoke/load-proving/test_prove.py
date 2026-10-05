@@ -880,9 +880,10 @@ class TheLogOracle(unittest.TestCase):
                 self.assertTrue(prove.shell_value(name))
 
     def test_the_bundle_id_is_the_one_the_release_builds(self):
+        identity = Path(__file__).resolve().parents[3] / "identity.json"
         with mock.patch.dict(os.environ, {"UNYT_BUNDLE_ID": ""}):
             self.assertEqual(
-                json.loads(prove.IDENTITY.read_text(encoding="utf-8"))["identifier"],
+                json.loads(identity.read_text(encoding="utf-8"))["identifier"],
                 prove.bundle_id(),
             )
 
@@ -1141,6 +1142,24 @@ class EveryWayOutSaysSomething(unittest.TestCase):
     def test_a_lane_nobody_named_is_a_usage_error(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(2, prove.main(["solaris", "artifact", self.dir]))
+
+
+class TheLinuxLog(Quiet):
+    """The Linux lane reads the app's log under the identifier it was given."""
+
+    def test_the_log_is_read_under_the_bundle_id(self):
+        with mock.patch.dict(os.environ, {"UNYT_BUNDLE_ID": "co.example.lane"}):
+            lane = prove.LinuxLane(str(Path(self.dir) / "unyt.deb"), self.dir)
+        self.addCleanup(shutil.rmtree, lane.work, True)
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        lane.sandbox = Path(self.dir)
+        lane.stdout_log = lane.sandbox / "app-stdout.log"
+        logs = lane.sandbox / "data" / "co.example.lane" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "unyt.v1.2.log.2026-10-05").write_text(
+            "Status update: Starting", encoding="utf-8"
+        )
+        self.assertIn("Status update: Starting", lane.logs())
 
 
 class TheLinuxWindowSearch(Quiet):

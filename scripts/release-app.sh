@@ -4,6 +4,7 @@
 #                                                   identity.json merged over it, as
 #                                                   `tauri build --config` merges it
 #   release-app.sh build-env                        the values its build reads, as $GITHUB_ENV lines
+#   release-app.sh reads <app-dir>                  fails unless <app-dir> reads each of those values
 #   release-app.sh notes                            its network, as release notes
 # Each refuses a file that is malformed. build-env and notes also refuse a value the files have not set
 # yet. Env: GITHUB_REPOSITORY, the repo the app updates from (build-env).
@@ -23,8 +24,9 @@ merge='def merge_patch($patch):
     reduce ($patch | to_entries[]) as $e (if type == "object" then . else {} end;
       if $e.value == null then del(.[$e.key]) else .[$e.key] |= merge_patch($e.value) end)
   else $patch end;'
-url_re='^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[!-~]*)?$'
-origin_re='^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$'
+origin='https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}(:[1-9][0-9]{0,4})?'
+url_re="^$origin(/[!-~]*)?\$"
+origin_re="^$origin/?\$"
 values='["UNYT_JOINING_SERVICE_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL"]'
 
 problems=()
@@ -40,6 +42,12 @@ controls() { # <file>: queues each string in it that holds a control character
     jq -r 'paths(type == "string" and (explode | any(. < 32 or . == 127))) | map(tostring) | join(".")' "$1")
 }
 
+formed() { # <jq path> <regex> <what it is not>: queues identity.json's value at the path unless it matches
+  local value
+  value="$(jq -r "$1 | strings" "$IDENTITY")"
+  [[ "$value" == "TO BE SET"* || "$value" =~ $2 ]] || problems+=("identity.json has $1 '$value', which is no $3")
+}
+
 check_identity() {
   local field
   controls "$IDENTITY"
@@ -47,6 +55,13 @@ check_identity() {
     jq -e "$field | type == \"string\" and length > 0" "$IDENTITY" >/dev/null ||
       problems+=("identity.json names no $field")
   done
+  formed .identifier '^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$' "reverse domain name"
+  # The characters a release asset name keeps, or release_product renames.
+  formed .productName '^[A-Za-z0-9][]A-Za-z0-9 ._()[{}-]*$' "name this release can publish assets under"
+  formed .mainBinaryName '^[A-Za-z0-9][A-Za-z0-9._-]*$' "file name"
+  formed '.plugins["deep-link"].desktop.schemes[0]' '^[a-z][a-z0-9+.-]*$' "URI scheme"
+  jq -e '.plugins["deep-link"] | .desktop.schemes == .mobile[0].scheme' "$IDENTITY" >/dev/null ||
+    problems+=("identity.json names another mobile deep-link scheme than its desktop one")
   jq -e '.plugins["deep-link"].desktop.schemes | type == "array" and length == 1 and (.[0] | type == "string")' \
     "$IDENTITY" >/dev/null || problems+=("identity.json names no one desktop deep-link scheme")
   jq -e '.plugins["deep-link"].mobile | type == "array" and length == 1
@@ -69,7 +84,7 @@ check_network() {
     [[ "$value" != "TO BE SET"* ]] || continue
     case "$name $value" in
       VITE_ETH_NETWORK\ sepolia | VITE_ETH_NETWORK\ mainnet) continue ;;
-      VITE_HOT_LOCK_VAULT\ *) [[ "$value" =~ ^0x[0-9a-f]{40}$ ]] && continue ;;
+      VITE_HOT_LOCK_VAULT\ *) [[ "$value" =~ ^0x[0-9a-f]{40}$ && "$value" =~ [1-9a-f] ]] && continue ;;
       VITE_HOT_BRIDGE_URL\ *) [[ "$value" =~ $origin_re ]] && continue ;;
       UNYT_JOINING_SERVICE_URL\ * | VITE_MIGRATION_SERVICE_URL\ *) [[ "$value" =~ $url_re ]] && continue ;;
     esac
@@ -78,7 +93,11 @@ check_network() {
 }
 
 checked() { # the files are well formed
+  local file
   [ -f "$IDENTITY" ] && [ -f "$NETWORK" ] || fail "this repo has no identity.json and network.json at its root"
+  for file in "$IDENTITY" "$NETWORK"; do
+    [ "$(jq -s length "$file")" = 1 ] || fail "$(basename "$file") is not one JSON document"
+  done
   check_identity
   check_network
   report
@@ -102,12 +121,6 @@ case "${1:-}" in
     checked
     [ -f "$APP/src-tauri/tauri.conf.json" ] || fail "no $APP/src-tauri/tauri.conf.json: is the app checked out?"
     jq "$merge"' merge_patch($identity[0])' --slurpfile identity "$IDENTITY" "$APP/src-tauri/tauri.conf.json" >"$OUT"
-    for path in .identifier .productName .mainBinaryName '.plugins["deep-link"].desktop.schemes' \
-      '.plugins["deep-link"].mobile' .plugins.updater.pubkey; do
-      [ "$(jq -c "$path" "$OUT")" = "$(jq -c "$path" "$IDENTITY")" ] ||
-        problems+=("$path is $(jq -c "$path" "$OUT") in the merged Tauri configuration, but identity.json has $(jq -c "$path" "$IDENTITY")")
-    done
-    report
     ;;
   build-env)
     REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name the repo the app updates from}"
@@ -118,6 +131,18 @@ case "${1:-}" in
     jq -r '.build | to_entries[] | "\(.key)=\(.value)"' "$NETWORK"
     echo "UNYT_RELEASE_REPO=$REPO"
     ;;
+  reads)
+    APP="${2:?usage: release-app.sh reads <app-dir>}"
+    checked
+    unread=""
+    # A name the app's Rust and UI source never mention is a value its build never reads. A mention does
+    # not prove it is read.
+    for name in $(jq -r '.build | keys[]' "$NETWORK") UNYT_RELEASE_REPO; do
+      grep -rqwF "$name" "$APP"/src-tauri/build.rs "$APP"/src-tauri/build "$APP"/src-tauri/src \
+        "$APP"/ui/*/vite.config.* "$APP"/ui/*/src 2>/dev/null || unread="${unread:+$unread, }$name"
+    done
+    [ -z "$unread" ] || fail "the app in $APP reads no $unread, so its build would not take this release's value"
+    ;;
   notes)
     checked
     set_values
@@ -126,5 +151,5 @@ case "${1:-}" in
     echo
     jq -r '.build | to_entries[] | "- `\(.key)`: \(.value)"' "$NETWORK"
     ;;
-  *) fail "usage: release-app.sh identity <app-dir> <merged-out> | build-env | notes" ;;
+  *) fail "usage: release-app.sh identity <app-dir> <merged-out> | build-env | reads <app-dir> | notes" ;;
 esac

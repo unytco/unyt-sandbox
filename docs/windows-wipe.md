@@ -2,7 +2,7 @@
 
 Identifier: `co.unyt.unyt-app` · Product: `Unyt` · Version segment: the major.minor of `CARGO_PKG_VERSION`, shown below as `<major.minor>` (for example `0.109`).
 
-Those are Unyt 0.109's. A later release installs the app that `identity.json` names, such as Unyt Sandbox, `co.unyt.unyt.sandbox`. Put its `identifier` and `productName` in place of those below.
+Those are Unyt 0.109's, whose binary is `unyt-app.exe`. A later release installs the app that `identity.json` names, such as Unyt Sandbox: `co.unyt.unyt.sandbox`, binary `unyt-sandbox.exe`. Put its `identifier`, `productName` and `mainBinaryName` in place of those below.
 
 ## Where data lives on Windows
 

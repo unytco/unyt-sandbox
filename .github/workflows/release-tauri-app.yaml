@@ -1,6 +1,4 @@
 name: "release-tauri-app"
-# A pushed tag v<version> releases the pinned app at that version, as identity.json names it and built
-# for network.json, into this repo's releases.
 on:
   push:
     tags:
@@ -58,6 +56,7 @@ jobs:
           bash scripts/set-app-version.sh "$TAG"
           bash scripts/release-app.sh identity unyt tauri.merged.json
           bash scripts/release-app.sh build-env >>"$GITHUB_ENV"
+          bash scripts/release-app.sh reads unyt
 
       - name: The release and the app's CI pin the same Rust
         run: bash scripts/check-rust-toolchain.sh unyt/.github/workflows/rust.yaml "$RUST_TOOLCHAIN"
@@ -72,7 +71,7 @@ jobs:
           name: holochain-ci
           extraPullNames: darksoil-studio
 
-      - name: Assert version contract (tag == src-tauri Cargo.toml == tauri.conf.json == Cargo.lock)
+      - name: The app carries the tag's version in Cargo.toml, Cargo.lock and tauri.conf.json
         id: version
         env:
           TAG: ${{ github.ref_name }}
@@ -153,6 +152,8 @@ jobs:
             p && /^## \[/ {exit}
             p {print}
           ' unyt/CHANGELOG.md > release_notes.txt
+          [ -s release_notes.txt ] ||
+            echo "::warning::unyt/CHANGELOG.md has no section [$APP_VERSION], so the release notes name only the network"
 
       - name: Note the network in the release notes
         run: |
@@ -229,7 +230,6 @@ jobs:
             happ/alliance.dna
             happ/unyt_cli
           bodyFile: happ/release_notes.txt
-          # The pushed tag, not APP_VERSION: a -dev.* must not ship as stable.
           name: ${{ needs.build-happ.outputs.productName }} ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: true
@@ -371,14 +371,6 @@ jobs:
         run: |
           cp "$RUNNER_TEMP/happ/unyt.happ" unyt/workdir/
           bash scripts/check-sha256.sh unyt/workdir/unyt.happ "$HAPP_SHA256"
-
-      - name: Assert migration-service URL is set (no silently un-updatable build)
-        shell: bash
-        run: |
-          [ -n "$VITE_MIGRATION_SERVICE_URL" ] || {
-            echo "::error::VITE_MIGRATION_SERVICE_URL is empty — a shipped build without it can never check for updates (both channels short-circuit to 'unreachable')."
-            exit 1
-          }
 
       - name: Pin the MSI product version
         # Written here, never committed: a wix.version in tauri.conf.json would

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # UI release: inherit the lineage's unyt.happ + alliance.dna + unyt_cli byte-for-byte from the parent
 # vM.m.0 release, guard the inheritance, and repack ONLY the UI into unyt.webhapp. The DNA is NEVER
-# rebuilt or repacked — that is the whole point of a UI release (one lineage, one DNA, one app_id).
+# rebuilt or repacked: that is the whole point of a UI release (one lineage, one DNA, one app_id).
 #
 # unyt_cli is inherited for the same reason, not rebuilt: it compiles the rave_engine payload types
 # and the smart_agreement_library templates INTO the binary, so a CLI and a happ only agree when they
@@ -20,40 +20,40 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name the repo the parent release is on}"
 fail() { echo "inherit: $*" >&2; exit 1; }
 
-PIN="$ROOT/lineage.json"
-[ -f "$PIN" ] || fail "missing lineage.json"
+PIN="$ROOT/lineage/$REPO.json"
+[ -f "$PIN" ] || fail "missing lineage/$REPO.json"
 expected_sha="$(jq -r '.happ_sha256' "$PIN")"
 { [ -n "$expected_sha" ] && [ "$expected_sha" != "null" ]; } ||
-  fail "lineage.json has no happ_sha256 — prepare the pin from the published $PARENT_TAG asset first"
+  fail "lineage/$REPO.json has no happ_sha256: prepare the pin from the published $PARENT_TAG asset first"
 expected_dna_sha="$(jq -r '.dna_sha256' "$PIN")"
 { [ -n "$expected_dna_sha" ] && [ "$expected_dna_sha" != "null" ]; } ||
-  fail "lineage.json has no dna_sha256: prepare the pin from the published $PARENT_TAG asset first"
+  fail "lineage/$REPO.json has no dna_sha256: prepare the pin from the published $PARENT_TAG asset first"
 expected_cli_sha="$(jq -r '.cli_sha256' "$PIN")"
 { [ -n "$expected_cli_sha" ] && [ "$expected_cli_sha" != "null" ]; } ||
-  fail "lineage.json has no cli_sha256 — prepare the pin from the published $PARENT_TAG asset first"
+  fail "lineage/$REPO.json has no cli_sha256: prepare the pin from the published $PARENT_TAG asset first"
 
 # 1. Inherit the lineage artifacts from the parent release. A missing parent, or a parent without one
-#    of these assets, fails here — there is no fallback to rebuilding the DNA.
+#    of these assets, fails here: there is no fallback to rebuilding the DNA.
 tmp="$(mktemp -d)"
 gh release download "$PARENT_TAG" --repo "$REPO" --dir "$tmp" --pattern unyt.happ --pattern alliance.dna --pattern unyt_cli ||
   fail "could not download unyt.happ / alliance.dna / unyt_cli from parent release $PARENT_TAG, which must be published (a UI release never rebuilds the DNA)"
 [ -f "$tmp/unyt.happ" ] || fail "parent release $PARENT_TAG has no unyt.happ asset"
 # `gh release download` succeeds if only ONE --pattern matches, so check each of the others
-# explicitly — a UI release must republish them byte-identical, and both are declared artifacts.
+# explicitly: a UI release must republish them byte-identical, and both are declared artifacts.
 [ -f "$tmp/alliance.dna" ] || fail "parent release $PARENT_TAG has no alliance.dna asset"
 [ -f "$tmp/unyt_cli" ] || fail "parent release $PARENT_TAG has no unyt_cli asset"
 
-# 2. Digest guard — release assets are mutable (allowUpdates), so the trusted digest is the committed
+# 2. Digest guard: release assets are mutable (allowUpdates), so the trusted digest is the committed
 #    one. A mismatch means a mutated or wrong-tag asset.
 got_sha="$(sha256sum "$tmp/unyt.happ" | awk '{print $1}')"
 [ "$got_sha" = "$expected_sha" ] ||
-  fail "inherited unyt.happ sha256 $got_sha != committed lineage.json $expected_sha (mutated or wrong-tag release asset)"
+  fail "inherited unyt.happ sha256 $got_sha != committed lineage/$REPO.json $expected_sha (mutated or wrong-tag release asset)"
 got_dna_sha="$(sha256sum "$tmp/alliance.dna" | awk '{print $1}')"
 [ "$got_dna_sha" = "$expected_dna_sha" ] ||
-  fail "inherited alliance.dna sha256 $got_dna_sha != committed lineage.json $expected_dna_sha (mutated or wrong-tag release asset)"
+  fail "inherited alliance.dna sha256 $got_dna_sha != committed lineage/$REPO.json $expected_dna_sha (mutated or wrong-tag release asset)"
 got_cli_sha="$(sha256sum "$tmp/unyt_cli" | awk '{print $1}')"
 [ "$got_cli_sha" = "$expected_cli_sha" ] ||
-  fail "inherited unyt_cli sha256 $got_cli_sha != committed lineage.json $expected_cli_sha (mutated or wrong-tag release asset)"
+  fail "inherited unyt_cli sha256 $got_cli_sha != committed lineage/$REPO.json $expected_cli_sha (mutated or wrong-tag release asset)"
 
 # No DNA-source-diff check: the digest guard above already pins the shipped unyt.happ to the parent
 # vM.m.0's exact bytes, so a UI release can never ship a different DNA. A UI patch may deliberately
@@ -78,4 +78,4 @@ chmod 755 "$ROOT/unyt/target/release/unyt_cli"
 ( cd "$ROOT/unyt" && nix develop --no-update-lock-file --accept-flake-config --command bash -c \
   "yarn install --frozen-lockfile --ignore-engines && yarn workspace white-label package && hc web-app pack workdir" )
 
-echo "inherit: UI release $TAG built on inherited $PARENT_TAG DNA (unyt.happ sha256 $got_sha, unyt_cli sha256 $got_cli_sha) — DNA not rebuilt."
+echo "inherit: UI release $TAG built on inherited $PARENT_TAG DNA (unyt.happ sha256 $got_sha, unyt_cli sha256 $got_cli_sha), DNA not rebuilt."

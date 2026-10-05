@@ -77,8 +77,8 @@ def shell_value(name, path=SMOKE_COMMON):
 
 
 def bundle_id(path=IDENTITY):
-    """The identifier Tauri keys the app's log directory on: UNYT_BUNDLE_ID, or
-    the one identity.json gives the release."""
+    """The app's identifier, which Tauri keys its data and log directories on:
+    UNYT_BUNDLE_ID, or identity.json's."""
     if os.environ.get("UNYT_BUNDLE_ID"):
         return os.environ["UNYT_BUNDLE_ID"]
     try:

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Writes the version a release tag names into the app checked out at unyt/, wherever its build reads it:
+# Writes the version a release tag names into the app checked out at unyt/: src-tauri/tauri.conf.json,
+# src-tauri/Cargo.toml's [package] version, and that package's entry in the workspace Cargo.lock, so a
+# --locked build takes it unchanged:
 #   set-app-version.sh <release tag>      e.g. v0.110.0 or v0.110.0-dev.1
-# src-tauri/tauri.conf.json, src-tauri/Cargo.toml's [package] version, and that package's entry in the
-# workspace Cargo.lock, so a --locked build takes it unchanged. The workspace version is left alone: the
-# zomes take theirs from it, and their wasm would change with it.
+# The workspace version is left alone: the zomes and unyt_cli take theirs from it, and the zomes' wasm
+# would change with it.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh

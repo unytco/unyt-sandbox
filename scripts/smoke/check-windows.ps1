@@ -18,7 +18,7 @@
   msedgedriver: a driver asserts what the DOM contains, which is the app's own
   test suite's job.
 
-  DO NOT try to capture the app's stdout — release builds set
+  DO NOT try to capture the app's stdout: release builds set
   windows_subsystem = "windows", so there is no console. Read the log under
   %LOCALAPPDATA%\<the identifier in identity.json>\logs.
 

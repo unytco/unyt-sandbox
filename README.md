@@ -41,7 +41,7 @@ unyt_<version>_Unyt.Sandbox_<variant>_<architecture>_<platform><extension>
 | `<platform>` | `darwin` for macOS, `linux`, `windows` |
 | `<extension>` | macOS `.dmg`, Linux `.deb` or `.AppImage`, Windows `.exe` (setup) or `.msi` |
 
-A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. When the pinned app declares an updater, a release also carries `.sig` signatures and the `updater-default-arc.json` and `updater-zero-arc.json` manifests, which the app's Update now reads, and a `SHA256SUMS` file with the checksum of every installer, of the Holochain files and of `unyt_cli`. `SHA256SUMS.minisig` is its signature by the key the app's updates are signed with. Installing Unyt Sandbox needs none of them.
+A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. It also carries `.sig` signatures, the `updater-default-arc.json` and `updater-zero-arc.json` manifests the app's Update reads, and a `SHA256SUMS` file with the checksum of every installer, of the Holochain files and of `unyt_cli`. `SHA256SUMS.minisig` is its signature by the key the app's updates are signed with. Installing Unyt Sandbox needs none of them.
 
 To check a download, put it in one folder with `SHA256SUMS` and `SHA256SUMS.minisig`, and run [minisign](https://jedisct1.github.io/minisign/) and then `sha256sum` there:
 
@@ -76,7 +76,7 @@ Note: In Mac, because you downloaded the software directly and not through Apple
 
 To reset completely and start over with a new account: uninstall the app, delete local data (`~/Library/Application Support/co.unyt.unyt.sandbox` on macOS), and reinstall. You'll get a new key pair and a fresh identity.
 
-When you open Unyt on your operating system for the first time, it will create a set of public and private keys for you that you can use to interact with others. These are stored in a private keystore (Lair) on your own machine and are used during future uses. In Unyt we often refer to this public key as "your address" as it is how others can refer to you when sending, receiving or authorizing you to perform particular roles.
+When you open Unyt Sandbox on your operating system for the first time, it will create a set of public and private keys for you that you can use to interact with others. These are stored in a private keystore (Lair) on your own machine and are used during future uses. In Unyt we often refer to this public key as "your address" as it is how others can refer to you when sending, receiving or authorizing you to perform particular roles.
 
 ## Past Releases
 
