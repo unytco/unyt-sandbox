@@ -522,6 +522,8 @@ check "no build value comes from anywhere but network.json" \
   [.. | objects | select(has("env")) | .env | keys[] | select(IN($names[]))] | length == 0'
 check "the release takes no input, so a run builds nothing but what the tag's commit holds" \
   wired '[.. | strings | select(test("inputs\\."))] | length == 0'
+check "the release says so when the app's changelog has nothing for the tag" wired '
+  any(.jobs["build-happ"].steps[]; .run // "" | test("\\[ -s release_notes.txt \\] \\|\\|\n *echo \"::warning::"))'
 check "the release notes name the network" wired '
   any(.jobs["build-happ"].steps[]; .run == "bash scripts/release-app.sh notes >> release_notes.txt\ncat release_notes.txt\n")'
 check "every step that names the release names the pushed tag" wired '
