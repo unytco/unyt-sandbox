@@ -3,9 +3,9 @@
 #
 # The app's src-tauri package version is the SOURCE OF TRUTH: it becomes CARGO_PKG_VERSION →
 # get_version() → app_id and the fallback network seed, i.e. the string that decides which chains
-# a binary reattaches to. A pushed tag or a tauri.conf.json that disagrees with it must fail the
+# a binary reattaches to. A release tag or a tauri.conf.json that disagrees with it must fail the
 # release before any artifact is built, so the tag-derived release kind (release-patterns spec) is
-# trustworthy.
+# trustworthy. The release derives its tag from tauri.conf.json.
 #
 # Usage:  check-version-contract.sh <git-tag>      e.g.  v0.93.0   or   v0.93.1-dev.2
 # Exit 0 + echo the canonical version (e.g. "0.93.0", "0.101.0-dev.0") on agreement; non-zero + a

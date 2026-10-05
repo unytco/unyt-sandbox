@@ -23,8 +23,8 @@ bound() {
 }
 
 derive() {
-  # The tag trigger is a glob and admits any `-dev.*`, so this is where a tag the
-  # pipeline cannot carry is turned away. No leading zeros: the msi would keep
+  # The release takes whatever version the pinned app carries, so this is where one
+  # the pipeline cannot carry is turned away. No leading zeros: the msi would keep
   # them in its product version.
   local n='(0|[1-9][0-9]*)'
   [[ "$1" =~ ^$n\.$n\.$n(-dev\.$n)?$ ]] ||
