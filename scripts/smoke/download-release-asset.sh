@@ -5,16 +5,30 @@
 #   e.g. download-release-asset.sh 368727714 _default-arc_amd64_linux.deb ./out
 #        download-release-asset.sh v0.100.0   _default-arc_amd64_linux.deb ./out
 #
-# Everything goes through the REST API by release ID rather than
-# `gh release download <tag>`, because the release workflow publishes as a DRAFT
-# and drafts are invisible to the tag-based command. Env: GH_TOKEN (a PAT with
-# repo scope — GIT_PAT in CI), UNYT_SMOKE_REPO (default unytco/unyt-sandbox).
+# Env: GH_TOKEN, UNYT_SMOKE_REPO (default unytco/unyt-sandbox). A draft release
+# is readable only with a token that can write, which no smoke job holds, so
+# UNYT_SMOKE_FROM names a directory to take the asset from instead: the release
+# run's own builds, as download-artifact left them.
 set -euo pipefail
 
 REF="${1:?usage: download-release-asset.sh <release-id-or-tag> <asset-suffix> <out-dir>}"
 SUFFIX="${2:?asset name suffix required (e.g. _default-arc_amd64_linux.deb)}"
 OUT_DIR="${3:?output directory required}"
 REPO="${UNYT_SMOKE_REPO:-${GITHUB_REPOSITORY:-unytco/unyt-sandbox}}"
+
+if [ -n "${UNYT_SMOKE_FROM:-}" ]; then
+  shopt -s nullglob
+  found=("$UNYT_SMOKE_FROM"/*"$SUFFIX")
+  if [ "${#found[@]}" != 1 ]; then
+    echo "::error::${#found[@]} of the builds in $UNYT_SMOKE_FROM end in '$SUFFIX'. Builds present:" >&2
+    ls "$UNYT_SMOKE_FROM" >&2 || true
+    exit 1
+  fi
+  mkdir -p "$OUT_DIR"
+  cp "${found[0]}" "$OUT_DIR/"
+  echo "$OUT_DIR/$(basename "${found[0]}")"
+  exit 0
+fi
 
 command -v gh >/dev/null || { echo "::error::gh CLI not found" >&2; exit 1; }
 
@@ -25,7 +39,7 @@ else
   release_id="$(gh api "repos/$REPO/releases?per_page=100" --paginate \
     --jq "[.[] | select(.tag_name == \"$REF\") | .id] | first // empty")"
   if [ -z "$release_id" ]; then
-    echo "::error::no release tagged '$REF' in $REPO (drafts included — check the token's access)" >&2
+    echo "::error::no published release tagged '$REF' in $REPO: a draft is smoked by the run that made it" >&2
     exit 1
   fi
 fi

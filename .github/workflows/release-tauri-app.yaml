@@ -29,6 +29,7 @@ jobs:
       updaterPubkey: ${{ steps.updater.outputs.pubkey }}
       startedAt: ${{ steps.start.outputs.at }}
       happSha256: ${{ steps.happ.outputs.sha256 }}
+      stage1Sums: ${{ steps.gather.outputs.sums }}
     steps:
       - name: Note when this run started
         id: start
@@ -115,6 +116,13 @@ jobs:
         run: |
           cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash -c "make package"
 
+      - name: The DNA has the hashes the pinned app commits
+        if: steps.kind.outputs.kind == 'migration'
+        run: |
+          [ -f unyt/scripts/check-dna-hashes.sh ] ||
+            { echo "::error::the pinned app commits no DNA hashes to hold this build to"; exit 1; }
+          cd unyt && nix develop --no-update-lock-file --accept-flake-config --command bash scripts/check-dna-hashes.sh
+
       - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
@@ -154,10 +162,17 @@ jobs:
           echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
 
       - name: Gather what the release carries from this stage
+        id: gather
         run: |
           mkdir happ
           cp unyt/workdir/unyt.happ unyt/workdir/unyt.webhapp unyt/dnas/alliance/workdir/alliance.dna \
-            unyt/target/release/unyt_cli release_notes.txt happ/
+            unyt/target/release/unyt_cli happ/
+          {
+            echo 'sums<<EOF'
+            (cd happ && sha256sum -- *)
+            echo EOF
+          } >>"$GITHUB_OUTPUT"
+          cp release_notes.txt happ/
 
       # Public, as every artifact of a public repository is, so kept a day rather than ninety.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -503,17 +518,21 @@ jobs:
           pattern: updater-provenance-*
           path: provenance
 
-      - name: Sign them under their asset names
+      # SHA256SUMS comes from the build records, not the release, so it names the bytes each build made.
+      - name: Sign them under their asset names, and SHA256SUMS
         env:
           APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
           STARTED_AT: ${{ needs.build-happ.outputs.startedAt }}
+          PUBKEY: ${{ needs.build-happ.outputs.updaterPubkey }}
+          STAGE1_SUMS: ${{ needs.build-happ.outputs.stage1Sums }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           find provenance -type f -name '*.sha256' -exec cat {} + >updater-provenance.sha256
           bash scripts/updater-sign.sh "$APP_VERSION" assets "$STARTED_AT" updater-provenance.sha256
+          mkdir sums
+          bash scripts/release-sums.sh "$APP_VERSION" "$PUBKEY" updater-provenance.sha256 "$STAGE1_SUMS" sums
 
-      # SHA256SUMS comes from the build records, not the release, so it names the bytes each build made.
       - name: Publish them with one manifest per arc factor, and SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
@@ -523,8 +542,7 @@ jobs:
         run: |
           mkdir manifests
           bash scripts/updater-manifests.sh "$TAG" "$APP_VERSION" "$PUBKEY" assets manifests
-          sort -k2,2 updater-provenance.sha256 >manifests/SHA256SUMS
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.sig manifests/*
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.sig manifests/* sums/*
 
   # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
   # human publishes it, so the run's colour is what tells them. Phase 2 keeps the
@@ -539,17 +557,18 @@ jobs:
     # After the signing, and never after it failed: the smoke runs the release's installers, which could
     # replace the build records the signing trusts. A release whose signing failed is re-tagged, not
     # re-run.
-    needs: [publish-happ, publish-builds, updater-manifests]
+    needs: [publish-builds, updater-manifests]
     # Not gated on the build job: one failed row would suppress every lane. Where the release signs its
     # updates, a failed row fails the signing and so skips the smoke.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
-    if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result != 'failure' }}
+    if: ${{ !cancelled() && needs.publish-builds.result == 'success' && needs.updater-manifests.result != 'failure' }}
     uses: ./.github/workflows/release-smoke.yaml
+    permissions:
+      contents: read
     with:
-      release: ${{ needs.publish-happ.outputs.releaseId }}
+      release: ${{ github.ref_name }}
+      # The builds publish-builds put on the draft, which only a token that can write reads.
+      installers: release-assets-*
       # Only here, and only over phase 2: a hand-dispatched release-smoke must
       # answer red for everything, and no switch may soften phase 1.
       static-checks-advisory: true
-    # Explicit, not inherit: the caller holds Apple signing credentials.
-    secrets:
-      GIT_PAT: ${{ secrets.GIT_PAT }}

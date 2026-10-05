@@ -30,16 +30,24 @@ name: "release-smoke"
 # load-proving/prove.py <linux|macos|windows> <artifact> <shots> for phase 1.
 # Not job-level `container:`: GitHub injects tooling and the image is no longer
 # pristine. run-smoke.sh `docker exec`s into a detached one instead.
+#
+# No job here holds a token that can write: each runs a built installer.
+# check-build-credentials.sh fails a release where one does.
 on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Release id (e.g. 368727714) or tag (e.g. v0.100.0)"
+        description: "Tag (e.g. v0.100.0) or id of a published release"
         required: true
         type: string
   workflow_call:
     inputs:
       release:
+        required: true
+        type: string
+      # The pattern of the calling run's artifacts that hold its installers: its
+      # draft release is readable only with a token that can write.
+      installers:
         required: true
         type: string
       static-checks-advisory:
@@ -51,11 +59,6 @@ on:
         required: false
         default: false
         type: boolean
-    # Explicit, never inherit: the caller holds Apple signing credentials.
-    secrets:
-      GIT_PAT:
-        # No degraded mode: drafts are invisible, so no token reads as no asset.
-        required: true
 
 # Computed once: telling a hand-dispatched run it is advisory would be a lie.
 env:
@@ -63,6 +66,9 @@ env:
     ${{ inputs.static-checks-advisory == true
     && 'Phase 2 is advisory here: nothing `needs` this job and the caller runs the static phase advisory, so a failure neither blocks a release nor fails the calling run — read this table, not the run''s colour. Phase 1 (does it open) is not advisory: a failed phase-1 lane does fail the calling run.'
     || 'Nothing `needs` this job, so a failure here blocks no release — but it does fail THIS run, which is what a hand-dispatched smoke is for.' }}
+  # Where the calling run's installers are downloaded to. Empty on a hand-run
+  # smoke, which reads a published release.
+  UNYT_SMOKE_FROM: ${{ inputs.installers && 'run-installers' || '' }}
 
 jobs:
   # BOTH PHASES GATE ON THIS: the release's asset list, the distro matrix, and
@@ -86,7 +92,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -96,11 +101,19 @@ jobs:
         run: bash scripts/smoke/test-oracle.sh
 
       # !cancelled() below: a red oracle must not delete the lanes it guards.
+      - name: Take the installers the release run built
+        if: ${{ !cancelled() && env.UNYT_SMOKE_FROM != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.installers }}
+          merge-multiple: true
+          path: ${{ env.UNYT_SMOKE_FROM }}
+
       - name: Which installers does this release actually carry?
         id: assets
         if: ${{ !cancelled() }}
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
         run: bash scripts/smoke/release-inventory.sh "$RELEASE" >> "$GITHUB_OUTPUT"
 
@@ -164,7 +177,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -184,9 +196,17 @@ jobs:
       - name: Can the verdicts still fail?
         run: python3 -m unittest discover -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
+      - name: Take the installers the release run built
+        if: env.UNYT_SMOKE_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.installers }}
+          merge-multiple: true
+          path: ${{ env.UNYT_SMOKE_FROM }}
+
       - name: Download the released artifact
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
           SUFFIX: ${{ matrix.suffix }}
         run: |
@@ -244,7 +264,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -257,9 +276,17 @@ jobs:
           python3 -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
           python3 -m unittest discover -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
+      - name: Take the installers the release run built
+        if: env.UNYT_SMOKE_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.installers }}
+          merge-multiple: true
+          path: ${{ env.UNYT_SMOKE_FROM }}
+
       - name: Download the released artifact
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
           SUFFIX: ${{ matrix.asset }}
         run: |
@@ -315,7 +342,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -329,10 +355,18 @@ jobs:
           python -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
           python -m unittest discover -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
+      - name: Take the installers the release run built
+        if: env.UNYT_SMOKE_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.installers }}
+          merge-multiple: true
+          path: ${{ env.UNYT_SMOKE_FROM }}
+
       - name: Download the released installer
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
           SUFFIX: ${{ matrix.suffix }}
         run: |
@@ -406,7 +440,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -418,6 +451,14 @@ jobs:
           echo "UNYT_SMOKE_STATE=$RUNNER_TEMP/smoke-state" >> "$GITHUB_ENV"
           echo "UNYT_SMOKE_LOG=$RUNNER_TEMP/smoke.log" >> "$GITHUB_ENV"
 
+      - name: Take the installers the release run built
+        if: env.UNYT_SMOKE_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.installers }}
+          merge-multiple: true
+          path: ${{ env.UNYT_SMOKE_FROM }}
+
       # One step each so a failed fetch doesn't take the other lane's checks.
       # Gated on `steps.<id>.outcome`, not `env.DEB != ''`: GitHub coerces to
       # numbers and a path casts to NaN.
@@ -425,7 +466,7 @@ jobs:
         id: download-deb
         if: ${{ env.EXPECT_DEB == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
         run: |
           deb="$(bash scripts/smoke/download-release-asset.sh \
@@ -436,7 +477,7 @@ jobs:
         id: download-appimage
         if: ${{ !cancelled() && env.EXPECT_APPIMAGE == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
         run: |
           appimage="$(bash scripts/smoke/download-release-asset.sh \
@@ -566,7 +607,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -592,10 +632,18 @@ jobs:
             exit 1
           }
 
+      - name: Take the installers the release run built
+        if: env.UNYT_SMOKE_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.installers }}
+          merge-multiple: true
+          path: ${{ env.UNYT_SMOKE_FROM }}
+
       - name: Download the released macOS artifact
         id: download
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
           ASSET: ${{ matrix.asset }}
         run: |
@@ -724,7 +772,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -750,13 +797,21 @@ jobs:
             exit 1
           }
 
+      - name: Take the installers the release run built
+        if: env.UNYT_SMOKE_FROM != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.installers }}
+          merge-multiple: true
+          path: ${{ env.UNYT_SMOKE_FROM }}
+
       # One step per installer, each gated on its own download — as on Linux.
       - name: Download the released NSIS installer
         id: download-exe
         if: ${{ env.EXPECT_EXE == 'true' }}
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
         run: |
           # Git Bash: `mkdir -p 'D:\a\_temp/x'` makes ONE dir with backslashes.
@@ -770,7 +825,7 @@ jobs:
         if: ${{ !cancelled() && env.EXPECT_MSI == 'true' }}
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GIT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
         run: |
           out="${RUNNER_TEMP//\\//}/artifacts"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # updater-signing.sh, updater-asset-names.sh, updater-provenance.sh, updater-sign.sh,
-# updater-manifests.sh and check-sha256.sh against fixtures signed with throwaway keys, and
+# updater-manifests.sh, release-sums.sh and check-sha256.sh against fixtures signed with throwaway keys, and
 # check-build-credentials.sh against the workflows. Needs minisign on PATH (install-minisign.sh), node for
 # the Tauri signer, and mikefarah's yq v4.
 set -euo pipefail
@@ -405,13 +405,6 @@ check "rows that staged nothing fail" refuses "no build row staged anything" gat
 staged_rows renamed-rows 0/unyt_1.2.3_Unyt.Sandbox._default-arc_amd64_linux.deb
 check "a product name GitHub renames is gathered as the release names it" \
   gathered "Unyt (Sandbox)" "$tmp/renamed-rows"
-# The release's SHA256SUMS, as the updater-manifests job writes it.
-sums_check_every_installer() { # <asset-dir> <records>
-  (cd "$1" && sort -k2,2 "$2" | sha256sum --check --strict --quiet) &&
-    [ "$(wc -l <"$2")" -eq "$(find "$1" -type f ! -name '*.sig' | wc -l)" ]
-}
-check "SHA256SUMS from the builds' records checks every installer the release publishes" \
-  sums_check_every_installer "$tmp/bundled" "$tmp/bundled.provenance"
 check "a build on a runner with no known asset name records nothing" \
   refuses 'no asset name for a macOS ARM64 build with args ""' recorded macOS ARM64 "" default "$tmp"
 for os in Linux Windows; do
@@ -460,17 +453,47 @@ check "and every signature is left as its build made it" diff -r "$tmp/relabelle
 check "nor do the manifests publish the relabelled release" refuses "with the key the app pins" \
   manifests "$tmp/relabelled" "$tmp/relabelled.out" "$release_pubkey"
 
+# The release's SHA256SUMS, from the builds' records and stage 1's, as the updater-manifests job signs it.
+mkdir "$tmp/stage1"
+for name in unyt.happ unyt.webhapp alliance.dna unyt_cli; do printf 'stage 1 built %s' "$name" >"$tmp/stage1/$name"; done
+stage1_sums="$(cd "$tmp/stage1" && sha256sum -- *)"
+summed() { # <out-dir> [<stage-1 sums> [<key>]]
+  mkdir -p "$1" && with_key "${3:-release}" bash "$here/release-sums.sh" 1.2.3 "$release_pubkey" \
+    "$tmp/bundled.provenance" "${2-$stage1_sums}" "$1"
+}
+check "a release's SHA256SUMS is written and signed" summed "$tmp/sums"
+# As the README tells a user to check it.
+user_verifies() { minisign -Vm "$tmp/sums/SHA256SUMS" -P "$(base64 -d <<<"$release_pubkey" | sed -n 2p)"; }
+check "SHA256SUMS.minisig verifies SHA256SUMS with the key the app pins" user_verifies
+names_version() { [[ "$(user_verifies)" == *$'\t'version:1.2.3* ]]; }
+check "and its trusted comment names the release's version" names_version
+every_asset_checked() {
+  mkdir "$tmp/downloaded" && cp "$tmp/bundled"/* "$tmp/stage1"/* "$tmp/downloaded/" && rm "$tmp/downloaded"/*.sig &&
+    (cd "$tmp/downloaded" && sha256sum --check --strict --quiet "$tmp/sums/SHA256SUMS") &&
+    [ "$(wc -l <"$tmp/sums/SHA256SUMS")" -eq "$(find "$tmp/downloaded" -type f | wc -l)" ]
+}
+check "SHA256SUMS checks every installer and every file stage 1 publishes, and nothing else" every_asset_checked
+unsigned() { refuses "$1" summed "$tmp/unsums$((pass + fail))" "${@:2}" && [ -z "$(ls "$tmp/unsums$((pass + fail))")" ]; }
+check "a key the app does not pin signs no SHA256SUMS" \
+  unsigned "does not verify SHA256SUMS with the key the app pins" "$stage1_sums" build
+check "no stage 1 sums signs no SHA256SUMS" unsigned "4: usage:" ""
+check "an asset named twice signs no SHA256SUMS" unsigned "would name $(asset default amd64_linux.deb) more than once" \
+  "$stage1_sums"$'\n'"$(grep -F " $(asset default amd64_linux.deb)" "$tmp/bundled.provenance")"
+check "a line that checks no asset signs no SHA256SUMS" unsigned "would carry lines that check no release asset" \
+  "$stage1_sums"$'\n'"$(head -1 <<<"$stage1_sums" | cut -d' ' -f1)  ../alliance.dna"
+
 workflows="$here/../.github/workflows"
 credentials() { bash "$here/check-build-credentials.sh" "$@"; }
 check "no code that builds the app can reach a credential that can change a release" \
   credentials "$workflows"/*.y*ml
 mkdir "$tmp/workflow"
-edited() { # <sed edit of release-tauri-app.yaml>: fails when the edit changed nothing
-  sed "$1" "$workflows/release-tauri-app.yaml" >"$tmp/workflow/release-tauri-app.yaml" &&
-    ! cmp -s "$workflows/release-tauri-app.yaml" "$tmp/workflow/release-tauri-app.yaml"
+edited() { # <sed edit of $workflow>: fails when the edit changed nothing
+  sed "$1" "$workflows/$workflow" >"$tmp/workflow/$workflow" && ! cmp -s "$workflows/$workflow" "$tmp/workflow/$workflow"
 }
-edit_refused() { edited "$2" && refuses "$1" credentials "$tmp/workflow/release-tauri-app.yaml"; }
+edit_refused() { edited "$2" && refuses "$1" credentials "$tmp/workflow/$workflow"; }
+workflow=release-tauri-app.yaml
 release_edit() { check "$1" edit_refused "$2" "$3"; } # <description> <error text> <sed edit>
+smoke_edit() { local workflow=release-smoke.yaml; release_edit "$@"; }
 after() { echo "s/^\\(          $1\\)\$/\\1\\n          $2/"; } # <line> <line to add after it>
 release_edit "the release PAT handed to tauri-action fails" "release-tauri-app reads secrets.git_pat" \
   "$(after 'APPLE_TEAM_ID: .*' 'GITHUB_TOKEN: ${{ secrets.GIT_PAT }}')"
@@ -540,6 +563,20 @@ release_edit "a credential holder that runs a build fails" \
   's/^\(          gh release upload .*\)$/\1\n      - run: yarn install/'
 release_edit "a credential holder the workflow no longer has fails" \
   "names publish-builds as a credential holder, but has no such job" 's/^  publish-builds:$/  publish-assets:/'
+smoke_call() { echo "s/^\\(    uses: .\\/.github\\/workflows\\/release-smoke.yaml\\)\$/\\1\\n    $1/"; } # <line to add>
+release_edit "the release PAT handed to the smoke fails" "smoke-test reads secrets.git_pat" \
+  "$(smoke_call 'secrets:\n      GIT_PAT: ${{ secrets.GIT_PAT }}')"
+release_edit "every secret handed to the smoke fails" "smoke-test reads the secrets context" "$(smoke_call 'secrets: inherit')"
+release_edit "a smoke that can write fails" "smoke-test holds a token that can write" \
+  '/^  smoke-test:$/,$s/^      contents: read$/      contents: write/'
+release_edit "a smoke that reads a holder's outputs fails" "smoke-test reads what a credential holder hands on" \
+  's/^      release: ${{ github.ref_name }}$/      release: ${{ needs.publish-builds.outputs.id }}/'
+smoke_edit "a smoke job that checks out with the release PAT fails" "opens-linux reads secrets.git_pat" \
+  '/^  opens-linux:$/,/^  opens-macos:$/s/^          persist-credentials: false$/          token: ${{ secrets.GIT_PAT }}\n&/'
+smoke_edit "a smoke job that downloads with the release PAT fails" "static-windows reads secrets.git_pat" \
+  's/^          GH_TOKEN: ${{ github.token }}$/          GH_TOKEN: ${{ secrets.GIT_PAT }}/'
+smoke_edit "a smoke job whose token can write fails" "inventory holds a token that can write" \
+  '0,/^      contents: read$/s//      contents: write/'
 check "a workflow that cannot be read fails" refuses "could not read" credentials "$tmp/workflow/absent.yaml"
 for marker in "uses: ./.github/actions/checkout-app" "run: echo \${{ secrets.UNYT_DEPLOY_KEY }}" "submodules: true" \
   "run: git submodule update" "uses: tauri-apps/tauri-action@v0" "run: npx tauri build" "run: nix develop" \
