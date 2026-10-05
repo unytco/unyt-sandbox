@@ -1,4 +1,4 @@
 [submodule "unyt"]
 	path = unyt
-	url = git@github.com:unytco/unyt.git
+	url = git@github.com:unytco/unyt-app.git
 	branch = main
