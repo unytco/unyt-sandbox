@@ -27,7 +27,7 @@ PROVENANCE="${4:?$usage}"
   fail "TAURI_SIGNING_PRIVATE_KEY is not set: the release environment holds it and its password"
 # A re-run reads build records that an earlier attempt's smoke could have replaced.
 [ "${GITHUB_RUN_ATTEMPT:-}" = 1 ] ||
-  fail "attempt ${GITHUB_RUN_ATTEMPT:-unknown} of this run: only a run's first attempt signs, so re-tag the release"
+  fail "attempt ${GITHUB_RUN_ATTEMPT:-unknown} of this run: only a run's first attempt signs, so delete the draft and start a new run"
 twice="$(awk '{ print $2 }' "$PROVENANCE" | sort | uniq -d)"
 [ -z "$twice" ] || fail "this run's builds published ${twice//$'\n'/ } more than once"
 for sig in "$ASSETS"/*.sig; do

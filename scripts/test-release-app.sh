@@ -33,7 +33,8 @@ if [ -z "$waiting" ]; then
     "$(jq -r '.build | to_entries[] | "\(.key)=\(.value)"' "$here/../network.json"; echo UNYT_RELEASE_REPO=example/fork)"
   check "its release notes name the network and each of its values" test "$(release_app notes)" = \
     "$(printf '\n### Network: %s\n\n' "$(jq -r .name "$here/../network.json")"
-      jq -r '.build | to_entries[] | "- `\(.key)`: \(.value)"' "$here/../network.json")"
+      jq -r '.build | to_entries[] | "- `\(.key)`: \(if .value == "" then "the app'"'"'s default" else .value end)"' \
+        "$here/../network.json")"
 else
   while IFS= read -r unset; do refused "this repo's release is refused while $unset" "$unset" release_app build-env; done \
     <<<"$waiting"
@@ -54,7 +55,8 @@ fixtures() { # both fixture files as good ones
       "deep-link": {mobile: [{scheme: ["example-app"]}], desktop: {schemes: ["example-app"]}}}}' >"$repo/identity.json"
   jq -n '{name: "Example Net", build: {UNYT_JOINING_SERVICE_URL: "https://joining.example",
     VITE_MIGRATION_SERVICE_URL: "https://migration.example", VITE_HOT_BRIDGE_URL: "https://hot-bridge.example",
-    VITE_HOT_LOCK_VAULT: "0x\("0" * 39)1", VITE_ETH_NETWORK: "sepolia"}}' >"$repo/network.json"
+    VITE_HOT_LOCK_VAULT: "0x\("0" * 39)1", VITE_ETH_NETWORK: "sepolia", UNYT_BOOTSTRAP_URL: "https://bootstrap.example",
+    UNYT_RELAY_URL: "", UNYT_AUTH_SERVER_URL: "https://auth.example", UNYT_AUTH_RELAY: "1"}}' >"$repo/network.json"
 }
 fixture() { GITHUB_REPOSITORY="${REPOSITORY-example/fork}" bash "$repo/scripts/release-app.sh" "$@"; }
 edit() { jq "$2" "$repo/$1" >"$tmp/edited" && mv "$tmp/edited" "$repo/$1"; } # <file> <jq edit>
@@ -67,6 +69,8 @@ fixtures
 check "a fork's build takes its network's values, and updates from the fork" test "$(fixture build-env)" = \
   "$(jq -r '.build | to_entries[] | "\(.key)=\(.value)"' "$repo/network.json"; echo UNYT_RELEASE_REPO=example/fork)"
 check "its release notes name its network" eval 'grep -qx "### Network: Example Net" <<<"$(fixture notes)"'
+check "and a value it leaves empty as the app's default" \
+  eval 'grep -qx "- \`UNYT_RELAY_URL\`: the app'"'"'s default" <<<"$(fixture notes)"'
 for repository in "" example 'example/.' 'example/..' "example/fork
 VITE_ETH_NETWORK=mainnet"; do
   REPOSITORY="$repository" refused "a build that updates from repo '${repository//$'\n'/\\n}' is refused" \
@@ -119,7 +123,9 @@ for bad in UNYT_JOINING_SERVICE_URL=http://joining.example VITE_MIGRATION_SERVIC
   'VITE_HOT_BRIDGE_URL=https://hot-bridge.example/ TO BE SET' UNYT_JOINING_SERVICE_URL=https://. \
   VITE_MIGRATION_SERVICE_URL=https://migration..example VITE_HOT_BRIDGE_URL=https://- \
   UNYT_JOINING_SERVICE_URL=https://joining.example:0 "VITE_HOT_LOCK_VAULT=0x$(printf '%040d' 0)" \
-  UNYT_JOINING_SERVICE_URL=https://joining.1 UNYT_JOINING_SERVICE_URL=https://joining.example-; do
+  UNYT_JOINING_SERVICE_URL=https://joining.1 UNYT_JOINING_SERVICE_URL=https://joining.example- \
+  UNYT_BOOTSTRAP_URL=http://bootstrap.example UNYT_RELAY_URL=relay.example UNYT_AUTH_SERVER_URL=https://auth..example \
+  UNYT_AUTH_RELAY=true UNYT_AUTH_RELAY=; do
   broken "a network whose ${bad%%=*} is ${bad#*=} is refused" "builds with ${bad%%=*} ${bad#*=}, which is no value it can take" \
     network.json ".build.${bad%%=*} = \"${bad#*=}\""
 done
@@ -135,6 +141,10 @@ check "a network on Ethereum mainnet builds" eval 'grep -qx VITE_ETH_NETWORK=mai
 fixtures
 edit network.json '.build.UNYT_JOINING_SERVICE_URL = "https://joining.xn--p1ai"'
 check "a server under an internationalized top level domain builds" quietly fixture build-env
+fixtures
+edit network.json '.build.UNYT_BOOTSTRAP_URL = "" | .build.UNYT_AUTH_SERVER_URL = "" | .build.UNYT_AUTH_RELAY = "0"'
+check "a network that leaves its endpoints to the app's defaults builds" \
+  eval 'grep -qx UNYT_BOOTSTRAP_URL= <<<"$(fixture build-env)"'
 for shape in '.plugins["deep-link"].desktop.schemes = "example-app"' '.plugins = []'; do
   broken "an identity shaped as $shape is refused with a reason" "::error::identity.json" identity.json "$shape"
 done
@@ -389,7 +399,8 @@ cp "$here/fixtures/updater.rs" "$probe_app/src-tauri/src/"
 printf '[package]\nname = "unyt-app"\nversion = "0.0.1"\n' >"$probe_app/src-tauri/Cargo.toml"
 printf '[[package]]\nname = "unyt-app"\nversion = "0.0.1"\n' >"$probe_app/Cargo.lock"
 reads_all() { # every value the release builds the fixture app with
-  printf 'env("UNYT_JOINING_SERVICE_URL"); env("UNYT_RELEASE_REPO");\n' >"$probe_app/src-tauri/build.rs"
+  printf 'env("UNYT_%s");\n' JOINING_SERVICE_URL RELEASE_REPO BOOTSTRAP_URL RELAY_URL AUTH_SERVER_URL AUTH_RELAY \
+    >"$probe_app/src-tauri/build.rs"
   printf 'env.VITE_%s;\n' MIGRATION_SERVICE_URL HOT_BRIDGE_URL HOT_LOCK_VAULT ETH_NETWORK >"$probe_app/ui/white-label/vite.config.js"
 }
 reads_all
@@ -427,7 +438,7 @@ sed -i 's/env.VITE_HOT_LOCK_VAULT;//; s/env.VITE_ETH_NETWORK;//' "$probe_app/ui/
 check "the probe fails an app tree that reads not every value its release builds it with" \
   probe_says 1 'reads no VITE_ETH_NETWORK, VITE_HOT_LOCK_VAULT, so'
 reads_all
-sed -i 's/env("UNYT_RELEASE_REPO");//' "$probe_app/src-tauri/build.rs"
+sed -i '/env("UNYT_RELEASE_REPO");/d' "$probe_app/src-tauri/build.rs"
 check "the probe fails an app tree that does not read the repo it updates from" \
   probe_says 1 'the app in .* reads no UNYT_RELEASE_REPO, so'
 reads_all
@@ -518,8 +529,7 @@ check "the smoke runs no check when identity.json names no app" eval '
 # The release workflow's wiring.
 wf="$(yq -o=json "$here/../.github/workflows/release-tauri-app.yaml")"
 wired() { jq -e "$@" <<<"$wf" >/dev/null; } # [<jq options>] <condition on the workflow>
-check "a tag v<version> triggers a release, and nothing else does" wired '
-  .on == {push: {tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-dev.*"]}}'
+check "a dispatch starts a release, and nothing else does" wired '.on == {workflow_dispatch: null}'
 pinned_app='bash scripts/set-app-version.sh "$TAG"'
 check "stage 1 makes the pinned app the tag's version and identity.json's app before it builds anything" \
   wired --arg first "$pinned_app" '
@@ -556,7 +566,7 @@ check "the release says so when the app's changelog has nothing for the tag" wir
   any(.jobs["build-happ"].steps[]; .run // "" | test("\\[ -s release_notes.txt \\] \\|\\|\n *echo \"::warning::"))'
 check "the release notes name the network" wired '
   any(.jobs["build-happ"].steps[]; .run == "bash scripts/release-app.sh notes >> release_notes.txt\ncat release_notes.txt\n")'
-check "every step that names the release names the pushed tag" wired '
+check "every step that names the release names the tag the run is on" wired '
   [.jobs[].steps[]?.env.TAG // empty] as $tags | ($tags | length) > 5 and all($tags[]; . == "${{ github.ref_name }}")
   and (.jobs["publish-happ"].steps[] | select(.id == "create-release").with.tag) == "${{ github.ref_name }}"'
 check "every release command is on this repo" wired '

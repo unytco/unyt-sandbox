@@ -1288,8 +1288,8 @@ else
 fi
 
 # ── a tag the msi cannot carry must die in stage 1 ───────────────────────────
-# msi-version.sh is the only thing that rejects a tag the trigger admits: the
-# trigger is a glob, so it takes any `-dev.*`, numeric or not.
+# msi-version.sh is the only thing that rejects a tag a dispatch may run on,
+# such as a `-dev.*` that is not numeric.
 #
 # The arc factors stage 2 builds, read out below and crossed with the real asset
 # names further down: a release carries one set of installers per one of them.
@@ -1339,22 +1339,6 @@ if [ -f "$rel" ]; then
     printf 'FAIL  %-58s %s\n' "the build job derives the msi version itself" \
       "a bad tag then fails four platform builds in, not in seconds" >&2
   else pass=$((pass + 1)); fi
-  # The channels msi-version.sh is written against; add one and every tag on it
-  # dies in stage 1. The case patterns are QUOTED, or `[0-9]` would be read as a
-  # character class and match both.
-  tags="$(sed -n '/^    tags:$/,/^[a-z]/p' "$rel" | grep -oE '"[^"]+"' | tr -d '"')"
-  unknown=""
-  for tag in $tags; do
-    case "$tag" in
-      'v[0-9]+.[0-9]+.[0-9]+' | 'v[0-9]+.[0-9]+.[0-9]+-dev.*') ;;
-      *) unknown="${unknown:+$unknown }$tag" ;;
-    esac
-  done
-  if [ -n "$tags" ] && [ -z "$unknown" ]; then pass=$((pass + 1)); else
-    fail=$((fail + 1))
-    printf 'FAIL  %-58s %s\n' "a release tag channel msi-version.sh cannot derive" \
-      "${unknown:-no tag patterns found at all}" >&2
-  fi
 
   # The release calls the smoke with the static phase advisory. Two ways that goes
   # wrong, neither visible in a green run: the call stops asking, or it starts
@@ -2033,8 +2017,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 270 ]; then
-  echo "::error::only $pass assertions ran; expected at least 270. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 269 ]; then
+  echo "::error::only $pass assertions ran; expected at least 269. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

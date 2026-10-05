@@ -27,7 +27,7 @@ merge='def merge_patch($patch):
 origin='https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9](:[1-9][0-9]{0,4})?'
 url_re="^$origin(/[!-~]*)?\$"
 origin_re="^$origin/?\$"
-values='["UNYT_JOINING_SERVICE_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL"]'
+values='["UNYT_AUTH_RELAY","UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL"]'
 
 problems=()
 report() {
@@ -87,6 +87,9 @@ check_network() {
       VITE_HOT_LOCK_VAULT\ *) [[ "$value" =~ ^0x[0-9a-f]{40}$ && "$value" =~ [1-9a-f] ]] && continue ;;
       VITE_HOT_BRIDGE_URL\ *) [[ "$value" =~ $origin_re ]] && continue ;;
       UNYT_JOINING_SERVICE_URL\ * | VITE_MIGRATION_SERVICE_URL\ *) [[ "$value" =~ $url_re ]] && continue ;;
+      # Empty: the app's default.
+      UNYT_BOOTSTRAP_URL\ * | UNYT_RELAY_URL\ * | UNYT_AUTH_SERVER_URL\ *) [[ -z "$value" || "$value" =~ $url_re ]] && continue ;;
+      UNYT_AUTH_RELAY\ 0 | UNYT_AUTH_RELAY\ 1) continue ;;
     esac
     problems+=("network.json builds with $name $value, which is no value it can take")
   done < <(jq -r '.build | objects | to_entries[] | [.key, (.value | tostring)] | @tsv' "$NETWORK")
@@ -149,7 +152,7 @@ case "${1:-}" in
     echo
     echo "### Network: $(jq -r .name "$NETWORK")"
     echo
-    jq -r '.build | to_entries[] | "- `\(.key)`: \(.value)"' "$NETWORK"
+    jq -r '.build | to_entries[] | "- `\(.key)`: \(if .value == "" then "the app'"'"'s default" else .value end)"' "$NETWORK"
     ;;
   *) fail "usage: release-app.sh identity <app-dir> <merged-out> | build-env | reads <app-dir> | notes" ;;
 esac

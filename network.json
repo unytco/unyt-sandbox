@@ -1,10 +1,14 @@
 {
   "name": "TestNet",
   "build": {
-    "UNYT_JOINING_SERVICE_URL": "https://joining.unyt.dev",
+    "UNYT_JOINING_SERVICE_URL": "https://dev-0-111-0-dev-0-joining.unyt.dev",
     "VITE_MIGRATION_SERVICE_URL": "https://migration.unyt.dev",
     "VITE_HOT_BRIDGE_URL": "https://hot-bridge.unyt.dev",
     "VITE_HOT_LOCK_VAULT": "0xe3e064e3c2eef66cb93da8d8114f5084e92f48d6",
-    "VITE_ETH_NETWORK": "sepolia"
+    "VITE_ETH_NETWORK": "sepolia",
+    "UNYT_BOOTSTRAP_URL": "https://dev-0-111-0-dev-0-relay.unyt.dev",
+    "UNYT_RELAY_URL": "https://dev-0-111-0-dev-0-relay.unyt.dev",
+    "UNYT_AUTH_SERVER_URL": "https://dev-0-111-0-dev-0-auth.unyt.dev",
+    "UNYT_AUTH_RELAY": "1"
   }
 }
