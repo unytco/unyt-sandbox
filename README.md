@@ -31,17 +31,18 @@ Take default-arc unless you want the lighter one.
 Every installer is named for what it is, so you can pick yours from the filename alone:
 
 ```
-unyt_<version>_Unyt_<variant>_<architecture>_<platform><extension>
+unyt_<version>_<product>_<variant>_<architecture>_<platform><extension>
 ```
 
 | Part | Values |
 | --- | --- |
+| `<product>` | The app's name, `productName` in [`identity.json`](identity.json), with each space as a dot |
 | `<variant>` | `default-arc`, `zero-arc` |
 | `<architecture>` | `aarch64` for Apple Silicon, `x64` for 64-bit Intel or AMD on macOS and Windows, `amd64` for the same on Linux |
 | `<platform>` | `darwin` for macOS, `linux`, `windows` |
 | `<extension>` | macOS `.dmg`, Linux `.deb` or `.AppImage`, Windows `.exe` (setup) or `.msi` |
 
-A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. When the pinned app declares an updater, a release also carries `.sig` signatures and the `updater-default-arc.json` and `updater-zero-arc.json` manifests, which the app's Update now reads, and a `SHA256SUMS` file with the checksum of every installer, of the Holochain files and of `unyt_cli`. `SHA256SUMS.minisig` is its signature by the key the app's updates are signed with. Installing Unyt needs none of them.
+A release also carries assets that are not installers: the `.app.tar.gz` bundles, and `unyt.happ`, `unyt.webhapp` and `alliance.dna`, which are the Holochain application the installers are built around. It also carries `.sig` signatures, the `updater-default-arc.json` and `updater-zero-arc.json` manifests the app's Update reads, and a `SHA256SUMS` file with the checksum of every installer, of the Holochain files and of `unyt_cli`. `SHA256SUMS.minisig` is its signature by the key the app's updates are signed with. Installing the app needs none of them.
 
 To check a download, put it in one folder with `SHA256SUMS` and `SHA256SUMS.minisig`, and run [minisign](https://jedisct1.github.io/minisign/) and then `sha256sum` there:
 
@@ -50,11 +51,11 @@ minisign -VHm SHA256SUMS -P RWTMgl5pLxSOVpkRiS5CMlFkrn7enASWilDEzRpfPeTBcBBJXcdu
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-minisign prints a trusted comment that names the release's version. On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS`.
+The key after `-P` is this repo's update key, the second line of `plugins.updater.pubkey` in [`identity.json`](identity.json) once base64 decoded. minisign prints a trusted comment that names the release's version. On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS`.
 
 ### On Linux, swapping between the two variants
 
-Both variants install as the package `unyt` at the same version. With either one already installed, `apt install ./unyt_..._linux.deb` finds that version present, changes nothing and exits 0. A graphical software centre installs through the same package manager, so it does nothing either. To actually swap, install the .deb directly:
+Both variants install as one package, the app's `productName` in lower case with dashes for spaces, at the same version. With either one already installed, `apt install ./unyt_..._linux.deb` finds that version present, changes nothing and exits 0. A graphical software centre installs through the same package manager, so it does nothing either. To actually swap, install the .deb directly:
 
 ```sh
 sudo dpkg -i ./unyt_*_zero-arc_amd64_linux.deb
@@ -72,11 +73,11 @@ Once installed, the Unyt software will run locally on your device and connect wi
 
 ## Setup
 
-Note: In Mac, because you downloaded the software directly and not through Apple's App Store, you may need to open the System Settings and go to Privacy and Security, scroll down to Security and give Unyt permission to run.
+Note: In Mac, because you downloaded the software directly and not through Apple's App Store, you may need to open the System Settings and go to Privacy and Security, scroll down to Security and give the app permission to run.
 
-To reset completely and start over with a new account: uninstall the app, delete local data (`~/Library/Application Support/co.unyt.unyt-app` on macOS), and reinstall. You'll get a new key pair and a fresh identity.
+To reset completely and start over with a new account: uninstall the app, delete local data (`~/Library/Application Support/<identifier>` on macOS, where `<identifier>` is `identifier` in [`identity.json`](identity.json)), and reinstall. You'll get a new key pair and a fresh identity.
 
-When you open Unyt on your operating system for the first time, it will create a set of public and private keys for you that you can use to interact with others. These are stored in a private keystore (Lair) on your own machine and are used during future uses. In Unyt we often refer to this public key as "your address" as it is how others can refer to you when sending, receiving or authorizing you to perform particular roles.
+When you open the app on your operating system for the first time, it will create a set of public and private keys for you that you can use to interact with others. These are stored in a private keystore (Lair) on your own machine and are used during future uses. In Unyt we often refer to this public key as "your address" as it is how others can refer to you when sending, receiving or authorizing you to perform particular roles.
 
 ## Past Releases
 

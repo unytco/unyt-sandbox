@@ -23,6 +23,7 @@ the app exists.
 """
 
 import collections
+import json
 import os
 import re
 import select
@@ -39,6 +40,7 @@ import frames
 
 HERE = Path(__file__).resolve().parent
 SMOKE_COMMON = HERE.parent / "common.sh"
+IDENTITY = HERE.parent.parent.parent / "identity.json"
 
 EXIT_CODES = {
     "PROVEN": 0,
@@ -72,6 +74,22 @@ def shell_value(name, path=SMOKE_COMMON):
     if not match:
         raise Answer("CANNOT PROVE", "%s is not in %s" % (name, path))
     return match.group(2)
+
+
+def bundle_id(path=IDENTITY):
+    """The app's identifier, which Tauri keys its data and log directories on:
+    UNYT_BUNDLE_ID, or identity.json's."""
+    if os.environ.get("UNYT_BUNDLE_ID"):
+        return os.environ["UNYT_BUNDLE_ID"]
+    try:
+        identifier = json.loads(path.read_text(encoding="utf-8"))["identifier"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise Answer(
+            "CANNOT PROVE", "no identifier in %s: %s" % (path, error)
+        ) from error
+    if not isinstance(identifier, str) or not identifier:
+        raise Answer("CANNOT PROVE", "no identifier in %s" % path)
+    return identifier
 
 
 def first_match(pattern, text):
@@ -234,7 +252,7 @@ class Lane:
         self.re_ready = re.compile(shell_value("UNYT_RE_BACKEND_READY"))
         self.re_failed = re.compile(shell_value("UNYT_RE_FAILED"))
         self.re_awaiting = re.compile(shell_value("UNYT_RE_AWAITING_PASSWORD"))
-        self.bundle_id = shell_value("UNYT_BUNDLE_ID")
+        self.bundle_id = bundle_id()
 
     def preflight(self):
         """Refuse a runner that cannot answer, before anything is installed."""

@@ -2,15 +2,17 @@
 # Every installer one build job made, as the `<sha256>  <asset>` lines updater-sign.sh and the release's
 # SHA256SUMS read, each copied, with its build signature where it has one, into <out-dir> under its
 # asset name:
-#   updater-provenance.sh <tauri.conf.json> <arc factor> <build args> <artifact paths> <out-dir>
-# <build args> are the job's tauri-action args and <artifact paths> its artifactPaths output.
+#   updater-provenance.sh <tauri config> <arc factor> <build args> <artifact paths> <out-dir>
+# <tauri config> is the app's Tauri configuration with identity.json merged over it, as `release-app.sh
+# identity` writes it. <build args> are the job's tauri-action args and <artifact paths> its
+# artifactPaths output.
 # Env: RUNNER_OS and RUNNER_ARCH. Needs jq.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
 . "$here/updater-verify.sh"
 
-usage="usage: updater-provenance.sh <tauri.conf.json> <arc factor> <build args> <artifact paths> <out-dir>"
+usage="usage: updater-provenance.sh <tauri config> <arc factor> <build args> <artifact paths> <out-dir>"
 CONF="${1:?$usage}"
 ARC="${2:?$usage}"
 ARGS="${3?$usage}"
@@ -29,7 +31,8 @@ esac
 # On Windows, jq ends its lines with a carriage return and tauri-action's paths use backslashes.
 json() { jq -r "$@" | tr -d '\r'; }
 version="$(json -e .version "$CONF")"
-product="$(release_product "$(json -e .productName "$CONF")")"
+built="$(json -e .productName "$CONF")"
+product="$(release_product "$built")"
 listed="$(json '.[]' <<<"$PATHS" | tr '\\' /)"
 json '.[] | select(endswith(".sig") | not)' <<<"$PATHS" | tr '\\' / |
   while IFS= read -r artifact; do
@@ -48,6 +51,11 @@ json '.[] | select(endswith(".sig") | not)' <<<"$PATHS" | tr '\\' / |
       *.exe) ext=.exe ;;
       *.dmg) ext=.dmg ;;
       *) fail "$artifact is no installer this release names" ;;
+    esac
+    # The bundler names every bundle after the product it built.
+    case "$(basename "${artifact%.tar.gz}")" in
+      "$built"_* | "$built".app) ;;
+      *) fail "$artifact is no $built bundle, so the build did not take identity.json" ;;
     esac
     name="$(asset_name "$version" "$product" "$ARC" "$target$ext")"
     [ ! -e "$OUT/$name" ] || fail "two of this build's artifacts are named $name"

@@ -12,6 +12,7 @@ here is every decision made about what they hand back.
 
 import contextlib
 import io
+import json
 import re
 import os
 import shutil
@@ -878,8 +879,29 @@ class TheLogOracle(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(prove.shell_value(name))
 
-    def test_the_bundle_id_comes_from_there_too(self):
-        self.assertEqual("co.unyt.unyt-app", prove.shell_value("UNYT_BUNDLE_ID"))
+    def test_the_bundle_id_is_the_one_the_release_builds(self):
+        identity = Path(__file__).resolve().parents[3] / "identity.json"
+        with mock.patch.dict(os.environ, {"UNYT_BUNDLE_ID": ""}):
+            self.assertEqual(
+                json.loads(identity.read_text(encoding="utf-8"))["identifier"],
+                prove.bundle_id(),
+            )
+
+    def test_the_bundle_id_can_be_named(self):
+        with mock.patch.dict(os.environ, {"UNYT_BUNDLE_ID": "co.example.named"}):
+            self.assertEqual("co.example.named", prove.bundle_id())
+
+    def test_no_bundle_id_is_fatal_rather_than_silent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            identity = Path(tmp) / "identity.json"
+            for text in ("", "{}", '{"identifier": ""}', '{"identifier": 1}', "[]"):
+                with (
+                    self.subTest(text=text),
+                    mock.patch.dict(os.environ, {"UNYT_BUNDLE_ID": ""}),
+                ):
+                    identity.write_text(text, encoding="utf-8")
+                    with self.assertRaises(prove.Answer):
+                        prove.bundle_id(identity)
 
     def test_a_pattern_that_moved_is_fatal_rather_than_silent(self):
         with self.assertRaises(prove.Answer):
@@ -1120,6 +1142,24 @@ class EveryWayOutSaysSomething(unittest.TestCase):
     def test_a_lane_nobody_named_is_a_usage_error(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(2, prove.main(["solaris", "artifact", self.dir]))
+
+
+class TheLinuxLog(Quiet):
+    """The Linux lane reads the app's log under the identifier it was given."""
+
+    def test_the_log_is_read_under_the_bundle_id(self):
+        with mock.patch.dict(os.environ, {"UNYT_BUNDLE_ID": "co.example.lane"}):
+            lane = prove.LinuxLane(str(Path(self.dir) / "unyt.deb"), self.dir)
+        self.addCleanup(shutil.rmtree, lane.work, True)
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        lane.sandbox = Path(self.dir)
+        lane.stdout_log = lane.sandbox / "app-stdout.log"
+        logs = lane.sandbox / "data" / "co.example.lane" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "unyt.v1.2.log.2026-10-05").write_text(
+            "Status update: Starting", encoding="utf-8"
+        )
+        self.assertIn("Status update: Starting", lane.logs())
 
 
 class TheLinuxWindowSearch(Quiet):

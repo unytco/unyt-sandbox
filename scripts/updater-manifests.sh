@@ -3,7 +3,7 @@
 #   updater-manifests.sh <tag> <version> <pubkey> <asset-dir> <out-dir>
 # <asset-dir> holds the release's .sig assets and the artifacts they sign, under their asset names.
 # <out-dir> gets updater-default-arc.json and updater-zero-arc.json, which the app fetches from the
-# release. Needs minisign on PATH (install-minisign.sh).
+# release. Env: GITHUB_REPOSITORY. Needs minisign on PATH (install-minisign.sh).
 #
 # One per arc factor so a build is only ever offered its own variant: a manifest names one installer
 # per platform.
@@ -18,7 +18,7 @@ VERSION="${2:?$usage}"
 PUBKEY="${3:?$usage}"
 ASSETS="${4:?$usage}"
 OUT="${5:?$usage}"
-REPO="${GITHUB_REPOSITORY:-unytco/unyt-sandbox}"
+REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name the repo the release is on}"
 
 # The app refuses an artifact unless the pinned key signed it for this version under its asset name.
 # Neither the bundler nor the Tauri signer checks any of that, so the release would otherwise go green

@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Shared constants for the release install-smoke. Sourced, never run.
 
-# From unyt/src-tauri/tauri.conf.json. Tauri keys app_log_dir() on it, so logs
-# land under $XDG_DATA_HOME/<id>/logs — no AGENT_ID suffix on this one.
-UNYT_BUNDLE_ID="co.unyt.unyt-app"
-
 # The glibc of the OLDEST distro we support (Ubuntu 22.04 ships 2.35), which is
 # the ceiling on what a shipped binary may require.
 # shellcheck disable=SC2034  # read by the scripts that source this file
@@ -407,9 +403,12 @@ smoke_dispatch() { # print | only <id> | all
 }
 
 # The app's rolling log dir inside a smoke sandbox ($1 = sandbox root; the smoke
-# scripts point XDG_DATA_HOME at <sandbox>/data). Files are named
+# scripts point XDG_DATA_HOME at <sandbox>/data). Tauri keys it on the app's
+# identifier, UNYT_BUNDLE_ID, with no AGENT_ID suffix. Files are named
 # unyt.v<major>.<minor>.log.YYYY-MM-DD.
-smoke_log_dir() { printf '%s/data/%s/logs\n' "${1:?sandbox root required}" "$UNYT_BUNDLE_ID"; }
+smoke_log_dir() {
+  printf '%s/data/%s/logs\n' "${1:?sandbox root required}" "${UNYT_BUNDLE_ID:?UNYT_BUNDLE_ID must name the app}"
+}
 
 # Both sinks matter: the file is durable, stdout catches a crash from before the
 # log dir exists.

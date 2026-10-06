@@ -18,9 +18,9 @@
   msedgedriver: a driver asserts what the DOM contains, which is the app's own
   test suite's job.
 
-  DO NOT try to capture the app's stdout — release builds set
+  DO NOT try to capture the app's stdout: release builds set
   windows_subsystem = "windows", so there is no console. Read the log under
-  %LOCALAPPDATA%\co.unyt.unyt-app\logs.
+  %LOCALAPPDATA%\<the identifier in identity.json>\logs.
 
   STILL NOT COVERED, because a runner is a build image and not a user's PC:
   SmartScreen's "unknown publisher" block (our installers are unsigned, and CI

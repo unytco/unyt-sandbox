@@ -1,0 +1,30 @@
+name: "release-probe"
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: "the pinned app, as the release takes it"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/checkout-app
+        with:
+          deploy-key: ${{ secrets.UNYT_DEPLOY_KEY }}
+
+      - name: The release probe
+        run: bash scripts/release-probe.sh unyt

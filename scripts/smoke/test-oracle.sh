@@ -1396,7 +1396,7 @@ if [ -f "$rel" ]; then
   draft="$(sed -n '/^  draft-installers:/,/^  [a-z]/p' "$rel")"
   in_stage "$draft" '    needs: [publish-happ, publish-builds, updater-manifests]' \
     "the smoke must not run the release's installers before its updates are signed"
-  in_stage "$draft" "    if: \${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result != 'failure' }}" \
+  in_stage "$draft" "    if: \${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result == 'success' }}" \
     "the smoke runs the installers after a failed signing"
   smoke_if="    if: \${{ !cancelled() && needs.draft-installers.result == 'success' }}"
   if [ "$stage3_if" = "$smoke_if" ]; then
@@ -1551,7 +1551,7 @@ if [ -f "$rel" ]; then
     "one failed row must not keep every other platform off the release"
   in_stage "$stage2" '    needs: [build-happ, publish-builds]' \
     "the signing must not start before the builds are on the release"
-  in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-builds.result == 'success' && needs.build-happ.outputs.signedUpdates == 'true' }}" \
+  in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-builds.result == 'success' }}" \
     "the signing must not sign a release its builds did not all reach"
   # download-artifact leaves a lone row's record unnested.
   in_stage "$stage2" "          find provenance -type f -name '*.sha256' -exec cat {} + >updater-provenance.sha256" \
