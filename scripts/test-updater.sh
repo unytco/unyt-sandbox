@@ -217,9 +217,9 @@ refused "a missing signature fails rather than drop a platform" \
   "no zero-arc signature ending in x64_windows.msi.sig" drop_sig
 refused "a signature whose artifact is not on the release fails" "is not on the release" \
   drop_artifact signing
-refused "a signature by a key the app does not pin fails" "with the key the app pins" other_key
-refused "an artifact changed after signing fails" "with the key the app pins" tampered
-refused "a signature paired with another artifact fails" "with the key the app pins" swapped
+refused "a signature by a key the app does not pin fails" "with the key this run signs with" other_key
+refused "an artifact changed after signing fails" "with the key this run signs with" tampered
+refused "a signature paired with another artifact fails" "with the key this run signs with" swapped
 refused "a signature for another version fails" "is not signed for 1.2.3" stale
 refused "a signature that names no version fails" "is not signed for 1.2.3" unversioned
 refused "two signatures for one platform fail" \
@@ -229,7 +229,7 @@ refused "a signature that is not base64 fails" "is not base64" garbled signing
 sign_refused "a build signature that names no signing time is refused before signing" \
   "$(asset zero amd64_linux.deb).sig names no signing time" untimed
 check "a pinned key that is not base64 fails the release" \
-  refuses "the pinned public key is not base64" manifests "$tmp/full" "$tmp/badkey.out" "*"
+  refuses "the public key is not base64" manifests "$tmp/full" "$tmp/badkey.out" "*"
 refused "a signature under the bundler's name fails the manifests" "is signed for another file" \
   bundler_named
 refused "a signature naming the other arc's asset fails the manifests" \
@@ -440,7 +440,7 @@ check "a build that lists a file no release names records nothing" \
   recorded Linux X64 "" default "$tmp" "$tmp/target/x.rpm" "$tmp/target/x.rpm.sig"
 check "a release as its builds stage it fails" refuses "is signed for another file" \
   manifests "$tmp/bundled" "$tmp/bundled.out" "$(cat "$tmp/build.key.pub")"
-check "a release only its build key signed fails" refuses "with the key the app pins" \
+check "a release only its build key signed fails" refuses "with the key this run signs with" \
   manifests "$tmp/bundled" "$tmp/bundled.out" "$release_pubkey"
 cp -r "$tmp/bundled" "$tmp/relabelled"
 published_as "$tmp/relabelled/$(asset zero amd64_linux.AppImage)" "$tmp/relabelled/$(asset default amd64_linux.AppImage)"
@@ -456,7 +456,7 @@ check "signing again signs the signatures the first signing left under the asset
 check "a zero-arc build relabelled as the default-arc one publishes nothing" \
   refuses "$(unclaimed "$(asset default amd64_linux.AppImage)")" signed_and_published "$tmp/relabelled"
 check "and every signature is left as its build made it" diff -r "$tmp/relabelled.built" "$tmp/relabelled"
-check "nor do the manifests publish the relabelled release" refuses "with the key the app pins" \
+check "nor do the manifests publish the relabelled release" refuses "with the key this run signs with" \
   manifests "$tmp/relabelled" "$tmp/relabelled.out" "$release_pubkey"
 
 # The release's SHA256SUMS, from the builds' records and stage 1's, as the updater-manifests job signs it.
@@ -484,7 +484,7 @@ every_asset_checked() {
 check "SHA256SUMS checks every installer and every file stage 1 publishes, and nothing else" every_asset_checked
 unsigned() { refuses "$1" summed "$tmp/unsums$((pass + fail))" "${@:2}" && [ -z "$(ls "$tmp/unsums$((pass + fail))")" ]; }
 check "a key the app does not pin signs no SHA256SUMS" \
-  unsigned "does not verify SHA256SUMS with the key the app pins" "$stage1_sums" build
+  unsigned "does not verify SHA256SUMS with the key this run signs with" "$stage1_sums" build
 check "no stage 1 sums signs no SHA256SUMS" unsigned "5: usage:" ""
 copied() { # <dir> <edit of a copy of it>: prints the copy's path
   local dir="$1.$((pass + fail))"

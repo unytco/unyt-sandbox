@@ -29,7 +29,7 @@ Application-level changes belong in
 - **No job that builds the app holds a credential that can change a release, and no job that runs a built installer holds a token that can write.**
 - **The smoke runs only installers whose checksums match the release's signed `SHA256SUMS`.**
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
-- **A pre-release (a `-dev.*` tag) is never offered to users as an update.**
+- **A pre-release (a `-dev.*` tag) is never offered to users as an update, and is signed with a throwaway key, never the update key.**
 - **Installers and unyt_cli build with Rust 1.98.1, and a release stops when the app's CI pins another.**
 
 ### Fixed

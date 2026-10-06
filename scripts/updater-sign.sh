@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Signs each updater artifact of a release with the release key, under the name the release publishes
-# it as:
+# Signs each updater artifact of a release with the key this run signs with, under the name the release
+# publishes it as:
 #   updater-sign.sh <version> <asset-dir> <started> <provenance>
 # <asset-dir> holds the release's .sig assets and the artifacts they sign, under their asset names;
 # each .sig is overwritten. <started> is when this release run started, in Unix seconds. <provenance>
@@ -24,7 +24,7 @@ STARTED="${3:?$usage}"
 PROVENANCE="${4:?$usage}"
 
 [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] ||
-  fail "TAURI_SIGNING_PRIVATE_KEY is not set: the release environment holds it and its password"
+  fail "TAURI_SIGNING_PRIVATE_KEY is not set: a release tag's run takes it from the release environment, any other run makes one"
 # A re-run reads build records that an earlier attempt's smoke could have replaced.
 [ "${GITHUB_RUN_ATTEMPT:-}" = 1 ] ||
   fail "attempt ${GITHUB_RUN_ATTEMPT:-unknown} of this run: only a run's first attempt signs, so re-tag the release"

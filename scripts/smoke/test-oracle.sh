@@ -1394,7 +1394,7 @@ if [ -f "$rel" ]; then
   in_stage "$stage3" '    needs: [draft-installers]' "the smoke must run what the draft carries"
   in_stage "$stage3" '      installers: draft-installers' "the smoke must take the draft's installers"
   draft="$(sed -n '/^  draft-installers:/,/^  [a-z]/p' "$rel")"
-  in_stage "$draft" '    needs: [build-happ, publish-happ, publish-builds, updater-manifests]' \
+  in_stage "$draft" '    needs: [release-environment, build-happ, publish-happ, publish-builds, updater-manifests]' \
     "the smoke must not run the release's installers before its updates are signed"
   in_stage "$draft" '          bash scripts/check-release-sums.sh "$APP_VERSION" "$PUBKEY" sums installers' \
     "the smoke must take only installers the signed SHA256SUMS names"
@@ -1553,7 +1553,7 @@ if [ -f "$rel" ]; then
     "the release must refuse a workflow that lets build code reach a release credential"
   in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-happ.result == 'success' }}" \
     "one failed row must not keep every other platform off the release"
-  in_stage "$stage2" '    needs: [build-happ, publish-builds]' \
+  in_stage "$stage2" '    needs: [release-environment, build-happ, publish-builds]' \
     "the signing must not start before the builds are on the release"
   in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-builds.result == 'success' }}" \
     "the signing must not sign a release its builds did not all reach"

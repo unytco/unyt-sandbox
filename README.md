@@ -53,6 +53,8 @@ sha256sum --check --ignore-missing SHA256SUMS
 
 The key after `-P` is this repo's update key, the second line of `plugins.updater.pubkey` in [`identity.json`](identity.json) once base64 decoded. minisign prints a trusted comment that names the release's version. On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS`.
 
+A `-dev` release is signed with a throwaway key, so this check holds for stable releases only.
+
 ### On Linux, swapping between the two variants
 
 Both variants install as one package, the app's `productName` in lower case with dashes for spaces, at the same version. With either one already installed, `apt install ./unyt_..._linux.deb` finds that version present, changes nothing and exits 0. A graphical software centre installs through the same package manager, so it does nothing either. To actually swap, install the .deb directly:

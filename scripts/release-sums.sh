@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# The release's SHA256SUMS, and SHA256SUMS.minisig, its signature by the release key:
+# The release's SHA256SUMS, and SHA256SUMS.minisig, its signature by the key this run signs with:
 #   release-sums.sh <version> <productName> <pubkey> <provenance> <stage-1 sums> <asset-dir> <out-dir>
 # <provenance> holds the lines updater-provenance.sh wrote in this run's build jobs, <stage-1 sums> the
-# sha256sum lines stage 1 wrote for the files it publishes, and <pubkey> is the base64 public key the
-# app pins. <asset-dir> holds what the release carries of them: every .dmg, every artifact a .sig
-# signs, and the files stage 1 publishes. Build code wrote the records, so the release key signs only
-# a line that names an asset of this release and the bytes the release carries under that name.
+# sha256sum lines stage 1 wrote for the files it publishes, and <pubkey> is the base64 public key of
+# that key. <asset-dir> holds what the release carries of them: every .dmg, every artifact a .sig
+# signs, and the files stage 1 publishes. Build code wrote the records, so the key signs only a line
+# that names an asset of this release and the bytes the release carries under that name.
 # Env: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD. Needs minisign on PATH and the
 # signer that `npm ci --prefix scripts/tauri-signer` installs.
 #
@@ -25,7 +25,7 @@ ASSETS="${6:?$usage}"
 OUT="${7:?$usage}"
 
 [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] ||
-  fail "TAURI_SIGNING_PRIVATE_KEY is not set: the release environment holds it and its password"
+  fail "TAURI_SIGNING_PRIVATE_KEY is not set: a release tag's run takes it from the release environment, any other run makes one"
 sums="$(sort -k2,2 - "$PROVENANCE" <<<"$STAGE1")"
 if odd="$(LC_ALL=C grep -avE '^[0-9a-f]{64}  [^/[:space:]]+$' <<<"$sums")"; then
   fail "SHA256SUMS would carry lines that check no release asset: ${odd//$'\n'/ | }"
