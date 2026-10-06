@@ -30,42 +30,23 @@ A factory reset must clear items 3 to 7.
 
 ## Full wipe, in PowerShell
 
-Read the three names from `identity.json` first. On a machine without this repo, type the three values from it instead.
+From this repo's root, run:
 
 ```powershell
-$app = Get-Content .\identity.json -Raw | ConvertFrom-Json
-$id, $product, $binary = $app.identifier, $app.productName, $app.mainBinaryName
+pwsh -File scripts\windows-wipe.ps1
 ```
 
-Then run:
+The script reads `identifier` and `productName` from `identity.json`. It stops every process that runs from the app's install folders, removes items 1 and 3 to 7, and fails if a folder is still there. It touches nothing unless it can read both names and each is a plain name, so it cannot remove a parent folder that holds another app's data. Add `-WhatIf` to see what it would remove.
+
+On a machine without this repo, copy `scripts\windows-wipe.ps1` to it and give it the two names from `identity.json`:
 
 ```powershell
-Get-Process -ErrorAction SilentlyContinue |
-  Where-Object { $_.ProcessName -in @($binary, 'lair-keystore', 'holochain') } |
-  Stop-Process -Force
-
-Remove-Item -Recurse -Force -LiteralPath "$env:LOCALAPPDATA\$product" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force -LiteralPath "$env:APPDATA\$id" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force -LiteralPath "$env:LOCALAPPDATA\$id" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force -LiteralPath "$env:APPDATA\zo-el <joelulahanna@gmail.com>\$id" -ErrorAction SilentlyContinue
-
-Get-ChildItem "$env:LOCALAPPDATA\Temp" -Directory -Filter "$id*" -ErrorAction SilentlyContinue |
-  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-cmdkey /delete:$id 2>$null
+pwsh -File windows-wipe.ps1 -Identifier '<identifier>' -ProductName '<productName>'
 ```
 
 ## Verify
 
-All four lines must print `False`, and `cmdkey /list` must say "not found":
-
-```powershell
-Test-Path -LiteralPath "$env:LOCALAPPDATA\$product"
-Test-Path -LiteralPath "$env:APPDATA\$id"
-Test-Path -LiteralPath "$env:LOCALAPPDATA\$id"
-Test-Path -LiteralPath "$env:APPDATA\zo-el <joelulahanna@gmail.com>\$id"
-cmdkey /list:$id
-```
+The script fails if any of the app's folders is still there. Then `cmdkey /list:<identifier>` must say "not found".
 
 ## Differences from Linux
 

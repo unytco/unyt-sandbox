@@ -176,6 +176,10 @@ jobs:
           python -m pip install --quiet --disable-pip-version-check --only-binary=:all: pillow
           python -m unittest discover -v -s scripts/smoke/load-proving -t scripts/smoke/load-proving
 
+      - name: "the Windows wipe"
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/test-windows-wipe.ps1
+
   bash32:
     name: "the macOS-bound suites under bash 3.2"
     runs-on: ubuntu-latest
