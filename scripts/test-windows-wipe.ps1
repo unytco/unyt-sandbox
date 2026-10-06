@@ -55,7 +55,6 @@ function Test-Untouched {
   return @($kept | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -eq 0
 }
 function Invoke-Wipe {
-  # Returns the child's exit status, and leaves its output in $script:Output.
   $env:APPDATA = $roaming
   $env:LOCALAPPDATA = $local
   $script:Output = & $pwsh -NoProfile -File $wipe @args 2>&1 | Out-String
@@ -122,7 +121,7 @@ try {
   $script:Completed = $true
 }
 catch {
-  $script:Crash = ($_ | Out-String).TrimEnd()
+  $script:Crash = @($_.Exception.Message, $_.InvocationInfo.PositionMessage, $_.ScriptStackTrace) -join "`n"
 }
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
