@@ -71,11 +71,14 @@ foreach ($process in $processes) {
   }
 }
 
+# The Holochain data folder: app_dirs2 names it for the app crate's Cargo authors, "zo-el
+# <joelulahanna@gmail.com>", writing each character Windows may not take as ,<code>,.
+$holochain = Join-Path $env:LOCALAPPDATA 'zo-el ,60,joelulahanna,64,gmail.com,62,'
 $folders = @(
   (Join-Path $env:LOCALAPPDATA $ProductName),
   (Join-Path $env:APPDATA $Identifier),
   (Join-Path $env:LOCALAPPDATA $Identifier),
-  (Join-Path (Join-Path $env:APPDATA 'zo-el <joelulahanna@gmail.com>') $Identifier)
+  (Join-Path $holochain $Identifier)
 )
 $temp = Join-Path $env:LOCALAPPDATA 'Temp'
 if (Test-Path -LiteralPath $temp) {

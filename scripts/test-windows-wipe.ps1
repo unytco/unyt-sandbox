@@ -6,7 +6,8 @@
   pwsh -File scripts/test-windows-wipe.ps1
 
   Runs the script as docs/windows-wipe.md does, in a child pwsh whose APPDATA and LOCALAPPDATA are
-  folders of this test, beside another app's data that must survive. Runs on any platform.
+  folders of this test, beside another app's data that must survive. Runs on any platform, and names
+  only folders Windows allows.
 #>
 [CmdletBinding()]
 param()
@@ -19,17 +20,21 @@ $pwsh = (Get-Process -Id $PID).Path
 $script:Pass = 0
 $script:Fail = 0
 $script:Completed = $false
+$script:Crash = ''
+$script:Output = ''
 function Assert-True {
-  param([Parameter(Mandatory)][string]$What, [object]$Got)
+  param([Parameter(Mandatory)][string]$What, [object]$Got, [string]$Detail = '')
   if ($Got) { $script:Pass++; return }
   $script:Fail++
   [Console]::Error.WriteLine("FAIL  $What")
+  if ($Detail) { [Console]::Error.WriteLine(($Detail.TrimEnd() -split "`n" | ForEach-Object { "      $_" }) -join "`n") }
 }
 
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ("unyt-wipe-" + [guid]::NewGuid().ToString('n'))
 $roaming = Join-Path $root 'Roaming'
 $local = Join-Path $root 'Local'
-$holochain = Join-Path $roaming 'zo-el <joelulahanna@gmail.com>'
+# The app's Cargo authors, "zo-el <joelulahanna@gmail.com>", as app_dirs2 names its folder.
+$holochain = Join-Path $local 'zo-el ,60,joelulahanna,64,gmail.com,62,'
 $app = @{ identifier = 'co.example.wipe'; productName = 'Example Wipe' }
 
 function New-Machine {
@@ -45,9 +50,9 @@ function New-Machine {
   }
 }
 function Test-Untouched {
-  @((Join-Path $local 'Example Wipe'), (Join-Path $roaming 'co.example.wipe'), (Join-Path $holochain 'co.example.wipe'),
-    (Join-Path $roaming 'co.example.other'), (Join-Path $holochain 'co.example.other'), (Join-Path $local 'Temp/other')) |
-    ForEach-Object { Test-Path -LiteralPath $_ } | Where-Object { -not $_ } | Measure-Object | ForEach-Object { $_.Count -eq 0 }
+  $kept = @((Join-Path $local 'Example Wipe'), (Join-Path $roaming 'co.example.wipe'), (Join-Path $holochain 'co.example.wipe'),
+    (Join-Path $roaming 'co.example.other'), (Join-Path $holochain 'co.example.other'), (Join-Path $local 'Temp/other'))
+  return @($kept | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -eq 0
 }
 function Invoke-Wipe {
   # Returns the child's exit status, and leaves its output in $script:Output.
@@ -68,7 +73,7 @@ try {
   New-Item -ItemType Directory -Path $root -Force | Out-Null
   New-Machine
   $identity = Write-Identity ($app | ConvertTo-Json)
-  Assert-True 'a wipe that names the app removes its data' ((Invoke-Wipe -Identity $identity) -eq 0)
+  Assert-True 'a wipe that names the app removes its data' ((Invoke-Wipe -Identity $identity) -eq 0) $script:Output
   foreach ($gone in @((Join-Path $local 'Example Wipe'), (Join-Path $roaming 'co.example.wipe'),
       (Join-Path $local 'co.example.wipe'), (Join-Path $holochain 'co.example.wipe'), (Join-Path $local 'Temp/co.example.wipe-1'))) {
     Assert-True "and $gone is gone" (-not (Test-Path -LiteralPath $gone))
@@ -79,11 +84,12 @@ try {
   }
 
   New-Machine
-  Assert-True 'a wipe named by hand removes the same data' ((Invoke-Wipe -Identifier co.example.wipe -ProductName 'Example Wipe') -eq 0)
-  Assert-True 'and keeps the other app' (Test-Path -LiteralPath (Join-Path $roaming 'co.example.other'))
+  Assert-True 'a wipe named by hand removes the same data' (
+    (Invoke-Wipe -Identifier co.example.wipe -ProductName 'Example Wipe') -eq 0) $script:Output
+  Assert-True 'and keeps the other app' (Test-Path -LiteralPath (Join-Path $holochain 'co.example.other'))
 
   New-Machine
-  Assert-True 'a wipe asked what it would do removes nothing' ((Invoke-Wipe -Identity $identity -WhatIf) -eq 0)
+  Assert-True 'a wipe asked what it would do removes nothing' ((Invoke-Wipe -Identity $identity -WhatIf) -eq 0) $script:Output
   Assert-True 'and the machine is untouched' (Test-Untouched)
 
   $refusals = [ordered]@{
@@ -103,22 +109,26 @@ try {
   foreach ($case in $refusals.GetEnumerator()) {
     New-Machine
     $wipeArgs = $case.Value
-    Assert-True "a wipe given $($case.Key) is refused" ((Invoke-Wipe @wipeArgs) -ne 0)
-    Assert-True "and it removes nothing" (Test-Untouched)
+    Assert-True "a wipe given $($case.Key) is refused" ((Invoke-Wipe @wipeArgs) -ne 0) $script:Output
+    Assert-True "and it removes nothing" (Test-Untouched) $script:Output
   }
 
   New-Machine
   $env:APPDATA = ''
-  Assert-True 'a wipe on a machine with no APPDATA is refused' (
-    (& $pwsh -NoProfile -File $wipe -Identity $identity 2>&1 | Out-String) -match 'APPDATA is not set')
+  $script:Output = & $pwsh -NoProfile -File $wipe -Identity $identity 2>&1 | Out-String
+  Assert-True 'a wipe on a machine with no APPDATA is refused' ($script:Output -match 'APPDATA is not set') $script:Output
   Assert-True 'and it removes nothing' (Test-Untouched)
 
   $script:Completed = $true
 }
+catch {
+  $script:Crash = ($_ | Out-String).TrimEnd()
+}
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
   if (-not $script:Completed) {
-    [Console]::Error.WriteLine('::error::the wipe test exited before completing, so it proved nothing')
+    [Console]::Error.WriteLine("::error::the wipe test exited before completing, so it proved nothing: $script:Crash")
+    if ($script:Output) { [Console]::Error.WriteLine("the last wipe printed:`n$($script:Output.TrimEnd())") }
     exit 1
   }
 }

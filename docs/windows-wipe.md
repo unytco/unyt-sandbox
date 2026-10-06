@@ -10,7 +10,7 @@ The paths below use the names in this repo's `identity.json`: `<identifier>`, `<
 | 2 | `C:\Program Files\<productName>\` | App binaries (MSI install only) | Yes (MSI) |
 | 3 | `%APPDATA%\<identifier>\` | `network_metadata.json`, `log-config.json`, Stronghold `.hold` | No |
 | 4 | `%LOCALAPPDATA%\<identifier>\logs\` | Rotated `unyt.v*.log.*` | No |
-| 5 | `%APPDATA%\zo-el <joelulahanna@gmail.com>\<identifier>\<major.minor>\holochain\` | Conductor DBs, Lair keystore, happ bundles, UIs | No |
+| 5 | `%LOCALAPPDATA%\zo-el ,60,joelulahanna,64,gmail.com,62,\<identifier>\<major.minor>\holochain\` | Conductor DBs, Lair keystore, happ bundles, UIs | No |
 | 6 | `%LOCALAPPDATA%\Temp\<identifier>*` | Dev-mode temp dirs | No |
 | 7 | Windows Credential Manager, target `<identifier>`, user `lair-salt` | Lair password salt | No |
 
@@ -23,7 +23,7 @@ A factory reset must clear items 3 to 7.
 3. Delete these folders in File Explorer:
    - `%APPDATA%\<identifier>\`
    - `%LOCALAPPDATA%\<identifier>\`
-   - `%APPDATA%\zo-el <joelulahanna@gmail.com>\<identifier>\`
+   - `%LOCALAPPDATA%\zo-el ,60,joelulahanna,64,gmail.com,62,\<identifier>\`
    - Any `<identifier>*` under `%LOCALAPPDATA%\Temp\`
    - `%LOCALAPPDATA%\<productName>\EBWebView\`, if the uninstaller left it
 4. Open *Control Panel → Credential Manager → Windows Credentials*. Find the Generic Credential with target `<identifier>` (user `lair-salt`) and click **Remove**.
@@ -51,5 +51,5 @@ The script fails if any of the app's folders is still there. Then `cmdkey /list:
 ## Differences from Linux
 
 - The data is split across `%APPDATA%` (Roaming) and `%LOCALAPPDATA%`. There is no single root.
-- The Holochain data lives under a folder named for the app's **Cargo `authors`** (`zo-el <joelulahanna@gmail.com>\…`), not under the identifier folder. It is easy to miss.
+- The Holochain data lives under a folder named for the app's **Cargo `authors`**, `zo-el <joelulahanna@gmail.com>`, with each character Windows may not take written as `,<code>,`: `zo-el ,60,joelulahanna,64,gmail.com,62,`. It is not under the identifier folder, and it is easy to miss.
 - The Lair salt is in **Windows Credential Manager**, not on disk. If you skip it, the next install fails to unlock.
