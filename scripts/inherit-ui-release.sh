@@ -10,8 +10,7 @@
 #
 # Usage:  inherit-ui-release.sh <tag> <parent_tag>
 # Requires: gh (authenticated via GH_TOKEN) for the parent-release download from GITHUB_REPOSITORY,
-# and a nix dev shell (run inside `unyt/`) for the UI pack. The outer checkout must be fetch-depth 0
-# so the parent tag's submodule pointer and the DNA-source history are available.
+# and a nix dev shell (run inside `unyt/`) for the UI pack.
 set -euo pipefail
 
 TAG="${1:?usage: inherit-ui-release.sh <tag> <parent_tag>}"

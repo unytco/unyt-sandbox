@@ -36,8 +36,8 @@ gate_refuses() { # <description> <pubkey>
     bash "$here/updater-signing.sh" "$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$2\"}}}")"
 }
 
-check "an app with no updater releases unsigned" \
-  test "$(gate "$(conf '{"plugins":{}}')")" = "enabled=false"
+check "an app with no updater fails the release" \
+  refuses "has no plugins.updater, so the app could not update" gate "$(conf '{"plugins":{}}')"
 check "a config that does not parse fails the release" \
   refuses "parse error" bash "$here/updater-signing.sh" "$(conf '{"plugins":')"
 gate_refuses "an updater with no key fails the release" ""
@@ -57,20 +57,20 @@ gate_refuses "a key for another algorithm fails the release" \
 $({ printf XX; printf '%s' "$key_line" | base64 -d | tail -c +3; } | base64 -w0)")"
 check "a pinned key signs, and hands the key on" \
   test "$(gate "$(conf "{\"plugins\":{\"updater\":{\"pubkey\":\"$(pubkey ours)\"}}}")")" = \
-  "$(printf 'enabled=true\npubkey=%s' "$(pubkey ours)")"
+  "pubkey=$(pubkey ours)"
 
 cp "$here/fixtures/updater.rs" "$tmp/updater.rs"
 app_edit() { # <error text> <description> <sed edit of release_asset>
   sed "$3" "$tmp/updater.rs" >"$tmp/edited.rs"
-  check "$2" refuses "$1" bash "$here/updater-asset-names.sh" "$tmp/edited.rs"
+  check "$2" refuses "$1" bash "$here/updater-asset-names.sh" "$tmp/edited.rs" Unyt
 }
 app_table() { app_edit "differ from updater_assets" "$@"; }
 app_naming() { app_edit "builds its asset names otherwise" "$@"; }
 check "an app that names its assets as the release does passes" \
-  bash "$here/updater-asset-names.sh" "$tmp/updater.rs"
+  bash "$here/updater-asset-names.sh" "$tmp/updater.rs" Unyt
 sed '/^ *Some(format!($/{N;N;N;s/\n */ /g}' "$tmp/updater.rs" >"$tmp/reflowed.rs"
 check "an app that only lays its naming out otherwise passes" \
-  bash "$here/updater-asset-names.sh" "$tmp/reflowed.rs"
+  bash "$here/updater-asset-names.sh" "$tmp/reflowed.rs" Unyt
 app_naming "an app that orders the name otherwise fails the release" 's/{version}_{product}/{product}_{version}/'
 app_naming "an app that puts a space in the name fails the release" 's/-arc_{platform}/-arc_ {platform}/'
 app_naming "an app that names another version fails the release" \
@@ -81,7 +81,7 @@ mkdir -p "$tmp/renamed"
 cp "$here/updater-asset-names.sh" "$tmp/renamed/"
 sed 's/"unyt_\$1_\$2_/"unyt_$2_$1_/' "$here/updater-verify.sh" >"$tmp/renamed/updater-verify.sh"
 check "a release that renames its assets fails for an app that does not" \
-  refuses "builds its asset names otherwise" bash "$tmp/renamed/updater-asset-names.sh" "$tmp/updater.rs"
+  refuses "builds its asset names otherwise" bash "$tmp/renamed/updater-asset-names.sh" "$tmp/updater.rs" Unyt
 app_table "an app expecting another nsis asset name fails the release" 's/x64_windows\.exe/x64_windows-setup.exe/'
 app_table "an app that maps another bundle to an asset fails the release" 's/BundleType::Nsis/BundleType::Msi/'
 app_table "an app with no row for a release asset fails the release" '/BundleType::Deb/d'
@@ -91,7 +91,9 @@ app_table "an app that looks an asset up under another target fails the release"
 app_table "an app that looks an asset up under its target in another case fails the release" 's/"linux-x86_64"/"Linux-x86_64"/'
 sed '/fn release_asset(/,/^}/d' "$tmp/updater.rs" >"$tmp/untabled.rs"
 check "an app with no asset name table fails the release" \
-  refuses "has no release_asset table" bash "$here/updater-asset-names.sh" "$tmp/untabled.rs"
+  refuses "has no release_asset table" bash "$here/updater-asset-names.sh" "$tmp/untabled.rs" Unyt
+check "a release that names no product is refused" \
+  refuses "usage: updater-asset-names.sh <updater.rs> <productName>" bash "$here/updater-asset-names.sh" "$tmp/updater.rs"
 unrenamed='/^fn release_product(/,/^}/d; s/release_product(&app.package_info().name)/app.package_info().name.clone()/'
 sed "$unrenamed" "$tmp/updater.rs" >"$tmp/unrenamed.rs"
 check "an app needs no renaming for a product name GitHub keeps" bash "$here/updater-asset-names.sh" "$tmp/unrenamed.rs" Unyt

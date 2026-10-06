@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fails unless release_asset in the app names each asset as this pipeline signs and publishes it:
-#   updater-asset-names.sh <updater.rs> [<productName>]
+#   updater-asset-names.sh <updater.rs> <productName>
 # <updater.rs> is the app's src-tauri/src/updater.rs. An app that names an asset otherwise refuses
 # every update this release offers it. A <productName> GitHub renames in an asset's name has to be
 # renamed by the app as release_product renames it.
@@ -9,8 +9,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
 . "$here/updater-verify.sh"
 
-RS="${1:?usage: updater-asset-names.sh <updater.rs> [<productName>]}"
-PRODUCT="${2-}"
+usage="usage: updater-asset-names.sh <updater.rs> <productName>"
+RS="${1:?$usage}"
+PRODUCT="${2:?$usage}"
 
 pattern="$(asset_name '{version}' '{product}' '{}' '{platform}')"
 naming='fn release_asset(
@@ -40,7 +41,7 @@ mismatch="$(diff <(updater_assets | sort) <(echo "$app"))" ||
 [ "$(sed "1,/=> return None,/{/$row/d;}" <<<"$fn" | tokens)" = "$(tokens <<<"$naming")" ] ||
   fail "release_asset in $RS builds its asset names otherwise than asset_name in updater-verify.sh"
 
-[ -n "$PRODUCT" ] && [ "$(release_product "$PRODUCT")" != "$PRODUCT" ] || exit 0
+[ "$(release_product "$PRODUCT")" != "$PRODUCT" ] || exit 0
 renaming="fn release_product(name: &str) -> String {
     name.replace([' ', '(', ')', '[', ']', '{', '}'], \".\")
         .replace(\"..\", \".\")

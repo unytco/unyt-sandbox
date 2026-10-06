@@ -26,7 +26,6 @@ jobs:
       appVersion: ${{ steps.version.outputs.APP_VERSION }}
       productName: ${{ steps.product.outputs.name }}
       msiVersion: ${{ steps.msi.outputs.MSI_VERSION }}
-      signedUpdates: ${{ steps.updater.outputs.enabled }}
       updaterPubkey: ${{ steps.updater.outputs.pubkey }}
       startedAt: ${{ steps.start.outputs.at }}
       happSha256: ${{ steps.happ.outputs.sha256 }}
@@ -39,8 +38,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history: a UI release diffs the parent tag's submodule pointer.
-          fetch-depth: 0
 
       - name: No code that builds the app can reach a credential that can change a release
         run: bash scripts/check-build-credentials.sh .github/workflows/*.y*ml
@@ -85,12 +82,11 @@ jobs:
           name="$(jq -er .productName tauri.merged.json)"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
-      - name: Decide whether this release signs its updates
+      - name: The key the release signs its updates for
         id: updater
         run: bash scripts/updater-signing.sh tauri.merged.json >> "$GITHUB_OUTPUT"
 
       - name: The release names each updater asset as the app expects
-        if: steps.updater.outputs.enabled == 'true'
         env:
           PRODUCT: ${{ steps.product.outputs.name }}
         run: bash scripts/updater-asset-names.sh unyt/src-tauri/src/updater.rs "$PRODUCT"
@@ -388,7 +384,6 @@ jobs:
       - name: Turn on signed updater artifacts
         # Written here, never committed: the bundler refuses to build without the signing key once
         # this is on, and no local build holds it.
-        if: needs.build-happ.outputs.signedUpdates == 'true'
         shell: bash
         run: |
           conf=unyt/src-tauri/tauri.conf.json
@@ -398,7 +393,6 @@ jobs:
       - name: Sign the build with a key that dies with this job
         # Nothing trusts the bundler's signature: updater-manifests signs every artifact again with the
         # release key, against this job's record. So no build script ever runs beside the release key.
-        if: needs.build-happ.outputs.signedUpdates == 'true'
         shell: bash
         working-directory: unyt
         run: |
@@ -455,7 +449,6 @@ jobs:
 
       # A run artifact, not a release asset, so editing the release cannot change the record.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: needs.build-happ.outputs.signedUpdates == 'true'
         with:
           name: updater-provenance-${{ strategy.job-index }}
           path: updater-provenance.sha256
@@ -499,7 +492,7 @@ jobs:
     name: "Stage 2: updater manifests"
     needs: [build-happ, publish-builds]
     # Past a failed build too, so the platform it left unsigned is named rather than skipped.
-    if: ${{ !cancelled() && needs.publish-builds.result == 'success' && needs.build-happ.outputs.signedUpdates == 'true' }}
+    if: ${{ !cancelled() && needs.publish-builds.result == 'success' }}
     # The one job that holds the release key: its secrets live in this environment alone.
     environment: release
     permissions:
@@ -576,10 +569,10 @@ jobs:
     # replace the build records the signing trusts. A release whose signing failed is re-tagged, not
     # re-run.
     needs: [publish-happ, publish-builds, updater-manifests]
-    # Not gated on the build job: one failed row would suppress every lane. Where the release signs its
-    # updates, a failed row fails the signing and so skips the smoke.
+    # Not gated on the build job: one failed row would suppress every lane. A failed row fails the
+    # signing, and so skips the smoke.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
-    if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result != 'failure' }}
+    if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result == 'success' }}
     permissions:
       contents: write
     runs-on: ubuntu-22.04

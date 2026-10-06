@@ -16,19 +16,20 @@ What is still out of CI's reach is the **machine**. A GitHub-hosted runner is a 
 
 Start from a VM snapshot taken before any Unyt build was ever installed, and roll back to it afterwards. If you are reusing a machine instead, reset it first with [`windows-wipe.md`](windows-wipe.md) — the uninstaller deliberately leaves app data, logs, the Holochain directory and the Lair salt behind, so an uninstall alone does not give you a clean machine.
 
-1. **Copy the installer in.** Take `unyt_<version>_Unyt.Sandbox_default-arc_x64_windows.exe` from the release and copy it to the VM. Do not build on the VM: the artifact under test is the one users download.
+1. **Copy the installer in.** Take `unyt_<version>_<product>_default-arc_x64_windows.exe` from the release, where `<product>` is `productName` in [`identity.json`](../identity.json) with each space as a dot, and copy it to the VM. Do not build on the VM: the artifact under test is the one users download.
 2. **Note what SmartScreen does.** Record whether it warns, blocks, or stays quiet, and how many clicks it takes to proceed. This is the user's first impression and it changes the day the installer is signed.
 3. **Install by double-clicking**, the way a user would — not with `/S`. CI already covers the silent path.
 4. **Launch it.** Watch for a window, then for the window to paint. A window that opens black is a UI-bundle failure, not a slow start — and one CI would have caught on a runner, so on this machine it points at WebView2 or a missing redistributable rather than at the build.
-5. **Read the log.** There is no console: release builds set `windows_subsystem = "windows"`, so redirected output is empty. The log is at `%LOCALAPPDATA%\co.unyt.unyt.sandbox\logs\unyt.v*.log.*`:
+5. **Read the log.** There is no console: release builds set `windows_subsystem = "windows"`, so redirected output is empty. The log is at `%LOCALAPPDATA%\<identifier>\logs\unyt.v*.log.*`, where `<identifier>` is `identifier` in [`identity.json`](../identity.json):
 
    ```powershell
-   Get-Content (Get-ChildItem "$env:LOCALAPPDATA\co.unyt.unyt.sandbox\logs\unyt.v*.log.*" |
+   $id = '<identifier>'
+   Get-Content (Get-ChildItem "$env:LOCALAPPDATA\$id\logs\unyt.v*.log.*" |
      Sort-Object LastWriteTime | Select-Object -Last 1) -Tail 80
    ```
 
    A healthy first run reaches one of the states [`../scripts/smoke/common.sh`](../scripts/smoke/common.sh) accepts — that file is the authority on which states are healthy and why, and the Linux lane gates on the same set. Leave it running long enough to outlast a conductor-heartbeat retry.
-6. **Uninstall** via *Settings → Apps → Unyt Sandbox*, and confirm the program is gone.
+6. **Uninstall** via *Settings → Apps → `<productName>`*, with `productName` from [`identity.json`](../identity.json), and confirm the program is gone.
 7. **Roll the VM back** to the snapshot.
 
 ## What to record

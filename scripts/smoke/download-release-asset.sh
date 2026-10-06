@@ -45,8 +45,10 @@ else
   fi
 fi
 
-# Assets are matched by SUFFIX so the caller never has to know the version: the
-# release names them unyt_<version>_Unyt_<arc>-arc_<arch>_<platform><ext>.
+# Assets are matched by SUFFIX so the caller never has to know the version or
+# the product: the release names them
+# unyt_<version>_<product>_<arc>-arc_<arch>_<platform><ext>, where <product> is
+# identity.json's productName as GitHub renames it.
 matches="$(gh api "repos/$REPO/releases/$release_id" \
   --jq "[.assets[] | select(.name | endswith(\"$SUFFIX\"))] | .[] | \"\(.id)\t\(.name)\t\(.size)\"")"
 match_count="$(printf '%s' "$matches" | grep -c . || true)"

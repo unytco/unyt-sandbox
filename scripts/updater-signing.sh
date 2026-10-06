@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Whether this release signs its updates, as $GITHUB_OUTPUT lines:
-#   updater-signing.sh <tauri config>      prints  enabled=true|false  [pubkey=<key>]
-# <tauri config> is the app's Tauri configuration with the released app's identity merged over it,
-# as `release-app.sh identity` writes it, so the key is the one the build pins.
-#
-# An app with no updater config releases unsigned. One with it updates in-app only to a release
-# signed with its pinned key, so a release that pins no usable key fails here.
+# The key this release signs its updates for, as a $GITHUB_OUTPUT line:
+#   updater-signing.sh <tauri config>      prints  pubkey=<key>
+# <tauri config> is the app's Tauri configuration with identity.json merged over it, as
+# `release-app.sh identity` writes it, so the key is the one the build pins. The app updates in-app
+# only to a release signed with it, so a release that pins no usable key fails here.
 set -euo pipefail
 
 CONF="${1:?usage: updater-signing.sh <tauri config>}"
@@ -16,10 +14,7 @@ fail() {
 }
 
 updater="$(jq -c '.plugins.updater // empty' "$CONF")"
-if [ -z "$updater" ]; then
-  echo "enabled=false"
-  exit 0
-fi
+[ -n "$updater" ] || fail "$CONF has no plugins.updater, so the app could not update: identity.json pins its key"
 
 # Base64 over a minisign public key file: a comment line, then base64 of "Ed", an 8-byte key id and
 # the 32-byte key.
@@ -35,5 +30,4 @@ pubkey="$(jq -r '.pubkey // empty' <<<"$updater")"
 is_minisign_pubkey "$pubkey" ||
   fail "plugins.updater.pubkey in $CONF is not a minisign public key: pin the one \`cargo tauri signer generate\` printed"
 
-echo "enabled=true"
 echo "pubkey=$pubkey"

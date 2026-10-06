@@ -92,7 +92,7 @@ check_network() {
   done < <(jq -r '.build | objects | to_entries[] | [.key, (.value | tostring)] | @tsv' "$NETWORK")
 }
 
-checked() { # the files are well formed
+checked() {
   local file
   [ -f "$IDENTITY" ] && [ -f "$NETWORK" ] || fail "this repo has no identity.json and network.json at its root"
   for file in "$IDENTITY" "$NETWORK"; do
@@ -103,7 +103,7 @@ checked() { # the files are well formed
   report
 }
 
-set_values() { # refuses a value the files have not set yet
+set_values() {
   local file path value
   for file in "$IDENTITY" "$NETWORK"; do
     while IFS=$'\t' read -r path value; do

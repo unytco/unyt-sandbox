@@ -39,6 +39,10 @@ else
     <<<"$waiting"
 fi
 
+check "the README checks downloads against the key identity.json pins" test \
+  "$(sed -n 's/^minisign -VHm SHA256SUMS -P //p' "$here/../README.md")" = \
+  "$(jq -r .plugins.updater.pubkey "$here/../identity.json" | base64 -d | sed -n 2p)"
+
 # A repo of fixture files to break: release-app.sh reads identity.json and network.json beside scripts/.
 repo="$tmp/repo"
 mkdir -p "$repo/scripts"
@@ -174,7 +178,7 @@ check "the merge keeps what the identity leaves out" \
 check "the merge replaces an array whole, as tauri does" test "$(merged '.app.windows | length')" = 1
 check "the merge drops what the identity sets to null, as tauri does" test "$(merged '.build | has("devUrl")')" = false
 signs() { bash "$repo/scripts/updater-signing.sh" "$tmp/merged.json"; }
-check "the merged app signs with the key the identity pins" test "$(signs)" = "$(printf 'enabled=true\npubkey=%s' "$key")"
+check "the merged app signs with the key the identity pins" test "$(signs)" = "pubkey=$key"
 edit identity.json '.plugins.updater.pubkey = "TO BE SET: the key"'
 check "an identity that has not set its key still merges, and its release does not sign" \
   eval 'fixture identity "$tmp/app" "$tmp/merged.json" && ! signs >/dev/null 2>&1'

@@ -43,7 +43,7 @@ probe rust "the app's CI builds with the Rust the release builds with" bash "$he
 if refusal="$(bash "$here/release-app.sh" build-env 2>&1 >/dev/null)"; then
   line ok release "identity.json and network.json set every value: $product on $(jq -r .name "$here/../network.json")"
   probe signing "signs its updates with the key identity.json pins" \
-    grep -qx enabled=true <(bash "$here/updater-signing.sh" "$tmp/merged.json" 2>&1)
+    bash "$here/updater-signing.sh" "$tmp/merged.json"
 elif [ -n "$refusal" ] && ! grep -vqE '^::error::(identity|network)\.json has not set [^ ]+ yet: TO BE SET' <<<"$refusal"; then
   while IFS= read -r unset; do line waits release "${unset#::error::}"; done <<<"$refusal"
 else
