@@ -439,6 +439,10 @@ sed -i 's/release_product(&app.package_info().name)/app.package_info().name.clon
 check "the probe fails an app tree that looks its updates up under another name than the release's" \
   probe_says 1 '^FAIL +assets'
 cp "$here/fixtures/updater.rs" "$probe_app/src-tauri/src/"
+mv "$repo/scripts/release-app.sh" "$repo/scripts/release-app.real.sh"
+printf '#!/usr/bin/env bash\n[ "$1" != build-env ] || exit 1\nexec bash "${0%%.sh}.real.sh" "$@"\n' >"$repo/scripts/release-app.sh"
+check "the probe fails a release refused without a reason" probe_says 1 '^FAIL +release'
+mv "$repo/scripts/release-app.real.sh" "$repo/scripts/release-app.sh"
 rm "$probe_app/Cargo.lock"
 check "the probe fails an app tree the release cannot write its version into" probe_says 1 '^FAIL +version'
 
@@ -490,6 +494,21 @@ unnamed_launch() {
   env -u UNYT_BUNDLE_ID UNYT_SMOKE_STATE="$tmp/smoke-state" DOCKER_CALLS="$tmp/docker.calls" PATH="$tmp/bin:$PATH" \
     bash "$tmp/unnamed/scripts/smoke/run-smoke.sh" --exec launch
 }
+mkdir "$tmp/no-jq"
+for dir in ${PATH//:/ }; do
+  for tool in "$dir"/*; do
+    name="${tool##*/}"
+    [ "$name" = jq ] || [ ! -x "$tool" ] || [ -L "$tmp/no-jq/$name" ] || ln -s "$tool" "$tmp/no-jq/$name"
+  done
+done
+ln -sf "$tmp/bin/docker" "$tmp/no-jq/docker"
+no_jq_launch() {
+  rm -f "$tmp/docker.calls"
+  env -u UNYT_BUNDLE_ID UNYT_SMOKE_STATE="$tmp/smoke-state" DOCKER_CALLS="$tmp/docker.calls" PATH="$tmp/no-jq" \
+    bash "$here/smoke/run-smoke.sh" --exec launch
+}
+check "the smoke says so when it needs jq to read the app's identifier" eval '
+  refuses "reading identity.json'"'"'s identifier needs jq" no_jq_launch && ! grep -q "^exec .* --only launch " "$tmp/docker.calls"'
 check "the smoke runs no check when identity.json names no app" eval '
   refuses "identity.json names no identifier" unnamed_launch && ! grep -q "^exec .* --only launch " "$tmp/docker.calls"'
 

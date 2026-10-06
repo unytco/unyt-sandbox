@@ -186,9 +186,13 @@ cmd_exec() { # <check-id>
     return 1
   fi
 
-  local bundle
-  bundle="${UNYT_BUNDLE_ID:-$(jq -er .identifier "$here/../../identity.json")}" ||
-    { echo "::error::UNYT_BUNDLE_ID is unset and identity.json names no identifier" >&2; return 2; }
+  local bundle="${UNYT_BUNDLE_ID:-}"
+  if [ -z "$bundle" ]; then
+    command -v jq >/dev/null ||
+      { echo "::error::UNYT_BUNDLE_ID is unset, and reading identity.json's identifier needs jq" >&2; return 2; }
+    bundle="$(jq -er .identifier "$here/../../identity.json")" ||
+      { echo "::error::UNYT_BUNDLE_ID is unset and identity.json names no identifier" >&2; return 2; }
+  fi
   local -a run=(docker exec
     -e "UNYT_BUNDLE_ID=$bundle"
     -e UNYT_SMOKE_STATE=/tmp/unyt-smoke-state
