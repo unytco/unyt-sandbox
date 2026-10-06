@@ -27,6 +27,7 @@ Application-level changes belong in
 - **A release's notes name the network it was built for.**
 - **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
 - **No job that builds the app holds a credential that can change a release, and no job that runs a built installer holds a token that can write.**
+- **The smoke runs only installers whose checksums match the release's signed `SHA256SUMS`.**
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
 - **A pre-release (a `-dev.*` tag) is never offered to users as an update.**
 - **Installers and unyt_cli build with Rust 1.98.1, and a release stops when the app's CI pins another.**

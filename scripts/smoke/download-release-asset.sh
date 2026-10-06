@@ -9,7 +9,7 @@
 # is readable only with a token that can write, which no smoke job holds, so
 # UNYT_SMOKE_FROM names a directory to take the asset from instead: the
 # installers the release run took back from its draft, as download-artifact left
-# them.
+# them, beside the SHA256SUMS that run checked them against.
 set -euo pipefail
 
 REF="${1:?usage: download-release-asset.sh <release-id-or-tag> <asset-suffix> <out-dir>}"
@@ -24,9 +24,26 @@ if [ -n "${UNYT_SMOKE_FROM:-}" ]; then
     ls "$UNYT_SMOKE_FROM" >&2 || true
     exit 1
   fi
+  name="$(basename "${found[0]}")"
   mkdir -p "$OUT_DIR"
   cp "${found[0]}" "$OUT_DIR/"
-  echo "$OUT_DIR/$(basename "${found[0]}")"
+  [ -f "$UNYT_SMOKE_FROM/SHA256SUMS" ] || {
+    echo "::error::$UNYT_SMOKE_FROM has no SHA256SUMS, so nothing says $name is what the release signed" >&2
+    exit 1
+  }
+  want="$(awk -v name="$name" '$2 == name { print $1 }' "$UNYT_SMOKE_FROM/SHA256SUMS")"
+  [ -n "$want" ] || {
+    echo "::error::$name came from the run's installers, but SHA256SUMS does not name it" >&2
+    exit 1
+  }
+  if command -v sha256sum >/dev/null; then got="$(sha256sum <"$OUT_DIR/$name")"; else
+    got="$(shasum -a 256 <"$OUT_DIR/$name")"
+  fi
+  if [ "${got%% *}" != "$want" ]; then
+    echo "::error::$name is not the build the release's SHA256SUMS names" >&2
+    exit 1
+  fi
+  echo "$OUT_DIR/$name"
   exit 0
 fi
 

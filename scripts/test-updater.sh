@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # updater-signing.sh, updater-asset-names.sh, updater-provenance.sh, updater-sign.sh,
-# updater-manifests.sh, release-sums.sh, check-dna-pin.sh and check-sha256.sh against fixtures signed with
-# throwaway keys, and
+# updater-manifests.sh, release-sums.sh, check-release-sums.sh, check-dna-pin.sh and check-sha256.sh
+# against fixtures signed with throwaway keys, and
 # check-build-credentials.sh against the workflows. Needs minisign on PATH (install-minisign.sh), node for
 # the Tauri signer, and mikefarah's yq v4.
 set -euo pipefail
@@ -486,19 +486,19 @@ unsigned() { refuses "$1" summed "$tmp/unsums$((pass + fail))" "${@:2}" && [ -z 
 check "a key the app does not pin signs no SHA256SUMS" \
   unsigned "does not verify SHA256SUMS with the key the app pins" "$stage1_sums" build
 check "no stage 1 sums signs no SHA256SUMS" unsigned "5: usage:" ""
-published_with() { # <edit of the published copy>: prints the copy's path
-  local dir="$tmp/published$((pass + fail))"
-  cp -r "$tmp/published" "$dir" && (cd "$dir" && eval "$1") && echo "$dir"
+copied() { # <dir> <edit of a copy of it>: prints the copy's path
+  local dir="$1.$((pass + fail))"
+  cp -r "$1" "$dir" && (cd "$dir" && eval "$2") && echo "$dir"
 }
 check "a stage 1 file changed on the release signs no SHA256SUMS" \
   unsigned "unyt.happ on the release is not the build this run recorded" "$stage1_sums" release "" \
-  "$(published_with 'printf x >>unyt.happ')"
+  "$(copied "$tmp/published" 'printf x >>unyt.happ')"
 check "a dmg changed on the release signs no SHA256SUMS" \
   unsigned "$(asset zero x64_darwin.dmg) on the release is not the build this run recorded" "$stage1_sums" release "" \
-  "$(published_with "printf x >>$(asset zero x64_darwin.dmg)")"
+  "$(copied "$tmp/published" "printf x >>$(asset zero x64_darwin.dmg)")"
 check "a stage 1 file missing from the release signs no SHA256SUMS" \
   unsigned "unyt_cli, which this run recorded building, is not on the release" "$stage1_sums" release "" \
-  "$(published_with 'rm unyt_cli')"
+  "$(copied "$tmp/published" 'rm unyt_cli')"
 grep -vF " $(asset default aarch64_darwin.dmg)" "$tmp/bundled.provenance" >"$tmp/no-dmg.provenance"
 check "a dmg on the release that no build of this run recorded signs no SHA256SUMS" \
   unsigned "$(asset default aarch64_darwin.dmg) is on the release, but no build of this run recorded it" \
@@ -517,6 +517,45 @@ check "a line that checks no asset signs no SHA256SUMS" unsigned "would carry li
 utf8_unsigned() { LANG=C.UTF-8 LC_ALL=C.UTF-8 unsigned "$@"; }
 check "a line with a byte no UTF-8 reads signs no SHA256SUMS" utf8_unsigned "would carry lines that check no release asset" \
   "$(sed $'s/ unyt_cli$/ unyt_cli \xff/' <<<"$stage1_sums")"
+
+# The installers draft-installers takes back from the draft for the smoke, checked against SHA256SUMS.
+mkdir "$tmp/draft"
+cp "$tmp/bundled"/*.{deb,AppImage,exe,msi,dmg} "$tmp/draft/"
+handed() { # <sums-dir> [<installer-dir> [<pubkey>]]
+  bash "$here/check-release-sums.sh" 1.2.3 "${3:-$release_pubkey}" "$1" "${2:-$tmp/draft}"
+}
+resigned() { # <key> [<version>]: a shell edit that signs SHA256SUMS again, with that key
+  echo "with_key $1 tauri signer sign --app-version ${2:-1.2.3} SHA256SUMS >/dev/null && base64 -d <SHA256SUMS.sig >SHA256SUMS.minisig && rm SHA256SUMS.sig"
+}
+check "the installers SHA256SUMS names, signed with the key the app pins, are handed to the smoke" handed "$tmp/sums"
+check "a tampered installer is not handed to the smoke" \
+  refuses "$(asset zero x64_windows.exe) on the draft is not the build SHA256SUMS names" \
+  handed "$tmp/sums" "$(copied "$tmp/draft" "printf x >>$(asset zero x64_windows.exe)")"
+check "an installer SHA256SUMS does not name is not handed to the smoke" \
+  refuses "$(asset default x64_darwin.dmg) is on the draft, but SHA256SUMS does not name it" \
+  handed "$(copied "$tmp/sums" "sed -i '/ $(asset default x64_darwin.dmg)\$/d' SHA256SUMS && $(resigned release)")"
+check "SHA256SUMS signed with a key the app does not pin hands nothing over" \
+  refuses "the draft's SHA256SUMS.minisig does not sign its SHA256SUMS for 1.2.3" handed "$(copied "$tmp/sums" "$(resigned build)")"
+check "SHA256SUMS changed to name a tampered installer hands nothing over" \
+  refuses "the draft's SHA256SUMS.minisig does not sign its SHA256SUMS for 1.2.3" \
+  handed "$(copied "$tmp/sums" "sed -i 's/^[0-9a-f]*\(  $(asset default amd64_linux.deb)\)\$/$(printf x | sha256sum | cut -d' ' -f1)\1/' SHA256SUMS")" \
+  "$(copied "$tmp/draft" "printf x >$(asset default amd64_linux.deb)")"
+check "a garbled signature hands nothing over" \
+  refuses "the draft's SHA256SUMS.minisig does not sign its SHA256SUMS for 1.2.3" handed "$(copied "$tmp/sums" "sed -i '2s/.\\{4\\}$//' SHA256SUMS.minisig")"
+check "SHA256SUMS signed for another version hands nothing over" \
+  refuses "the draft's SHA256SUMS.minisig does not sign its SHA256SUMS for 1.2.3" handed "$(copied "$tmp/sums" "$(resigned release 1.2.2)")"
+check "a signature of another file with SHA256SUMS's bytes hands nothing over" \
+  refuses "SHA256SUMS.minisig is signed for another file" \
+  handed "$(copied "$tmp/sums" "cp SHA256SUMS other && with_key release tauri signer sign --app-version 1.2.3 other >/dev/null && base64 -d <other.sig >SHA256SUMS.minisig")"
+check "an unsigned SHA256SUMS hands nothing over" \
+  refuses "the release has no SHA256SUMS.minisig" handed "$(copied "$tmp/sums" "rm SHA256SUMS.minisig")"
+check "a release without SHA256SUMS hands nothing over" \
+  refuses "the release has no SHA256SUMS" handed "$(copied "$tmp/sums" "rm SHA256SUMS")"
+mkdir "$tmp/empty-draft"
+check "a draft with no installers hands nothing over" \
+  refuses "no installers in $tmp/empty-draft" handed "$tmp/sums" "$tmp/empty-draft"
+check "SHA256SUMS a dev run signed with the key it made is checked against that key" \
+  handed "$(copied "$tmp/sums" "$(resigned build)")" "$tmp/draft" "$(cat "$tmp/build.key.pub")"
 
 # check-dna-pin.sh beside a stand-in for nix that runs the command it is handed, and records that it ran.
 mkdir -p "$tmp/nix" "$tmp/app/scripts" "$tmp/app/dnas/alliance"

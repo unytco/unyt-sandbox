@@ -568,8 +568,8 @@ jobs:
     # After the signing, and never after it failed: the smoke runs the release's installers, which could
     # replace the build records the signing trusts. A release whose signing failed is re-tagged, not
     # re-run.
-    needs: [publish-happ, publish-builds, updater-manifests]
-    # Not gated on the build job: one failed row would suppress every lane. A failed row fails the
+    needs: [build-happ, publish-happ, publish-builds, updater-manifests]
+    # Not gated on the build rows: one failed row would suppress every lane. A failed row fails the
     # signing, and so skips the smoke.
     # !cancelled(), not always(): a cancelled run shouldn't start a 30-min sweep.
     if: ${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result == 'success' }}
@@ -577,13 +577,31 @@ jobs:
       contents: write
     runs-on: ubuntu-22.04
     steps:
-      - name: Download the draft's installers
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install minisign
+        run: bash scripts/install-minisign.sh
+
+      - name: Download the draft's installers, and SHA256SUMS with its signature
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir installers --pattern '*.deb' \
             --pattern '*.AppImage' --pattern '*.exe' --pattern '*.msi' --pattern '*.dmg'
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir sums --pattern SHA256SUMS \
+            --pattern SHA256SUMS.minisig
+
+      # The smoke checks each installer it takes against this SHA256SUMS.
+      - name: Hand over only the installers SHA256SUMS names, signed by the key the app pins
+        env:
+          APP_VERSION: ${{ needs.build-happ.outputs.appVersion }}
+          PUBKEY: ${{ needs.build-happ.outputs.updaterPubkey }}
+        run: |
+          bash scripts/check-release-sums.sh "$APP_VERSION" "$PUBKEY" sums installers
+          cp sums/SHA256SUMS installers/
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
