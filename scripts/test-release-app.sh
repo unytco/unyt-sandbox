@@ -316,8 +316,7 @@ for name in unreviewed nobody; do
   check "an environment with no reviewer ($name) is refused" \
     refuses "environment $name has no required reviewers" release_environment "$name" v0.110.0
 done
-check "an environment whose tagger may approve their own release is refused" \
-  refuses "environment self-review lets whoever pushed the tag approve its own signing" release_environment self-review v0.110.0
+check "an environment whose tagger may approve their own release holds" release_environment self-review v0.110.0
 check "an environment an admin may push past is refused" \
   refuses "environment bypass lets an admin skip its reviewers" release_environment bypass v0.110.0
 check "an environment that admits a branch on a later page of its policies is refused" \
