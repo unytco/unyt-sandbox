@@ -24,7 +24,7 @@ merge='def merge_patch($patch):
     reduce ($patch | to_entries[]) as $e (if type == "object" then . else {} end;
       if $e.value == null then del(.[$e.key]) else .[$e.key] |= merge_patch($e.value) end)
   else $patch end;'
-origin='https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}(:[1-9][0-9]{0,4})?'
+origin='https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9](:[1-9][0-9]{0,4})?'
 url_re="^$origin(/[!-~]*)?\$"
 origin_re="^$origin/?\$"
 values='["UNYT_JOINING_SERVICE_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL"]'
@@ -44,7 +44,7 @@ controls() { # <file>: queues each string in it that holds a control character
 
 formed() { # <jq path> <regex> <what it is not>: queues identity.json's value at the path unless it matches
   local value
-  value="$(jq -r "$1 | strings" "$IDENTITY")"
+  value="$(jq -r "try ($1 | strings) catch empty" "$IDENTITY")"
   [[ "$value" == "TO BE SET"* || "$value" =~ $2 ]] || problems+=("identity.json has $1 '$value', which is no $3")
 }
 

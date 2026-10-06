@@ -114,7 +114,8 @@ for bad in UNYT_JOINING_SERVICE_URL=http://joining.example VITE_MIGRATION_SERVIC
   VITE_HOT_LOCK_VAULT=0xE3E064e3C2EEf66cb93dA8D8114F5084E92F48D6 VITE_ETH_NETWORK=holesky \
   'VITE_HOT_BRIDGE_URL=https://hot-bridge.example/ TO BE SET' UNYT_JOINING_SERVICE_URL=https://. \
   VITE_MIGRATION_SERVICE_URL=https://migration..example VITE_HOT_BRIDGE_URL=https://- \
-  UNYT_JOINING_SERVICE_URL=https://joining.example:0 "VITE_HOT_LOCK_VAULT=0x$(printf '%040d' 0)"; do
+  UNYT_JOINING_SERVICE_URL=https://joining.example:0 "VITE_HOT_LOCK_VAULT=0x$(printf '%040d' 0)" \
+  UNYT_JOINING_SERVICE_URL=https://joining.1 UNYT_JOINING_SERVICE_URL=https://joining.example-; do
   broken "a network whose ${bad%%=*} is ${bad#*=} is refused" "builds with ${bad%%=*} ${bad#*=}, which is no value it can take" \
     network.json ".build.${bad%%=*} = \"${bad#*=}\""
 done
@@ -127,6 +128,12 @@ broken "a network with no name is refused" "network.json names no network" netwo
 fixtures
 edit network.json '.build.VITE_ETH_NETWORK = "mainnet"'
 check "a network on Ethereum mainnet builds" eval 'grep -qx VITE_ETH_NETWORK=mainnet <<<"$(fixture build-env)"'
+fixtures
+edit network.json '.build.UNYT_JOINING_SERVICE_URL = "https://joining.xn--p1ai"'
+check "a server under an internationalized top level domain builds" quietly fixture build-env
+for shape in '.plugins["deep-link"].desktop.schemes = "example-app"' '.plugins = []'; do
+  broken "an identity shaped as $shape is refused with a reason" "::error::identity.json" identity.json "$shape"
+done
 broken "a value with a line break is refused" "network.json has a control character in build.UNYT_JOINING_SERVICE_URL" \
   network.json '.build.UNYT_JOINING_SERVICE_URL = "https://joining.example\nUNYT_RELEASE_REPO=evil/repo"'
 for placeholder in "TO BE SET: the bridge" "TO BE SET"; do
@@ -386,6 +393,7 @@ reads_all
 cp "$here/release-probe.sh" "$here/set-app-version.sh" "$here/check-version-contract.sh" "$here/updater-asset-names.sh" \
   "$repo/scripts/"
 mkdir -p "$probe_app/scripts" "$probe_app/dnas/alliance" "$probe_app/.github/workflows" "$repo/.github/workflows"
+cp "$here/check-dna-pin.sh" "$repo/scripts/"
 touch "$probe_app/scripts/check-dna-hashes.sh" "$probe_app/dnas/alliance/build-hashes"
 rust_ci() { # <toolchain>: an app CI and a release workflow on that Rust
   printf 'jobs:\n  t:\n    steps:\n      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772\n        with:\n          toolchain: %s\n' \
@@ -422,7 +430,7 @@ check "the probe fails an app tree that does not read the repo it updates from" 
 reads_all
 rm "$probe_app/dnas/alliance/build-hashes"
 check "the probe fails an app tree a migration release cannot hold to its DNA hashes" \
-  probe_says 1 'the app has no dnas/alliance/build-hashes'
+  probe_says 1 'the pinned app has no dnas/alliance/build-hashes'
 touch "$probe_app/dnas/alliance/build-hashes"
 rust_ci 1.2.4
 check "the probe fails an app tree whose CI builds with another Rust" probe_says 1 '^FAIL +rust'
@@ -542,13 +550,17 @@ check "the release key is a secret of that environment, and only the signing job
   .jobs["updater-manifests"].environment == "release"
   and ([.jobs | to_entries[] | select(.value | tojson | test("secrets\\.TAURI_SIGNING")) | .key] == ["updater-manifests"])'
 check "no step splices an expression into its script" wired '[.jobs[].steps[]?.run // empty | select(test("\\$\\{\\{"))] == []'
-own_names() { # what names this repo, its app or its network, one per line
+own_names() { # <repo root>: what names that repo, its app or its network, one per line
   printf '%s\n' unytco/unyt-sandbox co.unyt. ${GITHUB_REPOSITORY:+"$GITHUB_REPOSITORY"}
-  jq -r .identifier "$here/../identity.json"
-  jq -r '.build | del(.VITE_ETH_NETWORK) | .[]' "$here/../network.json"
+  jq -r '(.identifier // empty), (.build // {} | del(.VITE_ETH_NETWORK) | .[])
+    | strings | select(startswith("TO BE SET") | not)' "$1/identity.json" "$1/network.json"
 }
-naming() { # each workflow, release script and pin that holds one of those names
-  own_names | grep -rlF -f - --include="*.y*ml" --include="*.sh" --include="*.py" --include="*.ps1" \
+fixtures
+edit network.json '.build.VITE_HOT_BRIDGE_URL = "TO BE SET"'
+check "a value not set yet names nothing" eval '! own_names "$repo" | grep -qF "TO BE SET"'
+check "a value set names itself" eval 'own_names "$repo" | grep -qxF https://joining.example'
+naming() { # each workflow, release script and pin that holds one of this repo's names
+  own_names "$here/.." | grep -rlF -f - --include="*.y*ml" --include="*.sh" --include="*.py" --include="*.ps1" \
     --include="*.json" "$here/../.github" "$here" "$here/../lineage" | grep -vE "/test[-_]" || true
 }
 check "no workflow or release script names this repo, its app or its network, so a fork releases into itself" \

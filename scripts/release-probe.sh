@@ -36,12 +36,8 @@ probe identity "the app with identity.json merged over it is $product" \
 probe assets "the app names each updater asset as the release publishes $product's" \
   bash "$here/updater-asset-names.sh" "$APP_DIR/src-tauri/src/updater.rs" "$product"
 probe values "the app reads every value the release builds it with" bash "$here/release-app.sh" reads "$APP_DIR"
-committed() { # <file>...: the app tree has each file
-  local file
-  for file; do [ -f "$APP_DIR/$file" ] || { echo "the app has no $file"; return 1; }; done
-}
 probe dna "the app commits the hashes a migration release holds its DNA to" \
-  committed scripts/check-dna-hashes.sh dnas/alliance/build-hashes
+  bash "$here/check-dna-pin.sh" "$APP_DIR" --committed
 probe rust "the app's CI builds with the Rust the release builds with" bash "$here/check-rust-toolchain.sh" \
   "$APP_DIR/.github/workflows/rust.yaml" "$(yq '.env.RUST_TOOLCHAIN' "$here/../.github/workflows/release-tauri-app.yaml")"
 if refusal="$(bash "$here/release-app.sh" build-env 2>&1 >/dev/null)"; then
