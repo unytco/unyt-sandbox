@@ -19,7 +19,7 @@ Application-level changes belong in
 - **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
 - Zero-arc installers ship alongside the default-arc ones, on all four platforms.
 - **A release carries updater signatures and one update manifest per arc factor for the app's Update.** The installers themselves are signed no differently.
-- A release carries a `SHA256SUMS` file, and `SHA256SUMS.minisig` signed by the update key, to check a downloaded installer, Holochain file or `unyt_cli` against.
+- A release carries a `SHA256SUMS` file, and `SHA256SUMS.minisig` signed by the update key on a stable release, to check a downloaded installer, Holochain file or `unyt_cli` against.
 
 ### Changed
 
