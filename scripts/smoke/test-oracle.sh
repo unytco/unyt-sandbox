@@ -1394,8 +1394,12 @@ if [ -f "$rel" ]; then
   in_stage "$stage3" '    needs: [draft-installers]' "the smoke must run what the draft carries"
   in_stage "$stage3" '      installers: draft-installers' "the smoke must take the draft's installers"
   draft="$(sed -n '/^  draft-installers:/,/^  [a-z]/p' "$rel")"
-  in_stage "$draft" '    needs: [publish-happ, publish-builds, updater-manifests]' \
+  in_stage "$draft" '    needs: [release-environment, build-happ, publish-happ, publish-builds, updater-manifests]' \
     "the smoke must not run the release's installers before its updates are signed"
+  in_stage "$draft" '          bash scripts/check-release-sums.sh "$APP_VERSION" "$PUBKEY" sums installers' \
+    "the smoke must take only installers the signed SHA256SUMS names"
+  in_stage "$draft" '          cp sums/SHA256SUMS installers/' \
+    "the smoke must get the SHA256SUMS its installers were checked against"
   in_stage "$draft" "    if: \${{ !cancelled() && needs.publish-happ.outputs.releaseId != '' && needs.updater-manifests.result == 'success' }}" \
     "the smoke runs the installers after a failed signing"
   smoke_if="    if: \${{ !cancelled() && needs.draft-installers.result == 'success' }}"
@@ -1549,7 +1553,7 @@ if [ -f "$rel" ]; then
     "the release must refuse a workflow that lets build code reach a release credential"
   in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-happ.result == 'success' }}" \
     "one failed row must not keep every other platform off the release"
-  in_stage "$stage2" '    needs: [build-happ, publish-builds]' \
+  in_stage "$stage2" '    needs: [release-environment, build-happ, publish-builds]' \
     "the signing must not start before the builds are on the release"
   in_stage "$stage2" "    if: \${{ !cancelled() && needs.publish-builds.result == 'success' }}" \
     "the signing must not sign a release its builds did not all reach"
@@ -1721,6 +1725,7 @@ fi
 builds="$(mktemp -d)"
 while IFS= read -r name; do printf '%s' "$name" >"$builds/$name"; done <<<"$full"
 printf 'zero-arc' >"$builds/x_zero-arc_amd64_linux.deb"
+(cd "$builds" && sha256sum -- *) >"$builds.sums" && mv "$builds.sums" "$builds/SHA256SUMS"
 take() { UNYT_SMOKE_FROM="$builds" bash "$here/download-release-asset.sh" 000 "$1" "$builds.out" 2>/dev/null; }
 if from_run="$(UNYT_SMOKE_FROM="$builds" bash "$here/release-inventory.sh" 000 2>/dev/null)" &&
    [ "$from_run" = "$(inv "$(ls -A "$builds")")" ]; then pass=$((pass + 1)); else
@@ -1738,6 +1743,25 @@ else pass=$((pass + 1)); fi
 if take _x64_windows.zip >/dev/null; then
   fail=$((fail + 1)); printf 'FAIL  %s\n' "a suffix no build ends in took something" >&2
 else pass=$((pass + 1)); fi
+# AND ONLY A BUILD THE HAND-OFF CHECKED: it checked SHA256SUMS against its
+# signature and handed it over with the builds, and a lane takes only a build
+# that SHA256SUMS names with the sum it has.
+refused_take() { # <description> <suffix> <error text>
+  local out
+  if out="$(UNYT_SMOKE_FROM="$builds" bash "$here/download-release-asset.sh" 000 "$2" "$builds.out" 2>&1)" ||
+     [[ "$out" != *"$3"* ]]; then
+    fail=$((fail + 1)); printf 'FAIL  %-58s %s\n' "$1" "$out" >&2
+  else pass=$((pass + 1)); fi
+}
+printf 'x' >>"$builds/x_default-arc_x64_windows.msi"
+refused_take "a lane took a build SHA256SUMS gives another sum" _default-arc_x64_windows.msi \
+  "x_default-arc_x64_windows.msi is not the build the release's SHA256SUMS names"
+grep -v ' x_default-arc_x64_windows.exe$' "$builds/SHA256SUMS" >"$builds.sums" && mv "$builds.sums" "$builds/SHA256SUMS"
+refused_take "a lane took a build SHA256SUMS does not name" _default-arc_x64_windows.exe \
+  "x_default-arc_x64_windows.exe came from the run's installers, but SHA256SUMS does not name it"
+rm "$builds/SHA256SUMS"
+refused_take "a lane took a build with no SHA256SUMS beside it" _default-arc_amd64_linux.deb \
+  "has no SHA256SUMS, so nothing says x_default-arc_amd64_linux.deb is what the release signed"
 rm -rf "$builds" "$builds.out"
 got="$(inv "$(printf '%s\n' "$full" | grep -v -- linux.AppImage)")"
 if [ "$(rows_of "$got" prove_linux)" = 1 ] &&
@@ -2033,8 +2057,8 @@ fi
 # added, keeping it DELIBERATELY 3 BELOW a full run: the GLIBC-patch branch costs
 # exactly 2 on a machine that cannot patch a version, and the tie-break's
 # en_US.UTF-8 leg costs 1 where that locale is not generated.
-if [ "$pass" -lt 270 ]; then
-  echo "::error::only $pass assertions ran; expected at least 270. The test file is truncated or a block was skipped"
+if [ "$pass" -lt 275 ]; then
+  echo "::error::only $pass assertions ran; expected at least 275. The test file is truncated or a block was skipped"
   exit 1
 fi
 [ "$fail" -eq 0 ]

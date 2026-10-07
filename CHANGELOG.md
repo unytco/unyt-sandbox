@@ -19,7 +19,7 @@ Application-level changes belong in
 - **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
 - Zero-arc installers ship alongside the default-arc ones, on all four platforms.
 - **A release carries updater signatures and one update manifest per arc factor for the app's Update.** The installers themselves are signed no differently.
-- A release carries a `SHA256SUMS` file, and `SHA256SUMS.minisig` signed by the update key, to check a downloaded installer, Holochain file or `unyt_cli` against.
+- A release carries a `SHA256SUMS` file, and `SHA256SUMS.minisig` signed by the update key on a stable release, to check a downloaded installer, Holochain file or `unyt_cli` against.
 
 ### Changed
 
@@ -27,8 +27,9 @@ Application-level changes belong in
 - **A release's notes name the network it was built for.**
 - **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
 - **No job that builds the app holds a credential that can change a release, and no job that runs a built installer holds a token that can write.**
+- **The smoke runs only installers whose checksums match the release's signed `SHA256SUMS`.**
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
-- **A pre-release (a `-dev.*` tag) is never offered to users as an update.**
+- **A pre-release (a `-dev.*` tag) is never offered to users as an update, and is signed with a throwaway key, never the update key.**
 - **Installers and unyt_cli build with Rust 1.98.1, and a release stops when the app's CI pins another.**
 
 ### Fixed

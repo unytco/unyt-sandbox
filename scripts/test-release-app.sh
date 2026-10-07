@@ -565,12 +565,81 @@ check "every release command is on this repo" wired '
 check "the release environment is checked, by a job that runs no app code, before stage 1 builds" wired '
   .jobs["release-environment"] | .permissions == {contents: "read", actions: "read"} and (.needs == null)
   and (.steps[0].uses | test("^actions/checkout@[0-9a-f]{40}$"))
-  and [.steps[1:][] | .uses // .run] == ["bash scripts/check-release-environment.sh release \"$TAG\""]
+  and [.steps[1:][] | .uses // .run]
+    == ["bash scripts/check-release-environment.sh release \"$TAG\"", "bash scripts/signing-key.sh \"$TAG\" >>\"$GITHUB_OUTPUT\""]
   and .steps[1].env == {GH_TOKEN: "${{ github.token }}", TAG: "${{ github.ref_name }}"}'
 check "and stage 1 waits for it" wired '.jobs["build-happ"].needs == "release-environment"'
-check "the release key is a secret of that environment, and only the signing job holds it" wired '
-  .jobs["updater-manifests"].environment == "release"
-  and ([.jobs | to_entries[] | select(.value | tojson | test("secrets\\.TAURI_SIGNING")) | .key] == ["updater-manifests"])'
+for tag in v1.2.3 v0.110.0 v10.0.12; do
+  check "$tag signs with the release key" test "$(bash "$here/signing-key.sh" "$tag")" = key=release
+done
+for tag in v1.2.3-dev.0 v0.110.1-dev.12 v1.2.3-rc.1 v1.2.3-dev.0+x v01.2.3 v1.2 1.2.3 "v1.2.3 "; do
+  check "\"$tag\" signs with a throwaway key" test "$(bash "$here/signing-key.sh" "$tag")" = key=throwaway
+done
+check "no tag answers no key" refuses "usage: signing-key.sh <tag>" bash "$here/signing-key.sh" ""
+check "the release environment job answers which key from the tag alone" wired '
+  .jobs["release-environment"] | .outputs.signingKey == "${{ steps.signing-key.outputs.key }}"
+  and [.steps[] | select(.id == "signing-key") | del(.name)] == [{id: "signing-key",
+    env: {TAG: "${{ github.ref_name }}"}, run: "bash scripts/signing-key.sh \"$TAG\" >>\"$GITHUB_OUTPUT\""}]'
+guard="needs.release-environment.outputs.signingKey == 'release'"
+check "a run without the release key signs, and checks what it signed, with a key it makes" wired \
+  --arg guard "$guard" --arg throwaway "needs.release-environment.outputs.signingKey == 'throwaway'" '
+  (.jobs["updater-manifests"] | (.steps[] | select(.id == "throwaway") | .if) == $throwaway
+  and .outputs.throwawayPubkey == "${{ steps.throwaway.outputs.pubkey }}"
+  and ([.steps[].env.PUBKEY // empty] | unique)
+    == ["${{ \($guard) && needs.build-happ.outputs.updaterPubkey || steps.throwaway.outputs.pubkey }}"]
+  and [.steps[].env // {} | .TAURI_SIGNING_PRIVATE_KEY, .TAURI_SIGNING_PRIVATE_KEY_PASSWORD | values | sub(".* \\|\\| "; "")]
+    == ["steps.throwaway.outputs.key }}", "steps.throwaway.outputs.password }}"])
+  and [.jobs["draft-installers"].steps[].env.PUBKEY // empty]
+    == ["${{ \($guard) && needs.build-happ.outputs.updaterPubkey || needs.updater-manifests.outputs.throwawayPubkey }}"]'
+# What reads the release key in a run whose release-environment job answered key=<key>: a job in the
+# release environment, and a read of one of its secrets. Either is guarded on that answer in the one
+# form the release writes it, or counts as reached.
+release_key_readers() { # <workflow> <key>
+  yq -o=json 'explode(.)' "$1" | jq -r --arg key "$2" --arg guard "$guard" --arg entered "'release' || ''" '
+    def guarded($form): startswith("${{ \($guard) && \($form)") and endswith(" }}")
+      and (.[("${{ \($guard) && \($form)" | length):] | test("secrets|&&") | not);
+    .jobs | to_entries[] | .key as $job | .value
+    | ((.environment | if type == "object" then .name else . end) // "" | tostring) as $name
+    | (if ($name | guarded($entered)) then (select($key == "release") | "\($job) enters the release environment")
+       elif ($name | test("release"; "i")) then "\($job) enters the release environment"
+       else empty end),
+      ([.. | strings | select(test("secrets\\s*(\\.|\\[\\s*.)\\s*tauri_signing_private_key|\\(\\s*secrets\\s*\\)"; "i"))
+        | ((capture("secrets\\.(?<name>[A-Za-z0-9_]+)").name | "secrets.\(.)") // "the secrets context") as $read
+        | if guarded("\($read) || ") then (select($key == "release") | $read) else $read end]
+        | unique[] | "\($job) reads \(.)")'
+}
+readers_for() { # <workflow> <tag>
+  local key
+  key="$(bash "$here/signing-key.sh" "$2")" && release_key_readers "$1" "${key#key=}"
+}
+reads() { # <workflow> <tag> <what reads the key, one per line>
+  local out
+  out="$(readers_for "$1" "$2")" && [ "$out" = "$3" ]
+}
+release_wf="$here/../.github/workflows/release-tauri-app.yaml"
+check "a dev tag's run never reads the release key" reads "$release_wf" v1.2.3-dev.0 ""
+check "a release tag's run signs with the release key, in the one job that holds it" \
+  reads "$release_wf" v1.2.3 "updater-manifests enters the release environment
+updater-manifests reads secrets.TAURI_SIGNING_PRIVATE_KEY
+updater-manifests reads secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+dev_reads() { # <sed edit of the release workflow>: fails when the edit changed nothing
+  local out
+  sed "$1" "$release_wf" >"$tmp/release.yaml" && ! cmp -s "$release_wf" "$tmp/release.yaml" &&
+    out="$(readers_for "$tmp/release.yaml" v1.2.3-dev.0)" && [ -n "$out" ]
+}
+check "a signing job always in the release environment would give a dev run the key" \
+  dev_reads 's/^    environment: .*/    environment: release/'
+check "an environment named in another case is the same one" dev_reads 's/^    environment: .*/    environment: Release/'
+check "a guard on the other answer would give a dev run the key" \
+  dev_reads "s/^\\(    environment: .*signingKey\\) == /\\1 != /"
+check "the release key read unguarded would reach a dev run" \
+  dev_reads '/^          TAURI_SIGNING_PRIVATE_KEY: /{N;s/.*/          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}/}'
+check "the release key guarded on another job's answer would reach a dev run" \
+  dev_reads 's/^\(          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs\.\)release-environment/\1build-happ/'
+check "the release key read by another job would reach a dev run" \
+  dev_reads 's/^\(            needs\.build-happ\.outputs\.updaterPubkey || needs\.updater-manifests\.outputs\.throwawayPubkey }}\)$/\1\n          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}/'
+check "the release key read by index would reach a dev run" \
+  dev_reads "s/secrets\\.TAURI_SIGNING_PRIVATE_KEY || /secrets['TAURI_SIGNING_PRIVATE_KEY'] || /"
 check "no step splices an expression into its script" wired '[.jobs[].steps[]?.run // empty | select(test("\\$\\{\\{"))] == []'
 own_names() { # <repo root>: what names that repo, its app or its network, one per line
   printf '%s\n' unytco/unyt-sandbox co.unyt. ${GITHUB_REPOSITORY:+"$GITHUB_REPOSITORY"}
