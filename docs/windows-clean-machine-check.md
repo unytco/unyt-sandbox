@@ -14,7 +14,7 @@ What is still out of CI's reach is the **machine**. A GitHub-hosted runner is a 
 
 ## The procedure
 
-Start from a VM snapshot taken before any Unyt build was ever installed, and roll back to it afterwards. If you are reusing a machine instead, reset it first with [`windows-wipe.md`](windows-wipe.md) — the uninstaller deliberately leaves app data, logs, the Holochain directory and the Lair salt behind, so an uninstall alone does not give you a clean machine.
+Start from a VM snapshot taken before any Unyt build was ever installed, and roll back to it afterwards. If you are reusing a machine instead, reset it first with [`windows-wipe.md`](windows-wipe.md). An uninstall alone does not give you a clean machine, because by default the uninstaller keeps the app's data. The NSIS uninstaller has a **Delete the application data** box, off by default, that removes `%APPDATA%\<identifier>\` and `%LOCALAPPDATA%\<identifier>\`.
 
 1. **Copy the installer in.** Take `unyt_<version>_<product>_default-arc_x64_windows.exe` from the release, where `<product>` is `productName` in [`identity.json`](../identity.json) with each space as a dot, and copy it to the VM. Do not build on the VM: the artifact under test is the one users download.
 2. **Note what SmartScreen does.** Record whether it warns, blocks, or stays quiet, and how many clicks it takes to proceed. This is the user's first impression and it changes the day the installer is signed.

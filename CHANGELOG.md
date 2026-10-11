@@ -36,3 +36,4 @@ Application-level changes belong in
 ### Fixed
 
 - **Several smoke checks could pass without testing anything:** a webview gate a cold install could never satisfy, a dependency check that misread a correctly-declared package, macOS scenarios sharing state with the release around them, and a handful of platform-specific parse and path faults. Each now fails when the thing it checks is broken.
+- **The Windows wipe guide and script name `%LOCALAPPDATA%\<identifier>` as the folder that holds the app's Holochain data.** They no longer ask you to remove a Credential Manager entry or end processes that no build creates.
