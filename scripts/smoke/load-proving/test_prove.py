@@ -33,6 +33,13 @@ import test_frames as build
 AWAITING = "2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: Starting -> LairAwaitingPassword { is_initial_setup: true }"
 HEALTHY = '2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: LairReady -> HcAuthRequired { agent_key: "uhCAkAAAA", joining_service_url: "https://x" }'
 FAILED = '2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: ConductorStarting -> ConductorError("boom")'
+LAIR_READY = (
+    "2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: Starting -> LairReady"
+)
+NO_NETWORK = '2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: LairReady -> NetworkSetupRequired { agent_key: "uhCAkAAAA", has_existing_key: false }'
+# The failure Unyt Sandbox 0.110.0 and 0.110.1 hit on Windows, at the length a
+# GitHub runner's profile gives the path.
+TOO_LONG = r'2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: Starting -> ConductorError("Runtime(DataRootPathTooLong { path: \"C:\\\\Users\\\\runneradmin\\\\AppData\\\\Local\\\\zo-el ,60,joelulahanna,64,gmail.com,62,\\\\co.unyt.unyt.sandbox\\\\0.110\\\\holochain\\\\socket\", len: 118, max: 107 })")'
 
 FIXTURES = {}
 
@@ -655,6 +662,260 @@ class TheWindowsLanesDecisions(Quiet):
         )
 
 
+class FakeApp:
+    """What the Windows lane asks of a process it started."""
+
+    def __init__(self, pid):
+        self.pid = pid
+        self.running = True
+
+    def poll(self):
+        return None if self.running else 0
+
+    def terminate(self):
+        self.running = False
+
+    kill = terminate
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class TheWindowsSecondLaunch(Quiet):
+    """The Windows lane's first launch can only reach the password prompt, so
+    the second, with UNYT_BYPASS_PASSWORD set, is what shows lair and the
+    conductor start. Judged with the real patterns from common.sh."""
+
+    def outcome(self, log):
+        return prove.boot_outcome(
+            log,
+            re.compile(prove.shell_value("UNYT_RE_BACKEND_READY")),
+            re.compile(prove.shell_value("UNYT_RE_FAILED")),
+            re.compile(prove.shell_value("UNYT_RE_AWAITING_PASSWORD")),
+        )
+
+    def lane(self):
+        lane = prove.WindowsLane(str(Path(self.dir) / "unyt.exe"), self.dir)
+        lane.prepare()
+        lane.poll_seconds = 0
+        self.addCleanup(lambda: [handle.close() for handle in lane.handles])
+        return lane
+
+    def profile(self):
+        """A runner's profile folders, new on every call, for the lane to find
+        through the environment."""
+        root = Path(tempfile.mkdtemp(dir=self.dir))
+        env = {
+            "LOCALAPPDATA": str(root / "Local"),
+            "APPDATA": str(root / "Roaming"),
+        }
+        patched = mock.patch.dict(os.environ, env)
+        patched.start()
+        self.addCleanup(patched.stop)
+        return env
+
+    def test_a_state_only_a_running_conductor_reports_passes(self):
+        for line in (
+            HEALTHY,
+            NO_NETWORK,
+            "Status update: NetworkSetupRequired { agent_key: x } -> Ready",
+        ):
+            with self.subTest(line=line):
+                word, why = self.outcome(LAIR_READY + "\n" + line)
+                self.assertEqual("PROVEN", word)
+                self.assertIn(line.split("Status update: ")[1], why)
+
+    def test_a_conductor_that_would_not_start_fails_with_its_error(self):
+        word, why = self.outcome(TOO_LONG)
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("DataRootPathTooLong", why)
+        self.assertIn("len: 118, max: 107", why)
+
+    def test_the_prompt_alone_fails_this_launch(self):
+        # The first launch's pass is this one's failure: an app parked at the
+        # prompt never started lair or the conductor.
+        word, why = self.outcome(AWAITING)
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("still asked for its keystore password", why)
+
+    def test_lair_ready_alone_is_not_yet_an_answer(self):
+        # Setup still has to ask the conductor what is installed, and can fail.
+        self.assertIsNone(self.outcome(LAIR_READY))
+        self.assertIsNone(self.outcome(""))
+
+    def test_a_failure_after_a_state_outranks_it(self):
+        self.assertEqual("NOT PROVEN", self.outcome(NO_NETWORK + "\n" + FAILED)[0])
+
+    def test_the_watch_waits_for_the_conductor(self):
+        lane = self.lane()
+        lane.timeout_seconds = 30
+        polls = []
+
+        def logs():
+            polls.append(1)
+            return LAIR_READY + ("\n" + NO_NETWORK if len(polls) > 2 else "")
+
+        lane.logs = logs
+        lane.alive = lambda: True
+        self.assertEqual("PROVEN", lane.watch_boot()[0])
+        self.assertGreater(len(polls), 2)
+
+    def test_an_app_that_exits_says_where_it_stopped(self):
+        lane = self.lane()
+        lane.logs = lambda: LAIR_READY
+        lane.alive = lambda: False
+        word, why = lane.watch_boot()
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("exited", why)
+        self.assertIn("Starting -> LairReady", why)
+
+    def test_and_a_state_it_logged_as_it_exited_still_counts(self):
+        lane = self.lane()
+        lane.logs = lambda: NO_NETWORK
+        lane.alive = lambda: False
+        self.assertEqual("PROVEN", lane.watch_boot()[0])
+
+    def test_an_app_that_never_answers_is_red_at_the_timeout(self):
+        lane = self.lane()
+        lane.timeout_seconds = 0
+        lane.logs = lambda: ""
+        lane.alive = lambda: True
+        word, why = lane.watch_boot()
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("no state after boot within 0s", why)
+        self.assertIn("no status at all", why)
+
+    def test_the_boot_finding_joins_the_window_verdict(self):
+        booted = ("PROVEN", "it booted")
+        failed = ("NOT PROVEN", "it did not boot")
+        untried = ("CANNOT PROVE", "it could not be tried")
+        for earned, boot, want in (
+            ("PROVEN", booted, "PROVEN"),
+            ("NOT PROVEN", booted, "NOT PROVEN"),
+            ("UNTRUSTED", booted, "UNTRUSTED"),
+            ("PROVEN", failed, "NOT PROVEN"),
+            # About the artifact, so it outranks a runner that could not look.
+            ("CANNOT PROVE", failed, "NOT PROVEN"),
+            ("PROVEN", untried, "CANNOT PROVE"),
+            ("NOT PROVEN", untried, "NOT PROVEN"),
+        ):
+            with self.subTest(earned=earned, boot=boot[0]):
+                word, why = prove.with_boot((earned, "the window"), boot)
+                self.assertEqual(want, word)
+                self.assertIn("the window", why)
+                self.assertIn(boot[1], why)
+
+    def test_a_lane_whose_second_launch_never_ran_is_not_proven(self):
+        self.assertEqual(
+            "CANNOT PROVE", prove.with_boot(("PROVEN", "x"), self.lane().booted)[0]
+        )
+
+    def test_the_second_launch_starts_from_a_cleared_profile_with_the_bypass_set(self):
+        env = self.profile()
+        lane = self.lane()
+        lane.exe = Path(self.dir) / "unyt.exe"
+        lane.exe.write_bytes(b"MZ")
+        lane.install_dir = self.dir
+        lane.timeout_seconds = 30
+        lane.log_dir = Path(env["LOCALAPPDATA"]) / lane.bundle_id / "logs"
+        # What the first launch left: its log, which says it is at the prompt,
+        # and a folder in every data root.
+        lane.log_dir.mkdir(parents=True)
+        (lane.log_dir / "unyt.v0.110.log.2026-08-14").write_text(AWAITING)
+        for root in lane.data_roots():
+            (root / "0.110").mkdir(parents=True, exist_ok=True)
+        lane.app = first = FakeApp(41)
+        killed, started = [], []
+
+        def popen(argv, env, **kwargs):
+            started.append((env, [root for root in lane.data_roots() if root.exists()]))
+            lane.log_dir.mkdir(parents=True, exist_ok=True)
+            (lane.log_dir / "unyt.v0.110.log.2026-08-14").write_text(
+                LAIR_READY + "\n" + NO_NETWORK
+            )
+            return FakeApp(42)
+
+        with (
+            mock.patch.dict(os.environ, {"AGENT_ID": "x"}),
+            mock.patch.object(prove, "run", lambda argv, **kw: killed.append(argv)),
+            mock.patch.object(prove.subprocess, "Popen", popen),
+        ):
+            lane.boot()
+
+        self.assertEqual([["taskkill", "/T", "/F", "/PID", "41"]], killed)
+        self.assertFalse(first.running)
+        self.assertEqual(1, len(started))
+        launched_with, roots_at_launch = started[0]
+        self.assertEqual([], roots_at_launch, "the profile was not cleared")
+        self.assertEqual("1", launched_with["UNYT_BYPASS_PASSWORD"])
+        self.assertNotIn("AGENT_ID", launched_with)
+        self.assertEqual("PROVEN", lane.booted[0], lane.booted[1])
+        self.assertEqual(42, lane.app.pid)
+
+    def test_a_profile_that_cannot_be_cleared_is_not_launched_into(self):
+        env = self.profile()
+        lane = self.lane()
+        lane.clear_seconds = 0
+        lane.app = FakeApp(41)
+        stuck = Path(env["LOCALAPPDATA"]) / lane.bundle_id
+        stuck.mkdir(parents=True)
+        with (
+            mock.patch.object(prove, "run", lambda argv, **kw: None),
+            mock.patch.object(prove.shutil, "rmtree", lambda path, **kw: None),
+            mock.patch.object(prove.subprocess, "Popen") as popen,
+        ):
+            lane.boot()
+        popen.assert_not_called()
+        self.assertEqual("CANNOT PROVE", lane.booted[0])
+        self.assertIn(str(stuck), lane.booted[1])
+
+    def test_the_first_launch_never_skips_the_prompt(self):
+        lane = self.lane()
+        lane.exe = Path(self.dir) / "unyt.exe"
+        lane.exe.write_bytes(b"MZ")
+        lane.install_dir = self.dir
+        seen = []
+        with (
+            mock.patch.dict(os.environ, {"UNYT_BYPASS_PASSWORD": "1", "AGENT_ID": "x"}),
+            mock.patch.object(
+                prove.subprocess,
+                "Popen",
+                lambda argv, env, **kw: seen.append(env) or FakeApp(7),
+            ),
+        ):
+            lane.launch()
+        self.assertNotIn("UNYT_BYPASS_PASSWORD", seen[0])
+        self.assertNotIn("AGENT_ID", seen[0])
+
+    def preflight_on(self, *left):
+        """Preflight on a runner whose profile holds `left`, each a folder named
+        for the identifier under the variable given."""
+        env = self.profile()
+        lane = self.lane()
+        Path(lane.artifact).write_bytes(b"")
+        lane.helper = lambda **arguments: ["STATION WinSta0"]
+        for variable in left:
+            (Path(env[variable]) / lane.bundle_id).mkdir(parents=True)
+        lane.preflight()
+        return lane
+
+    def test_a_clean_profile_is_a_first_install(self):
+        lane = self.preflight_on()
+        self.assertEqual(
+            Path(os.environ["LOCALAPPDATA"]) / lane.bundle_id / "logs", lane.log_dir
+        )
+
+    def test_either_data_folder_left_by_an_earlier_run_is_not_one(self):
+        # The roaming one holds the app's network and key files, apart from the
+        # local one its logs are in.
+        for variable in ("APPDATA", "LOCALAPPDATA"):
+            with self.subTest(variable=variable):
+                with self.assertRaises(prove.Answer) as raised:
+                    self.preflight_on(variable)
+                self.assertEqual("CANNOT PROVE", raised.exception.word)
+                self.assertIn("not clean", raised.exception.why)
+
+
 class WhatTheMacLaneLeavesBehind(Quiet):
     def lane(self):
         lane = prove.MacosLane(str(Path(self.dir) / "unyt.dmg"), self.dir)
@@ -729,6 +990,56 @@ class StoppingTheApp(unittest.TestCase):
 
     def test_and_a_lane_that_launched_nothing_stops_cleanly(self):
         prove.end_process(None)
+        prove.end_tree(None)
+
+    def test_the_windows_tree_is_ended_while_its_parent_still_lives(self):
+        # taskkill finds the children through the parent, so asking after the
+        # parent is gone would leave WebView2 holding the app's data folder.
+        proc = self.sleeper()
+        asked = []
+        with mock.patch.object(prove, "run", lambda argv, **kw: asked.append(argv)):
+            prove.end_tree(proc)
+        self.assertEqual([["taskkill", "/T", "/F", "/PID", str(proc.pid)]], asked)
+        self.assertIsNotNone(proc.poll())
+
+    def test_and_a_tree_whose_parent_already_exited_is_not_asked_for(self):
+        proc = self.sleeper(0)
+        proc.wait(30)
+        with mock.patch.object(prove, "run") as asked:
+            prove.end_tree(proc)
+        asked.assert_not_called()
+
+
+class ClearingAProfile(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def test_every_folder_is_removed(self):
+        (self.root / "a" / "logs").mkdir(parents=True)
+        absent = self.root / "never-made"
+        self.assertEqual([], prove.remove_all([self.root / "a", absent], 0, 0))
+        self.assertFalse((self.root / "a").exists())
+
+    def test_one_that_stays_is_named_once_the_time_is_up(self):
+        held = self.root / "held"
+        held.mkdir()
+        with mock.patch.object(prove.shutil, "rmtree", lambda path, **kw: None):
+            self.assertEqual([held], prove.remove_all([held], 0, 0))
+
+    def test_one_freed_on_a_later_try_is_removed(self):
+        held = self.root / "held"
+        held.mkdir()
+        real, tries = shutil.rmtree, []
+
+        def freed_on_the_second_try(path, **kw):
+            tries.append(path)
+            if len(tries) > 1:
+                real(path, **kw)
+
+        with mock.patch.object(prove.shutil, "rmtree", freed_on_the_second_try):
+            self.assertEqual([], prove.remove_all([held], 30, 0))
+        self.assertEqual(2, len(tries))
 
 
 @unittest.skipUnless(
@@ -1111,6 +1422,25 @@ class EveryWayOutSaysSomething(unittest.TestCase):
             ],
             printed,
         )
+
+    def test_a_second_launch_runs_between_the_diagnostics_and_the_verdict(self):
+        # After the diagnostics, which read the first launch's windows and log;
+        # before the verdict, which it adds to.
+        order = []
+
+        class Ordered(self.complete_lane(log=AWAITING)):
+            def diagnostics(self):
+                order.append("diagnostics")
+
+            def boot(self):
+                order.append("boot")
+
+            def verdict(self):
+                order.append("verdict")
+                return super().verdict()
+
+        self.drive(Ordered)
+        self.assertEqual(["diagnostics", "boot", "verdict"], order)
 
     def test_a_lane_always_stops_what_it_started(self):
         stopped = []

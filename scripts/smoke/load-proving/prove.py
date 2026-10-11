@@ -5,10 +5,12 @@ The verdict is one `VERDICT <lane>: <WORD> — <why>` line on stdout, and nothin
 else is written there.
 
   PROVEN       the app reached a state a user could see AND a frame of its own
-               window is the app's own screen.
+               window is the app's own screen. On Windows a second launch, with
+               the password prompt skipped, must also start lair and the
+               conductor.
   WINDOW-ONLY  macOS only: a real on-screen window at a real size, paint
                unverified. Green, and never the word a photographed lane gets.
-  NOT PROVEN   the app ran and one of those two is missing.
+  NOT PROVEN   the app ran and one of those is missing.
   CANNOT PROVE we could not look — no display, no capture, no install.
   UNTRUSTED    we could look, but not at the app.
 
@@ -177,14 +179,37 @@ def read_all(files, directories, pattern):
 
 def end_process(proc):
     """The process this lane started, and only that one. Every platform can do
-    this much; the Windows lane has nothing else, because Windows has no process
-    group to signal."""
+    this much; Windows has no process group to signal, so its lane ends the rest
+    of the tree with end_tree."""
     if proc and proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def end_tree(proc):
+    """The process and every process it started, on Windows: the app's WebView2
+    processes keep files open in its data folder, and ending the app alone
+    leaves them to exit in their own time. taskkill finds the tree through the
+    parent, so it runs while the parent is still alive."""
+    if proc and proc.poll() is None:
+        run(["taskkill", "/T", "/F", "/PID", str(proc.pid)])
+    end_process(proc)
+
+
+def remove_all(paths, seconds, poll_seconds):
+    """The folders of `paths` still there after `seconds` of trying: a process
+    that has just ended can hold a file in one for a moment longer."""
+    deadline = time.monotonic() + seconds
+    while True:
+        for path in paths:
+            shutil.rmtree(path, ignore_errors=True)
+        left = [path for path in paths if path.exists()]
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(poll_seconds)
 
 
 def end_process_group(*pids):
@@ -218,6 +243,64 @@ def pixels_may_decide(grant, statuses):
     if grant != "granted":
         return False
     return bool(statuses) and all(status == "usable" for status in statuses)
+
+
+SECOND_LAUNCH = "launched again from a cleared profile with UNYT_BYPASS_PASSWORD set"
+
+
+def boot_outcome(log, ready, failed, awaiting):
+    """What a launch with UNYT_BYPASS_PASSWORD set has shown so far, as (word,
+    why), or None while it is still starting. The app reports each state of
+    `ready` only once its conductor has started, so reaching one proves lair and
+    the conductor both came up. The prompt is a failure HERE: with the bypass
+    set nothing should ask, and an app parked at it never starts either."""
+    hit = first_match(failed, log)
+    if hit:
+        return "NOT PROVEN", "%s, the app reached a failure state (%s)" % (
+            SECOND_LAUNCH,
+            hit,
+        )
+    hit = first_match(awaiting, log)
+    if hit:
+        return (
+            "NOT PROVEN",
+            "%s, the app still asked for its keystore password (%s), so lair and the conductor never started"
+            % (SECOND_LAUNCH, hit),
+        )
+    hit = first_match(ready, log)
+    if hit:
+        return (
+            "PROVEN",
+            "%s, the app started lair and the conductor and reached %s"
+            % (SECOND_LAUNCH, hit),
+        )
+    return None
+
+
+def boot_stalled(how, log):
+    """A launch with the bypass set that ended without an outcome, with the last
+    status it reported, which is where a red lane starts looking."""
+    reported = re.findall(r"Status update: [^\r\n]*", log)
+    last = (
+        "the last status it reported was '%s'" % reported[-1]
+        if reported
+        else "it reported no status at all"
+    )
+    return "NOT PROVEN", "%s, the app %s; %s" % (SECOND_LAUNCH, how, last)
+
+
+def with_boot(earned, booted):
+    """The lane's answer once its second launch is in. A boot that failed is a
+    finding about the artifact, so it is NOT PROVEN whatever the window showed;
+    a boot that could not be tried leaves a lane it would have proven unable to
+    say so."""
+    word, why = earned
+    boot_word, boot_why = booted
+    if boot_word == "PROVEN":
+        return word, "%s; %s" % (why, boot_why)
+    if boot_word == "NOT PROVEN" or word == "PROVEN":
+        return boot_word, "%s; but %s" % (why, boot_why)
+    return word, "%s; and %s" % (why, boot_why)
 
 
 class Lane:
@@ -293,6 +376,11 @@ class Lane:
     def after_watch(self):
         """A second phase, which may only ever upgrade the verdict the watch has
         already earned."""
+
+    def boot(self):
+        """A second launch, once the first one's diagnostics are out, whose
+        finding the verdict adds to what the first earned. Only the Windows lane
+        has one."""
 
     def check_controls(self):
         """One that could not be CAPTURED ends the lane only when no control
@@ -533,6 +621,7 @@ class Lane:
             self.watch()
             self.after_watch()
             self.diagnostics()
+            self.boot()
             return self.verdict()
         finally:
             self.stop()
@@ -1365,6 +1454,11 @@ class WindowsLane(Lane):
     different places under different registry hives, so proving one proves
     nothing about the other.
 
+    Two launches, because on a fresh profile the first can only reach the
+    password prompt: lair and the conductor start once a password is given. The
+    second skips the prompt, from a profile cleared of what the first wrote, and
+    must reach a state only a running conductor reports.
+
     The capture stays in PowerShell — window-capture.ps1 runs under Windows
     PowerShell 5.1 because System.Drawing is a .NET Framework assembly, and no
     cmdlet does window-scoped capture."""
@@ -1374,6 +1468,7 @@ class WindowsLane(Lane):
     controls = (("00-control-desktop", False), ("00-control-splash-rect", False))
     # The splash's own footprint, from unyt/src-tauri/tauri.conf.json.
     DECLARED = 800
+    clear_seconds = 30
 
     def __init__(self, artifact, shots):
         super().__init__("windows", artifact, shots)
@@ -1382,8 +1477,16 @@ class WindowsLane(Lane):
         self.exe = None
         self.install_dir = None
         self.log_dir = None
-        self.stdout_log = self.shots / "app-stdout.log"
-        self.stderr_log = self.shots / "app-stderr.log"
+        # The current launch's stdout and stderr.
+        self.streams = (self.shots / "app-stdout.log", self.shots / "app-stderr.log")
+        self.booted = ("CANNOT PROVE", "the second launch never ran")
+
+    def data_roots(self):
+        """Both folders the app keeps data in, each named for its identifier."""
+        return [
+            Path(os.environ[variable]) / self.bundle_id
+            for variable in ("APPDATA", "LOCALAPPDATA")
+        ]
 
     def helper(self, **arguments):
         """One PowerShell invocation per frame, doing everything that frame
@@ -1446,21 +1549,21 @@ class WindowsLane(Lane):
                 "this runner has no interactive window station ('%s'), so nothing can put anything on a screen here"
                 % station,
             )
-        # The data root cannot be redirected: tauri resolves it through
-        # SHGetKnownFolderPath, which reads the user's profile and ignores
-        # %LOCALAPPDATA%. So the runner itself is the sandbox, and its
+        # The data roots cannot be redirected: tauri and app_dirs2 resolve them
+        # through SHGetKnownFolderPath, which reads the user's profile and
+        # ignores %LOCALAPPDATA%. So the runner itself is the sandbox, and its
         # cleanliness is measured rather than assumed.
-        data_root = Path(os.environ["LOCALAPPDATA"]) / self.bundle_id
-        if data_root.exists():
+        used = [root for root in self.data_roots() if root.exists()]
+        if used:
             note(
                 "::error::%s already exists, so this runner has run the app before"
-                % data_root
+                % ", ".join(map(str, used))
             )
             raise Answer(
                 "CANNOT PROVE",
                 "the runner's app-data directory is not clean, so this would not be a first-install launch",
             )
-        self.log_dir = data_root / "logs"
+        self.log_dir = Path(os.environ["LOCALAPPDATA"]) / self.bundle_id / "logs"
 
     def control_capture(self, slug, path):
         if slug.endswith("desktop"):
@@ -1536,28 +1639,37 @@ class WindowsLane(Lane):
             )
         self.exe = max(programs, key=lambda path: path.stat().st_size)
 
-    def launch(self):
-        env = dict(
-            os.environ,
+    def start(self, **extra):
+        """The installed program, writing to this launch's streams, with `extra`
+        over the environment the lane gives every launch."""
+        env = dict(os.environ)
+        # Never inherited: UNYT_BYPASS_PASSWORD decides which launch this is,
+        # and AGENT_ID lengthens the data root, whose length is part of what the
+        # second launch tests. The Linux lane needs AGENT_ID only for the
+        # single-instance plugin.
+        for name in ("UNYT_BYPASS_PASSWORD", "AGENT_ID"):
+            env.pop(name, None)
+        env.update(
             RUST_LOG=os.environ.get("RUST_LOG", "info"),
             # A runner has no GPU and WebView2's default compositing path draws
             # nothing on one. The software rasterizer is deliberately left
             # enabled — disabling it as well is what turns "no GPU" into "no
-            # pixels". Deliberately unset: UNYT_BYPASS_PASSWORD, and AGENT_ID,
-            # which the Linux lane needs only for the single-instance plugin.
+            # pixels".
             WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--disable-gpu --disable-gpu-compositing",
+            **extra,
         )
         # Captured even though windows_subsystem = "windows" means nothing
         # reaches a terminal: a Rust panic before tracing is initialised still
         # writes to stderr, and that is the difference between a diagnosable
         # crash and "the app never reached any state".
+        stdout, stderr = self.streams
         try:
-            self.app = subprocess.Popen(
+            app = subprocess.Popen(
                 [str(self.exe)],
                 cwd=self.install_dir,
                 env=env,
-                stdout=self.opened(self.stdout_log),
-                stderr=self.opened(self.stderr_log),
+                stdout=self.opened(stdout),
+                stderr=self.opened(stderr),
             )
         except OSError as exc:
             raise Answer(
@@ -1565,13 +1677,67 @@ class WindowsLane(Lane):
             ) from None
         note(
             "launched %s (%d bytes, pid %d)"
-            % (self.exe, self.exe.stat().st_size, self.app.pid)
+            % (self.exe, self.exe.stat().st_size, app.pid)
         )
+        return app
+
+    def launch(self):
+        self.app = self.start()
 
     def logs(self):
-        return read_all(
-            [self.stdout_log, self.stderr_log], [self.log_dir], "unyt.v*.log.*"
+        return read_all(self.streams, [self.log_dir], "unyt.v*.log.*")
+
+    def boot(self):
+        """The second launch. The data roots sit in the runner's own profile,
+        so lair and the conductor get the paths a user whose name is as long as
+        the runner's would."""
+        # Ended first: with AGENT_ID unset, the single-instance plugin hands a
+        # launch to the app already running instead of starting it.
+        end_tree(self.app)
+        left = remove_all(self.data_roots(), self.clear_seconds, self.poll_seconds)
+        if left:
+            self.booted = (
+                "CANNOT PROVE",
+                "the first launch's data at %s could not be removed, so a second launch would not start from a fresh profile"
+                % ", ".join(map(str, left)),
+            )
+            note("::error::" + self.booted[1])
+            return
+        note("--- launching again with UNYT_BYPASS_PASSWORD set ---")
+        self.streams = (
+            self.shots / "boot-stdout.log",
+            self.shots / "boot-stderr.log",
         )
+        self.app = self.start(UNYT_BYPASS_PASSWORD="1")
+        self.booted = self.watch_boot()
+        if self.booted[0] == "PROVEN":
+            note("OK: " + self.booted[1])
+            return
+        note("::error::" + self.booted[1])
+        note("--- app log of the second launch (tail) ---")
+        note(indent("\n".join(self.logs().splitlines()[-40:])))
+
+    def watch_boot(self):
+        started = time.monotonic()
+        while True:
+            # Asked before the log is read, so an app that has exited has
+            # written everything it ever will by the time the log is judged.
+            alive = self.alive()
+            log = self.logs()
+            answer = boot_outcome(log, self.re_ready, self.re_failed, self.re_awaiting)
+            if answer:
+                return answer
+            if not alive:
+                return boot_stalled("exited before it reported a state after boot", log)
+            if time.monotonic() - started >= self.timeout_seconds:
+                return boot_stalled(
+                    "reported no state after boot within %ds" % self.timeout_seconds,
+                    log,
+                )
+            time.sleep(self.poll_seconds)
+
+    def verdict(self):
+        return with_boot(super().verdict(), self.booted)
 
     def alive(self):
         return self.app.poll() is None
@@ -1627,7 +1793,7 @@ class WindowsLane(Lane):
         note(indent("\n".join(self.logs().splitlines()[-40:])))
 
     def stop(self):
-        end_process(self.app)
+        end_tree(self.app)
         super().stop()
 
 
