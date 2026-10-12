@@ -8,8 +8,8 @@ The paths below use the names in this repo's `identity.json`: `<identifier>`, `<
 |---|------|--------------|------------------------|
 | 1 | `%LOCALAPPDATA%\<productName>\` | App binaries (NSIS install only) | Yes (NSIS) |
 | 2 | `C:\Program Files\<productName>\` | App binaries (MSI install only) | Yes (MSI) |
-| 3 | `%APPDATA%\<identifier>\` | `network_metadata.json`, `joining_agent_key.json`, `log-config.json` | Only if you tick **Delete the application data** (NSIS) |
-| 4 | `%LOCALAPPDATA%\<identifier>\` | Rotated `unyt.v*.log.*` in `logs\`, WebView2 data in `EBWebView\`, and in `<major.minor>\holochain\` the conductor databases, Lair keystore, happ bundles and UIs | Only if you tick **Delete the application data** (NSIS) |
+| 3 | `%APPDATA%\<identifier>\` | `log-config.json` | Only if you tick **Delete the application data** (NSIS) |
+| 4 | `%LOCALAPPDATA%\<identifier>\` | `network_metadata.json`, `joining_agent_key.json`, rotated `unyt.v*.log.*` in `logs\`, WebView2 data in `EBWebView\`, and in `<major.minor>\holochain\` the conductor databases, Lair keystore, happ bundles and UIs | Only if you tick **Delete the application data** (NSIS) |
 | 5 | `%LOCALAPPDATA%\Temp\<identifier>*` | Dev-mode temp dirs | No |
 
 The NSIS uninstaller shows the **Delete the application data** box on its first page. It is off by default. The MSI uninstaller has no such box.
