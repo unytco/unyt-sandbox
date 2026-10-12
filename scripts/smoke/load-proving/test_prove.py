@@ -824,13 +824,19 @@ class TheWindowsSecondLaunch(Quiet):
         (lane.log_dir / "unyt.v0.110.log.2026-08-14").write_text(AWAITING)
         for root in lane.data_roots():
             (root / "0.110").mkdir(parents=True, exist_ok=True)
+        # Where the pinned app keeps lair and the conductor.
+        holochain = Path(env["LOCALAPPDATA"]) / lane.bundle_id / "0.110" / "holochain"
+        holochain.mkdir(parents=True, exist_ok=True)
+        (holochain / "lair-keystore-config.yaml").write_text("")
         # Already ended, as the watch leaves it.
         lane.app = FakeApp(41)
         lane.app.running = False
         killed, started = [], []
+        conductor_left = []
 
         def popen(argv, env, **kwargs):
             started.append((env, [root for root in lane.data_roots() if root.exists()]))
+            conductor_left.append(holochain.exists())
             lane.log_dir.mkdir(parents=True, exist_ok=True)
             (lane.log_dir / "unyt.v0.110.log.2026-08-14").write_text(
                 LAIR_READY + "\n" + NO_NETWORK
@@ -848,6 +854,9 @@ class TheWindowsSecondLaunch(Quiet):
         self.assertEqual(1, len(started))
         launched_with, roots_at_launch = started[0]
         self.assertEqual([], roots_at_launch, "the profile was not cleared")
+        self.assertEqual(
+            [False], conductor_left, "the conductor's data was not cleared"
+        )
         self.assertEqual("1", launched_with["UNYT_BYPASS_PASSWORD"])
         self.assertNotIn("AGENT_ID", launched_with)
         self.assertEqual("PROVEN", lane.booted[0], lane.booted[1])
