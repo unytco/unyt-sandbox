@@ -6,27 +6,25 @@ The paths below use the names in this repo's `identity.json`: `<identifier>`, `<
 
 | # | Path | What's there | Removed by uninstaller |
 |---|------|--------------|------------------------|
-| 1 | `%LOCALAPPDATA%\<productName>\` | App binaries + `EBWebView\` (WebView2 cache) | Yes (NSIS) |
+| 1 | `%LOCALAPPDATA%\<productName>\` | App binaries (NSIS install only) | Yes (NSIS) |
 | 2 | `C:\Program Files\<productName>\` | App binaries (MSI install only) | Yes (MSI) |
-| 3 | `%APPDATA%\<identifier>\` | `network_metadata.json`, `log-config.json`, Stronghold `.hold` | No |
-| 4 | `%LOCALAPPDATA%\<identifier>\logs\` | Rotated `unyt.v*.log.*` | No |
-| 5 | `%LOCALAPPDATA%\zo-el ,60,joelulahanna,64,gmail.com,62,\<identifier>\<major.minor>\holochain\` | Conductor DBs, Lair keystore, happ bundles, UIs | No |
-| 6 | `%LOCALAPPDATA%\Temp\<identifier>*` | Dev-mode temp dirs | No |
-| 7 | Windows Credential Manager, target `<identifier>`, user `lair-salt` | Lair password salt | No |
+| 3 | `%APPDATA%\<identifier>\` | `log-config.json` | Only if you tick **Delete the application data** (NSIS) |
+| 4 | `%LOCALAPPDATA%\<identifier>\` | `network_metadata.json`, `joining_agent_key.json`, rotated `unyt.v*.log.*` in `logs\`, WebView2 data in `EBWebView\`, and in `<major.minor>\holochain\` the conductor databases, Lair keystore, happ bundles and UIs | Only if you tick **Delete the application data** (NSIS) |
+| 5 | `%LOCALAPPDATA%\Temp\<identifier>*` | Dev-mode temp dirs | No |
 
-A factory reset must clear items 3 to 7.
+The NSIS uninstaller shows the **Delete the application data** box on its first page. It is off by default. The MSI uninstaller has no such box.
+
+A factory reset must clear items 3 to 5.
 
 ## Full wipe, by hand
 
-1. Quit the app. If they still run, end `<mainBinaryName>.exe`, `lair-keystore.exe` and `holochain.exe` in Task Manager.
+1. Quit the app. If it still runs, end `<mainBinaryName>.exe` in Task Manager.
 2. Uninstall it in *Settings → Apps → `<productName>` → Uninstall*.
 3. Delete these folders in File Explorer:
    - `%APPDATA%\<identifier>\`
    - `%LOCALAPPDATA%\<identifier>\`
-   - `%LOCALAPPDATA%\zo-el ,60,joelulahanna,64,gmail.com,62,\<identifier>\`
    - Any `<identifier>*` under `%LOCALAPPDATA%\Temp\`
-   - `%LOCALAPPDATA%\<productName>\EBWebView\`, if the uninstaller left it
-4. Open *Control Panel → Credential Manager → Windows Credentials*. Find the Generic Credential with target `<identifier>` (user `lair-salt`) and click **Remove**.
+   - `%LOCALAPPDATA%\<productName>\`, if the uninstaller left it
 
 ## Full wipe, in PowerShell
 
@@ -36,7 +34,7 @@ From this repo's root, run:
 pwsh -File scripts\windows-wipe.ps1
 ```
 
-The script reads `identifier` and `productName` from `identity.json`. It stops every process that runs from the app's install folders, removes items 1 and 3 to 7, and fails if a folder is still there. It touches nothing unless it can read both names and each is a plain name, so it cannot remove a parent folder that holds another app's data. Add `-WhatIf` to see what it would remove.
+The script reads `identifier` and `productName` from `identity.json`. It stops every process that runs from the app's install folders, removes items 1 and 3 to 5, and fails if a folder is still there. It touches nothing unless it can read both names and each is a plain name, so it cannot remove a parent folder that holds another app's data. Add `-WhatIf` to see what it would remove.
 
 On a machine without this repo, copy `scripts\windows-wipe.ps1` to it and give it the two names from `identity.json`:
 
@@ -46,10 +44,8 @@ pwsh -File windows-wipe.ps1 -Identifier '<identifier>' -ProductName '<productNam
 
 ## Verify
 
-The script fails if any of the app's folders is still there. Then `cmdkey /list:<identifier>` must say "not found".
+The script fails if any of the app's folders is still there.
 
 ## Differences from Linux
 
 - The data is split across `%APPDATA%` (Roaming) and `%LOCALAPPDATA%`. There is no single root.
-- The Holochain data lives under a folder named for the app's **Cargo `authors`**, `zo-el <joelulahanna@gmail.com>`, with each character Windows may not take written as `,<code>,`: `zo-el ,60,joelulahanna,64,gmail.com,62,`. It is not under the identifier folder, and it is easy to miss.
-- The Lair salt is in **Windows Credential Manager**, not on disk. If you skip it, the next install fails to unlock.

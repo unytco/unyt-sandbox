@@ -57,7 +57,7 @@ foreach ($variable in 'APPDATA', 'LOCALAPPDATA') {
   }
 }
 
-# Every process the app's install folders hold, and no other app's holochain or lair-keystore.
+# Every process that runs from the app's install folders, and no other app's.
 $installs = @(Join-Path $env:LOCALAPPDATA $ProductName)
 if ($env:ProgramFiles) { $installs += Join-Path $env:ProgramFiles $ProductName }
 $processes = Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -71,14 +71,10 @@ foreach ($process in $processes) {
   }
 }
 
-# The Holochain data folder: app_dirs2 names it for the app crate's Cargo authors, "zo-el
-# <joelulahanna@gmail.com>", writing each character Windows may not take as ,<code>,.
-$holochain = Join-Path $env:LOCALAPPDATA 'zo-el ,60,joelulahanna,64,gmail.com,62,'
 $folders = @(
   (Join-Path $env:LOCALAPPDATA $ProductName),
   (Join-Path $env:APPDATA $Identifier),
-  (Join-Path $env:LOCALAPPDATA $Identifier),
-  (Join-Path $holochain $Identifier)
+  (Join-Path $env:LOCALAPPDATA $Identifier)
 )
 $temp = Join-Path $env:LOCALAPPDATA 'Temp'
 if (Test-Path -LiteralPath $temp) {
@@ -88,10 +84,6 @@ foreach ($folder in $folders) {
   if ((Test-Path -LiteralPath $folder) -and $PSCmdlet.ShouldProcess($folder, 'Remove-Item -Recurse')) {
     Remove-Item -LiteralPath $folder -Recurse -Force
   }
-}
-# cmdkey fails when there is no such credential, which is no failure of the wipe.
-if ((Get-Command cmdkey -ErrorAction SilentlyContinue) -and $PSCmdlet.ShouldProcess($Identifier, 'cmdkey /delete')) {
-  & { $ErrorActionPreference = 'Continue'; cmdkey "/delete:$Identifier" *> $null }
 }
 
 if (-not $WhatIfPreference) {

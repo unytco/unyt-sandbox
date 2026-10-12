@@ -3,7 +3,8 @@ name: "release-smoke"
 # Does a shipped artifact work on a user's machine?
 #
 #   PHASE 1 — DOES IT OPEN. Installs each shipped installer, launches it, and
-#   photographs the app's OWN WINDOW.
+#   photographs the app's OWN WINDOW. On Windows it then launches it again with
+#   the password prompt skipped, and needs lair and the conductor to start.
 #
 #   PHASE 2 — STATIC CHECKS. What the artifact is, before anyone runs it:
 #   install/version/dependency checks in pristine Linux containers, the macOS
@@ -379,7 +380,7 @@ jobs:
       # bash, as the other two lanes: the lane itself is python, and it shells out
       # to window-capture.ps1 under `powershell` (not pwsh) for the one thing
       # only .NET Framework can do.
-      - name: Launch it and photograph what a user would see
+      - name: Launch it and photograph what a user would see, then boot it past the password prompt
         shell: bash
         run: |
           rc=0

@@ -33,6 +33,13 @@ import test_frames as build
 AWAITING = "2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: Starting -> LairAwaitingPassword { is_initial_setup: true }"
 HEALTHY = '2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: LairReady -> HcAuthRequired { agent_key: "uhCAkAAAA", joining_service_url: "https://x" }'
 FAILED = '2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: ConductorStarting -> ConductorError("boom")'
+LAIR_READY = (
+    "2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: Starting -> LairReady"
+)
+NO_NETWORK = '2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: LairReady -> NetworkSetupRequired { agent_key: "uhCAkAAAA", has_existing_key: false }'
+# The failure Unyt Sandbox 0.110.0 and 0.110.1 hit on Windows, at the length a
+# GitHub runner's profile gives the path.
+TOO_LONG = r'2026-08-14T10:00:00Z  INFO unyt::runtime: Status update: Starting -> ConductorError("Runtime(DataRootPathTooLong { path: \"C:\\\\Users\\\\runneradmin\\\\AppData\\\\Local\\\\zo-el ,60,joelulahanna,64,gmail.com,62,\\\\co.unyt.unyt.sandbox\\\\0.110\\\\holochain\\\\socket\", len: 118, max: 107 })")'
 
 FIXTURES = {}
 
@@ -655,6 +662,498 @@ class TheWindowsLanesDecisions(Quiet):
         )
 
 
+class FakeApp:
+    """What the Windows lane asks of a process it started."""
+
+    def __init__(self, pid):
+        self.pid = pid
+        self.running = True
+
+    def poll(self):
+        return None if self.running else 0
+
+    def terminate(self):
+        self.running = False
+
+    kill = terminate
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class TheWindowsSecondLaunch(Quiet):
+    """The Windows lane's first launch can only reach the password prompt, so
+    the second, with UNYT_BYPASS_PASSWORD set, is what shows lair and the
+    conductor start. Judged with the real patterns from common.sh."""
+
+    def outcome(self, log):
+        return prove.boot_outcome(
+            log,
+            re.compile(prove.shell_value("UNYT_RE_BACKEND_READY")),
+            re.compile(prove.shell_value("UNYT_RE_FAILED")),
+            re.compile(prove.shell_value("UNYT_RE_AWAITING_PASSWORD")),
+        )
+
+    def lane(self):
+        lane = prove.WindowsLane(str(Path(self.dir) / "unyt.exe"), self.dir)
+        lane.prepare()
+        lane.poll_seconds = 0
+        self.addCleanup(lambda: [handle.close() for handle in lane.handles])
+        return lane
+
+    def profile(self):
+        """A runner's profile folders, new on every call, for the lane to find
+        through the environment."""
+        root = Path(tempfile.mkdtemp(dir=self.dir))
+        env = {
+            "LOCALAPPDATA": str(root / "Local"),
+            "APPDATA": str(root / "Roaming"),
+        }
+        patched = mock.patch.dict(os.environ, env)
+        patched.start()
+        self.addCleanup(patched.stop)
+        return env
+
+    def test_a_state_only_a_running_conductor_reports_passes(self):
+        for line in (
+            HEALTHY,
+            NO_NETWORK,
+            "Status update: NetworkSetupRequired { agent_key: x } -> Ready",
+        ):
+            with self.subTest(line=line):
+                word, why = self.outcome(LAIR_READY + "\n" + line)
+                self.assertEqual("PROVEN", word)
+                self.assertIn(line.split("Status update: ")[1], why)
+
+    def test_a_conductor_that_would_not_start_fails_with_its_error(self):
+        word, why = self.outcome(TOO_LONG)
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("DataRootPathTooLong", why)
+        self.assertIn("len: 118, max: 107", why)
+
+    def test_the_prompt_alone_fails_this_launch(self):
+        # The first launch's pass is this one's failure: an app parked at the
+        # prompt never started lair or the conductor.
+        word, why = self.outcome(AWAITING)
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("still asked for its keystore password", why)
+
+    def test_lair_ready_alone_is_not_yet_an_answer(self):
+        # Setup still has to ask the conductor what is installed, and can fail.
+        self.assertIsNone(self.outcome(LAIR_READY))
+        self.assertIsNone(self.outcome(""))
+
+    def test_a_failure_after_a_state_outranks_it(self):
+        self.assertEqual("NOT PROVEN", self.outcome(NO_NETWORK + "\n" + FAILED)[0])
+
+    def test_the_watch_waits_for_the_conductor(self):
+        lane = self.lane()
+        lane.timeout_seconds = 30
+        polls = []
+
+        def logs():
+            polls.append(1)
+            return LAIR_READY + ("\n" + NO_NETWORK if len(polls) > 2 else "")
+
+        lane.logs = logs
+        lane.alive = lambda: True
+        self.assertEqual("PROVEN", lane.watch_boot()[0])
+        self.assertGreater(len(polls), 2)
+
+    def test_an_app_that_exits_says_where_it_stopped(self):
+        lane = self.lane()
+        lane.logs = lambda: LAIR_READY
+        lane.alive = lambda: False
+        word, why = lane.watch_boot()
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("exited", why)
+        self.assertIn("Starting -> LairReady", why)
+
+    def test_and_a_state_it_logged_as_it_exited_still_counts(self):
+        lane = self.lane()
+        lane.logs = lambda: NO_NETWORK
+        lane.alive = lambda: False
+        self.assertEqual("PROVEN", lane.watch_boot()[0])
+
+    def test_an_app_that_never_answers_is_red_at_the_timeout(self):
+        lane = self.lane()
+        lane.timeout_seconds = 0
+        lane.logs = lambda: ""
+        lane.alive = lambda: True
+        word, why = lane.watch_boot()
+        self.assertEqual("NOT PROVEN", word)
+        self.assertIn("no state after boot within 0s", why)
+        self.assertIn("no status at all", why)
+
+    def test_the_boot_finding_joins_the_window_verdict(self):
+        booted = ("PROVEN", "it booted")
+        failed = ("NOT PROVEN", "it did not boot")
+        untried = ("CANNOT PROVE", "it could not be tried")
+        for earned, boot, want in (
+            ("PROVEN", booted, "PROVEN"),
+            ("NOT PROVEN", booted, "NOT PROVEN"),
+            ("UNTRUSTED", booted, "UNTRUSTED"),
+            ("PROVEN", failed, "NOT PROVEN"),
+            # About the artifact, so it outranks a runner that could not look.
+            ("CANNOT PROVE", failed, "NOT PROVEN"),
+            ("PROVEN", untried, "CANNOT PROVE"),
+            ("NOT PROVEN", untried, "NOT PROVEN"),
+        ):
+            with self.subTest(earned=earned, boot=boot[0]):
+                word, why = prove.with_boot((earned, "the window"), boot)
+                self.assertEqual(want, word)
+                self.assertIn("the window", why)
+                self.assertIn(boot[1], why)
+
+    def test_a_lane_whose_second_launch_never_ran_is_not_proven(self):
+        self.assertEqual(
+            "CANNOT PROVE", prove.with_boot(("PROVEN", "x"), self.lane().booted)[0]
+        )
+
+    def test_the_second_launch_starts_from_a_cleared_profile_with_the_bypass_set(self):
+        env = self.profile()
+        lane = self.lane()
+        lane.exe = Path(self.dir) / "unyt.exe"
+        lane.exe.write_bytes(b"MZ")
+        lane.install_dir = self.dir
+        lane.timeout_seconds = 30
+        lane.log_dir = Path(env["LOCALAPPDATA"]) / lane.bundle_id / "logs"
+        # What the first launch left: its log, which says it is at the prompt,
+        # and a folder in every data root.
+        lane.log_dir.mkdir(parents=True)
+        (lane.log_dir / "unyt.v0.110.log.2026-08-14").write_text(AWAITING)
+        for root in lane.data_roots():
+            (root / "0.110").mkdir(parents=True, exist_ok=True)
+        # Where the pinned app keeps lair and the conductor.
+        holochain = Path(env["LOCALAPPDATA"]) / lane.bundle_id / "0.110" / "holochain"
+        holochain.mkdir(parents=True, exist_ok=True)
+        (holochain / "lair-keystore-config.yaml").write_text("")
+        # Already ended, as the watch leaves it.
+        lane.app = FakeApp(41)
+        lane.app.running = False
+        killed, started = [], []
+        conductor_left = []
+
+        def popen(argv, env, **kwargs):
+            started.append((env, [root for root in lane.data_roots() if root.exists()]))
+            conductor_left.append(holochain.exists())
+            lane.log_dir.mkdir(parents=True, exist_ok=True)
+            (lane.log_dir / "unyt.v0.110.log.2026-08-14").write_text(
+                LAIR_READY + "\n" + NO_NETWORK
+            )
+            return FakeApp(42)
+
+        with (
+            mock.patch.dict(os.environ, {"AGENT_ID": "x"}),
+            mock.patch.object(prove, "run", lambda argv, **kw: killed.append(argv)),
+            mock.patch.object(prove.subprocess, "Popen", popen),
+        ):
+            lane.boot()
+
+        self.assertEqual([], killed)
+        self.assertEqual(1, len(started))
+        launched_with, roots_at_launch = started[0]
+        self.assertEqual([], roots_at_launch, "the profile was not cleared")
+        self.assertEqual(
+            [False], conductor_left, "the conductor's data was not cleared"
+        )
+        self.assertEqual("1", launched_with["UNYT_BYPASS_PASSWORD"])
+        self.assertNotIn("AGENT_ID", launched_with)
+        self.assertEqual("PROVEN", lane.booted[0], lane.booted[1])
+        self.assertEqual(42, lane.app.pid)
+
+    def test_a_profile_that_cannot_be_cleared_is_not_launched_into(self):
+        env = self.profile()
+        lane = self.lane()
+        lane.clear_seconds = 0
+        lane.app = FakeApp(41)
+        stuck = Path(env["LOCALAPPDATA"]) / lane.bundle_id
+        stuck.mkdir(parents=True)
+        with (
+            mock.patch.object(prove, "run", lambda argv, **kw: None),
+            mock.patch.object(prove.shutil, "rmtree", lambda path, **kw: None),
+            mock.patch.object(prove.subprocess, "Popen") as popen,
+        ):
+            lane.boot()
+        popen.assert_not_called()
+        self.assertEqual("CANNOT PROVE", lane.booted[0])
+        self.assertIn(str(stuck), lane.booted[1])
+
+    def test_the_first_launch_never_skips_the_prompt(self):
+        lane = self.lane()
+        lane.exe = Path(self.dir) / "unyt.exe"
+        lane.exe.write_bytes(b"MZ")
+        lane.install_dir = self.dir
+        seen = []
+        with (
+            mock.patch.dict(os.environ, {"UNYT_BYPASS_PASSWORD": "1", "AGENT_ID": "x"}),
+            mock.patch.object(
+                prove.subprocess,
+                "Popen",
+                lambda argv, env, **kw: seen.append(env) or FakeApp(7),
+            ),
+        ):
+            lane.launch()
+        self.assertNotIn("UNYT_BYPASS_PASSWORD", seen[0])
+        self.assertNotIn("AGENT_ID", seen[0])
+
+    def preflight_on(self, *left):
+        """Preflight on a runner whose profile holds `left`, each a folder named
+        for the identifier under the variable given."""
+        env = self.profile()
+        lane = self.lane()
+        Path(lane.artifact).write_bytes(b"")
+        lane.helper = lambda **arguments: ["STATION WinSta0"]
+        for variable in left:
+            (Path(env[variable]) / lane.bundle_id).mkdir(parents=True)
+        lane.preflight()
+        return lane
+
+    def test_a_clean_profile_is_a_first_install(self):
+        lane = self.preflight_on()
+        self.assertEqual(
+            Path(os.environ["LOCALAPPDATA"]) / lane.bundle_id / "logs", lane.log_dir
+        )
+
+    def test_either_data_folder_left_by_an_earlier_run_is_not_one(self):
+        # The roaming one holds the app's log settings, apart from the local
+        # one that holds the rest.
+        for variable in ("APPDATA", "LOCALAPPDATA"):
+            with self.subTest(variable=variable):
+                with self.assertRaises(prove.Answer) as raised:
+                    self.preflight_on(variable)
+                self.assertEqual("CANNOT PROVE", raised.exception.word)
+                self.assertIn("not clean", raised.exception.why)
+
+
+class Runner:
+    """A Windows runner's processes, as the Windows lane sees them through
+    Popen, taskkill and the process list. Each launch of the app brings a
+    WebView2 child whose command line names the app's data folder, and holds
+    that folder until it ends."""
+
+    def __init__(self, local, bundle_id):
+        self.data = Path(local) / bundle_id
+        self.processes = {}  # pid -> [parent, command line, alive]
+        self.events = []
+        self.launches = 0
+        self.real_rmtree = shutil.rmtree
+
+    def alive(self, pid):
+        return pid in self.processes and self.processes[pid][2]
+
+    def end(self, pid):
+        """taskkill /T: the process and its descendants, and nothing when the
+        process is already gone, since the tree is found through it."""
+        if not self.alive(pid):
+            return
+        self.processes[pid][2] = False
+        for child, (parent, _, _) in list(self.processes.items()):
+            if parent == pid:
+                self.end(child)
+
+    def run(self, argv, **kwargs):
+        if argv[0] == "taskkill":
+            self.events.append(("taskkill", int(argv[-1])))
+            self.end(int(argv[-1]))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[0] == "powershell" and argv[-1] == prove.PROCESS_LIST:
+            self.events.append(("list",))
+            listed = "".join(
+                "%d\t%s\n" % (pid, command)
+                for pid, (_, command, alive) in self.processes.items()
+                if alive
+            )
+            return subprocess.CompletedProcess(argv, 0, listed, "")
+        raise AssertionError("the lane ran %r" % argv)
+
+    def popen(self, argv, env, **kwargs):
+        self.launches += 1
+        pid = 40 + self.launches
+        self.processes[pid] = [1, argv[0], True]
+        self.processes[pid + 10] = [
+            pid,
+            'msedgewebview2.exe --type=renderer --user-data-dir="%s"'
+            % (self.data / "EBWebView"),
+            True,
+        ]
+        self.events.append(("start", pid, env.get("UNYT_BYPASS_PASSWORD")))
+        (self.data / "logs").mkdir(parents=True, exist_ok=True)
+        (self.data / "logs" / "unyt.v0.110.log.2026-10-11").write_text(
+            AWAITING if self.launches == 1 else LAIR_READY + "\n" + NO_NETWORK,
+            encoding="utf-8",
+        )
+        runner = self
+
+        class Handle:
+            def __init__(self):
+                self.pid = pid
+
+            def poll(self):
+                return None if runner.alive(pid) else 0
+
+            def terminate(self):
+                runner.processes[pid][2] = False
+
+            kill = terminate
+
+            def wait(self, timeout=None):
+                return 0
+
+        return Handle()
+
+    def rmtree(self, path, **kwargs):
+        """A folder a live process names stays, as a file it holds open would
+        keep it."""
+        held = str(path).lower()
+        for _, command, alive in self.processes.values():
+            if alive and held in command.lower():
+                return
+        self.real_rmtree(path, **kwargs)
+
+
+class TheFirstLaunchsTeardown(Quiet):
+    """The Windows lane, run whole against a scripted runner: the first launch
+    has to be gone, WebView2 included, before its data folders can be cleared
+    for the second."""
+
+    def drive(self, parent_exits=False):
+        root = Path(tempfile.mkdtemp(dir=self.dir))
+        env = {"LOCALAPPDATA": str(root / "Local"), "APPDATA": str(root / "Roaming")}
+        runner = Runner(env["LOCALAPPDATA"], prove.bundle_id())
+        artifact = root / "unyt_0.110.2_x64_windows.exe"
+        artifact.write_bytes(b"MZ")
+
+        class Scripted(prove.WindowsLane):
+            poll_seconds = 0
+            clear_seconds = 1
+
+            def helper(self, **arguments):
+                runner.events.append(("helper", tuple(sorted(arguments))))
+                return ["STATION WinSta0"]
+
+            def control_capture(self, slug, path):
+                shutil.copy(FIXTURES["flat"], path)
+                return True
+
+            def install(self):
+                self.install_dir = str(root / "install")
+                Path(self.install_dir).mkdir()
+                self.exe = Path(self.install_dir) / "unyt-sandbox.exe"
+                self.exe.write_bytes(b"MZ")
+
+            def capture(self, slug):
+                self.saw_window = True
+                shutil.copy(FIXTURES["app"], self.verdict_dir / (slug + ".png"))
+                if parent_exits and not self.second_started:
+                    # Gone between its last frame and its teardown, and its
+                    # WebView2 child with it in name only.
+                    runner.processes[self.app.pid][2] = False
+                return True
+
+            def diagnostics(self):
+                runner.events.append(("diagnostics",))
+                super().diagnostics()
+
+            def verdict(self):
+                runner.events.append(("verdict",))
+                return super().verdict()
+
+        lane = Scripted(str(artifact), str(root / "shots"))
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(prove, "run", runner.run),
+            mock.patch.object(prove.subprocess, "Popen", runner.popen),
+            mock.patch.object(prove.shutil, "rmtree", runner.rmtree),
+        ):
+            answer = lane.run()
+        return lane, runner, answer
+
+    def test_a_first_launch_whose_app_exited_still_leaves_room_for_the_second(self):
+        # The app is gone, so taskkill finds no tree; its WebView2 child is
+        # found by the data folder its command line names.
+        _, runner, (word, why) = self.drive(parent_exits=True)
+        self.assertEqual("PROVEN", word, why)
+        self.assertNotIn(("taskkill", 41), runner.events)
+        self.assertLess(
+            runner.events.index(("taskkill", 51)),
+            runner.events.index(("start", 42, "1")),
+        )
+
+    def test_a_live_first_launch_is_ended_with_its_tree_before_the_diagnostics(self):
+        _, runner, (word, why) = self.drive()
+        self.assertEqual("PROVEN", word, why)
+        events = runner.events
+        listed = events.index(("helper", ("TargetPid",)))
+        killed = events.index(("taskkill", 41))
+        self.assertLess(listed, killed, "the window list needs the live app")
+        self.assertLess(killed, events.index(("diagnostics",)))
+        self.assertFalse(runner.alive(51), "its WebView2 child outlived it")
+
+    def test_nothing_ends_the_second_launch_before_its_answer_is_in(self):
+        lane, runner, (word, why) = self.drive()
+        self.assertEqual("PROVEN", word, why)
+        events = runner.events
+        between = events[events.index(("start", 42, "1")) : events.index(("verdict",))]
+        self.assertEqual([("start", 42, "1")], between)
+        before = len(events)
+        with mock.patch.object(prove, "run", runner.run):
+            with self.assertRaises(RuntimeError):
+                lane.end_first_launch()
+        self.assertEqual(before, len(events))
+
+
+class FindingWhatTheFirstLaunchLeft(Quiet):
+    DATA = r"C:\Users\runneradmin\AppData\Local\co.unyt.unyt.sandbox"
+
+    def test_a_process_naming_a_data_folder_or_a_path_in_it_is_found(self):
+        listing = (
+            '7\t"C:\\EdgeWebView\\msedgewebview2.exe" --user-data-dir="%s\\EBWebView"\n'
+            "8\tmsedgewebview2.exe --type=crashpad-handler --database=%s\\EBWebView\\Crashpad\n"
+            '9\tcmd /c dir "%s"\n'
+        ) % (self.DATA.upper(), self.DATA, self.DATA)
+        self.assertEqual([7, 8, 9], prove.pids_naming([self.DATA], listing))
+
+    def test_and_nothing_else_is(self):
+        listing = (
+            # A sibling whose name only starts with the identifier.
+            "7\tx.exe --user-data-dir=%s2\\EBWebView\n"
+            # The app itself, which runs from its install folder.
+            '8\t"C:\\Users\\runneradmin\\AppData\\Local\\Unyt Sandbox\\unyt-sandbox.exe"\n'
+            # A process whose command line cannot be read.
+            "9\t\n"
+            "not a line of the list\n"
+        ) % self.DATA
+        self.assertEqual([], prove.pids_naming([self.DATA], listing))
+
+    def test_a_taskkill_that_hangs_does_not_hold_the_lane(self):
+        proc = FakeApp(41)
+
+        def hangs(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+        with mock.patch.object(prove, "run", hangs):
+            prove.end_tree(proc)
+        self.assertFalse(proc.running)
+        self.assertIn("did not finish", self.noise.getvalue())
+
+    def test_and_neither_does_a_process_list_that_never_comes_back(self):
+        lane = prove.WindowsLane(str(Path(self.dir) / "unyt.exe"), self.dir)
+        lane.app = FakeApp(41)
+        asked = []
+
+        def run(argv, **kwargs):
+            asked.append(argv[0])
+            if argv[0] == "powershell":
+                raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with mock.patch.object(prove, "run", run):
+            lane.end_first_launch()
+        self.assertEqual(["taskkill", "powershell"], asked)
+        self.assertIn("did not come back", self.noise.getvalue())
+
+
 class WhatTheMacLaneLeavesBehind(Quiet):
     def lane(self):
         lane = prove.MacosLane(str(Path(self.dir) / "unyt.dmg"), self.dir)
@@ -729,6 +1228,56 @@ class StoppingTheApp(unittest.TestCase):
 
     def test_and_a_lane_that_launched_nothing_stops_cleanly(self):
         prove.end_process(None)
+        prove.end_tree(None)
+
+    def test_the_windows_tree_is_ended_while_its_parent_still_lives(self):
+        # taskkill finds the children through the parent, so asking after the
+        # parent is gone would leave WebView2 holding the app's data folder.
+        proc = self.sleeper()
+        asked = []
+        with mock.patch.object(prove, "run", lambda argv, **kw: asked.append(argv)):
+            prove.end_tree(proc)
+        self.assertEqual([["taskkill", "/T", "/F", "/PID", str(proc.pid)]], asked)
+        self.assertIsNotNone(proc.poll())
+
+    def test_and_a_tree_whose_parent_already_exited_is_not_asked_for(self):
+        proc = self.sleeper(0)
+        proc.wait(30)
+        with mock.patch.object(prove, "run") as asked:
+            prove.end_tree(proc)
+        asked.assert_not_called()
+
+
+class ClearingAProfile(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def test_every_folder_is_removed(self):
+        (self.root / "a" / "logs").mkdir(parents=True)
+        absent = self.root / "never-made"
+        self.assertEqual([], prove.remove_all([self.root / "a", absent], 0, 0))
+        self.assertFalse((self.root / "a").exists())
+
+    def test_one_that_stays_is_named_once_the_time_is_up(self):
+        held = self.root / "held"
+        held.mkdir()
+        with mock.patch.object(prove.shutil, "rmtree", lambda path, **kw: None):
+            self.assertEqual([held], prove.remove_all([held], 0, 0))
+
+    def test_one_freed_on_a_later_try_is_removed(self):
+        held = self.root / "held"
+        held.mkdir()
+        real, tries = shutil.rmtree, []
+
+        def freed_on_the_second_try(path, **kw):
+            tries.append(path)
+            if len(tries) > 1:
+                real(path, **kw)
+
+        with mock.patch.object(prove.shutil, "rmtree", freed_on_the_second_try):
+            self.assertEqual([], prove.remove_all([held], 30, 0))
+        self.assertEqual(2, len(tries))
 
 
 @unittest.skipUnless(
@@ -1111,6 +1660,25 @@ class EveryWayOutSaysSomething(unittest.TestCase):
             ],
             printed,
         )
+
+    def test_a_second_launch_runs_between_the_diagnostics_and_the_verdict(self):
+        # After the diagnostics, which read the first launch's windows and log;
+        # before the verdict, which it adds to.
+        order = []
+
+        class Ordered(self.complete_lane(log=AWAITING)):
+            def diagnostics(self):
+                order.append("diagnostics")
+
+            def boot(self):
+                order.append("boot")
+
+            def verdict(self):
+                order.append("verdict")
+                return super().verdict()
+
+        self.drive(Ordered)
+        self.assertEqual(["diagnostics", "boot", "verdict"], order)
 
     def test_a_lane_always_stops_what_it_started(self):
         stopped = []

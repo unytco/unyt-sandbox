@@ -33,8 +33,6 @@ function Assert-True {
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ("unyt-wipe-" + [guid]::NewGuid().ToString('n'))
 $roaming = Join-Path $root 'Roaming'
 $local = Join-Path $root 'Local'
-# The app's Cargo authors, "zo-el <joelulahanna@gmail.com>", as app_dirs2 names its folder.
-$holochain = Join-Path $local 'zo-el ,60,joelulahanna,64,gmail.com,62,'
 $app = @{ identifier = 'co.example.wipe'; productName = 'Example Wipe' }
 
 function New-Machine {
@@ -44,14 +42,14 @@ function New-Machine {
   }
   foreach ($folder in @(
       (Join-Path $local 'Example Wipe'), (Join-Path $roaming 'co.example.wipe'), (Join-Path $local 'co.example.wipe/logs'),
-      (Join-Path $holochain 'co.example.wipe/0.1/holochain'), (Join-Path $local 'Temp/co.example.wipe-1'),
-      (Join-Path $roaming 'co.example.other'), (Join-Path $holochain 'co.example.other'), (Join-Path $local 'Temp/other'))) {
+      (Join-Path $local 'co.example.wipe/0.1/holochain'), (Join-Path $local 'Temp/co.example.wipe-1'),
+      (Join-Path $roaming 'co.example.other'), (Join-Path $local 'co.example.other'), (Join-Path $local 'Temp/other'))) {
     New-Item -ItemType Directory -Path $folder -Force | Out-Null
   }
 }
 function Test-Untouched {
-  $kept = @((Join-Path $local 'Example Wipe'), (Join-Path $roaming 'co.example.wipe'), (Join-Path $holochain 'co.example.wipe'),
-    (Join-Path $roaming 'co.example.other'), (Join-Path $holochain 'co.example.other'), (Join-Path $local 'Temp/other'))
+  $kept = @((Join-Path $local 'Example Wipe'), (Join-Path $roaming 'co.example.wipe'), (Join-Path $local 'co.example.wipe'),
+    (Join-Path $roaming 'co.example.other'), (Join-Path $local 'co.example.other'), (Join-Path $local 'Temp/other'))
   return @($kept | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -eq 0
 }
 function Invoke-Wipe {
@@ -74,18 +72,18 @@ try {
   $identity = Write-Identity ($app | ConvertTo-Json)
   Assert-True 'a wipe that names the app removes its data' ((Invoke-Wipe -Identity $identity) -eq 0) $script:Output
   foreach ($gone in @((Join-Path $local 'Example Wipe'), (Join-Path $roaming 'co.example.wipe'),
-      (Join-Path $local 'co.example.wipe'), (Join-Path $holochain 'co.example.wipe'), (Join-Path $local 'Temp/co.example.wipe-1'))) {
+      (Join-Path $local 'co.example.wipe'), (Join-Path $local 'Temp/co.example.wipe-1'))) {
     Assert-True "and $gone is gone" (-not (Test-Path -LiteralPath $gone))
   }
-  foreach ($kept in @((Join-Path $roaming 'co.example.other'), (Join-Path $holochain 'co.example.other'),
-      (Join-Path $local 'Temp/other'), $holochain, $roaming, $local)) {
+  foreach ($kept in @((Join-Path $roaming 'co.example.other'), (Join-Path $local 'co.example.other'),
+      (Join-Path $local 'Temp/other'), $roaming, $local)) {
     Assert-True "and $kept is kept" (Test-Path -LiteralPath $kept)
   }
 
   New-Machine
   Assert-True 'a wipe named by hand removes the same data' (
     (Invoke-Wipe -Identifier co.example.wipe -ProductName 'Example Wipe') -eq 0) $script:Output
-  Assert-True 'and keeps the other app' (Test-Path -LiteralPath (Join-Path $holochain 'co.example.other'))
+  Assert-True 'and keeps the other app' (Test-Path -LiteralPath (Join-Path $local 'co.example.other'))
 
   New-Machine
   Assert-True 'a wipe asked what it would do removes nothing' ((Invoke-Wipe -Identity $identity -WhatIf) -eq 0) $script:Output
@@ -133,8 +131,8 @@ finally {
 }
 
 Write-Output "windows wipe: $script:Pass passed, $script:Fail failed"
-if ($script:Pass -lt 42) {
-  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 42")
+if ($script:Pass -lt 40) {
+  [Console]::Error.WriteLine("::error::only $script:Pass assertions ran; expected at least 40")
   exit 1
 }
 if ($script:Fail -gt 0) { exit 1 }
