@@ -189,14 +189,49 @@ def end_process(proc):
             proc.kill()
 
 
+def taskkill(pid, seconds=30):
+    """`pid` and every process it started, on Windows. Bounded, like every
+    other wait in a lane."""
+    try:
+        run(["taskkill", "/T", "/F", "/PID", str(pid)], timeout=seconds)
+    except subprocess.TimeoutExpired:
+        note("::warning::taskkill /PID %d did not finish within %ds" % (pid, seconds))
+
+
 def end_tree(proc):
     """The process and every process it started, on Windows: the app's WebView2
     processes keep files open in its data folder, and ending the app alone
     leaves them to exit in their own time. taskkill finds the tree through the
     parent, so it runs while the parent is still alive."""
     if proc and proc.poll() is None:
-        run(["taskkill", "/T", "/F", "/PID", str(proc.pid)])
+        taskkill(proc.pid)
     end_process(proc)
+
+
+# Every process's id and command line, one `<pid><TAB><command line>` per line.
+# Through CIM, since wmic, the other in-box tool that prints another process's
+# command line, is deprecated.
+PROCESS_LIST = (
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+    "Get-CimInstance Win32_Process | "
+    'ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }'
+)
+
+
+def pids_naming(folders, listing):
+    """The pids of `listing`, in PROCESS_LIST's form, whose command line names
+    one of `folders` or a path inside it. A WebView2 process names its data
+    folder in --user-data-dir."""
+    named = [
+        re.compile(re.escape(str(folder)) + r'(?=[\\/"\s]|$)', re.IGNORECASE)
+        for folder in folders
+    ]
+    found = []
+    for line in listing.splitlines():
+        pid, _, command = line.partition("\t")
+        if pid.strip().isdigit() and any(name.search(command) for name in named):
+            found.append(int(pid))
+    return found
 
 
 def remove_all(paths, seconds, poll_seconds):
@@ -1479,6 +1514,7 @@ class WindowsLane(Lane):
         self.log_dir = None
         # The current launch's stdout and stderr.
         self.streams = (self.shots / "app-stdout.log", self.shots / "app-stderr.log")
+        self.second_started = False
         self.booted = ("CANNOT PROVE", "the second launch never ran")
 
     def data_roots(self):
@@ -1687,13 +1723,45 @@ class WindowsLane(Lane):
     def logs(self):
         return read_all(self.streams, [self.log_dir], "unyt.v*.log.*")
 
+    def watch(self):
+        """The first launch, ended as soon as it has answered, while its parent
+        is most likely still alive to lead taskkill to its WebView2 processes.
+        Ended before the second launch in any case: with AGENT_ID unset, the
+        single-instance plugin hands a launch to the app already running."""
+        super().watch()
+        # The one diagnostic that needs the live process, so taken first.
+        note("--- windows this process owned ---")
+        for line in self.helper(TargetPid=self.app.pid):
+            note("  " + line)
+        self.end_first_launch()
+
+    def end_first_launch(self):
+        """The first launch's tree, then every process whose command line names
+        one of the data roots: a parent that already exited leads taskkill to
+        nothing, and its WebView2 processes can outlive it holding files in
+        them. Never once the second launch has started, whose WebView2
+        processes name the same folders."""
+        if self.second_started:
+            raise RuntimeError("the first launch is ended only before the second")
+        end_tree(self.app)
+        argv = ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+        try:
+            listed = run(argv + [PROCESS_LIST], timeout=60, encoding="utf-8")
+        except subprocess.TimeoutExpired:
+            note("::warning::the process list did not come back within 60s")
+            return
+        if listed.returncode:
+            note("::warning::listing processes exited %d" % listed.returncode)
+            note(indent(listed.stderr))
+        for pid in pids_naming(self.data_roots(), listed.stdout):
+            if pid != os.getpid():
+                note("ending pid %d, which the first launch left running" % pid)
+                taskkill(pid)
+
     def boot(self):
         """The second launch. The data roots sit in the runner's own profile,
         so lair and the conductor get the paths a user whose name is as long as
         the runner's would."""
-        # Ended first: with AGENT_ID unset, the single-instance plugin hands a
-        # launch to the app already running instead of starting it.
-        end_tree(self.app)
         left = remove_all(self.data_roots(), self.clear_seconds, self.poll_seconds)
         if left:
             self.booted = (
@@ -1708,6 +1776,7 @@ class WindowsLane(Lane):
             self.shots / "boot-stdout.log",
             self.shots / "boot-stderr.log",
         )
+        self.second_started = True
         self.app = self.start(UNYT_BYPASS_PASSWORD="1")
         self.booted = self.watch_boot()
         if self.booted[0] == "PROVEN":
@@ -1786,9 +1855,6 @@ class WindowsLane(Lane):
         return "the app had a window but every capture of it is uniform black, which on a CI runner means the desktop could not be read rather than that the app was blank"
 
     def diagnostics(self):
-        note("--- windows this process owned ---")
-        for line in self.helper(TargetPid=self.app.pid):
-            note("  " + line)
         note("--- app log (tail) ---")
         note(indent("\n".join(self.logs().splitlines()[-40:])))
 
