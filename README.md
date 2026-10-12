@@ -81,6 +81,14 @@ To reset completely and start over with a new account: uninstall the app, delete
 
 When you open the app on your operating system for the first time, it will create a set of public and private keys for you that you can use to interact with others. These are stored in a private keystore (Lair) on your own machine and are used during future uses. In Unyt we often refer to this public key as "your address" as it is how others can refer to you when sending, receiving or authorizing you to perform particular roles.
 
+## Network
+
+[`network.json`](network.json) names the network a release builds the app for.
+
+Each release runs its own joining, bootstrap, relay and auth services, so the release puts its version, with dots as dashes, in front of the subdomain of `UNYT_JOINING_SERVICE_URL`, `UNYT_BOOTSTRAP_URL`, `UNYT_RELAY_URL` and `UNYT_AUTH_SERVER_URL`. At tag `v0.111.0-dev.0`, `https://relay.unyt.dev` builds as `https://0-111-0-dev-0-relay.unyt.dev`. If `network.json` sets one of them to `""`, the app uses its own default for that service, and no version is added.
+
+`VITE_MIGRATION_SERVICE_URL` and `VITE_HOT_BRIDGE_URL` outlive any one app version, so they build as written. A release's notes list every value as it was built.
+
 ## Past Releases
 
 Each of these describes one release, and its download links stay pinned to that version.
