@@ -23,6 +23,7 @@ Application-level changes belong in
 
 ### Changed
 
+- **The TestNet app's HOT bridge is on Base Sepolia.**
 - **A release, and every installer in it, is Unyt Sandbox. It installs beside Unyt, and over Unyt Sandbox 0.108 or earlier.**
 - **A release's notes name the network it was built for.**
 - **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
