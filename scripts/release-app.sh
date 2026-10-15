@@ -88,7 +88,7 @@ check_network() {
   while IFS=$'\t' read -r name value; do
     [[ "$value" != "TO BE SET"* ]] || continue
     case "$name $value" in
-      VITE_ETH_NETWORK\ sepolia | VITE_ETH_NETWORK\ mainnet) continue ;;
+      VITE_ETH_NETWORK\ base-sepolia | VITE_ETH_NETWORK\ mainnet) continue ;;
       VITE_HOT_LOCK_VAULT\ *) [[ "$value" =~ ^0x[0-9a-f]{40}$ && "$value" =~ [1-9a-f] ]] && continue ;;
       VITE_HOT_BRIDGE_URL\ *) [[ "$value" =~ $origin_re ]] && continue ;;
       UNYT_JOINING_SERVICE_URL\ * | VITE_MIGRATION_SERVICE_URL\ *) [[ "$value" =~ $url_re ]] && continue ;;

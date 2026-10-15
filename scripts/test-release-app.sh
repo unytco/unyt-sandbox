@@ -64,7 +64,7 @@ fixtures() { # both fixture files as good ones
       "deep-link": {mobile: [{scheme: ["example-app"]}], desktop: {schemes: ["example-app"]}}}}' >"$repo/identity.json"
   jq -n '{name: "Example Net", build: {UNYT_JOINING_SERVICE_URL: "https://joining.example",
     VITE_MIGRATION_SERVICE_URL: "https://migration.example", VITE_HOT_BRIDGE_URL: "https://hot-bridge.example",
-    VITE_HOT_LOCK_VAULT: "0x\("0" * 39)1", VITE_ETH_NETWORK: "sepolia", UNYT_BOOTSTRAP_URL: "https://bootstrap.example",
+    VITE_HOT_LOCK_VAULT: "0x\("0" * 39)1", VITE_ETH_NETWORK: "base-sepolia", UNYT_BOOTSTRAP_URL: "https://bootstrap.example",
     UNYT_RELAY_URL: "", UNYT_AUTH_SERVER_URL: "https://auth.example", UNYT_AUTH_RELAY: "1"}}' >"$repo/network.json"
 }
 fixture() { GITHUB_REPOSITORY="${REPOSITORY-example/fork}" bash "$repo/scripts/release-app.sh" "$@"; }
@@ -148,7 +148,7 @@ check "an identity with bundle settings of its own builds" quietly fixture build
 for bad in UNYT_JOINING_SERVICE_URL=http://joining.example VITE_MIGRATION_SERVICE_URL=migration.example \
   UNYT_JOINING_SERVICE_URL='https://joining.example/ x' VITE_MIGRATION_SERVICE_URL=https://user@migration.example \
   VITE_HOT_BRIDGE_URL=https://hot-bridge.example/lock VITE_HOT_LOCK_VAULT=0x123 "VITE_HOT_LOCK_VAULT=0x$(printf '%041d' 1)" \
-  VITE_HOT_LOCK_VAULT=0xE3E064e3C2EEf66cb93dA8D8114F5084E92F48D6 VITE_ETH_NETWORK=holesky \
+  VITE_HOT_LOCK_VAULT=0xE3E064e3C2EEf66cb93dA8D8114F5084E92F48D6 VITE_ETH_NETWORK=holesky VITE_ETH_NETWORK=sepolia \
   'VITE_HOT_BRIDGE_URL=https://hot-bridge.example/ TO BE SET' UNYT_JOINING_SERVICE_URL=https://. \
   VITE_MIGRATION_SERVICE_URL=https://migration..example VITE_HOT_BRIDGE_URL=https://- \
   UNYT_JOINING_SERVICE_URL=https://joining.example:0 "VITE_HOT_LOCK_VAULT=0x$(printf '%040d' 0)" \
