@@ -31,7 +31,7 @@ Application-level changes belong in
 - **The smoke runs only installers whose checksums match the release's signed `SHA256SUMS`.**
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
 - **A pre-release (a `-dev.*` tag) is never offered to users as an update, and is signed with a throwaway key, never the update key.**
-- **Installers and unyt_cli build with Rust 1.98.1, and a release stops when the app's CI pins another.**
+- **Installers and unyt_cli build with Rust 1.99.0, and a release stops when the app's CI pins another.**
 - **On Windows the run goes red when the app cannot start its keystore and its Holochain conductor.** Each Windows lane launches the installed app a second time, with the password prompt skipped and the first launch's data removed, and needs a state that only a running conductor reports.
 
 ### Fixed
