@@ -65,7 +65,8 @@ fixtures() { # both fixture files as good ones
   jq -n '{name: "Example Net", build: {UNYT_JOINING_SERVICE_URL: "https://joining.example",
     VITE_MIGRATION_SERVICE_URL: "https://migration.example", VITE_HOT_BRIDGE_URL: "https://hot-bridge.example",
     VITE_HOT_LOCK_VAULT: "0x\("0" * 39)1", VITE_ETH_NETWORK: "base-sepolia", UNYT_BOOTSTRAP_URL: "https://bootstrap.example",
-    UNYT_RELAY_URL: "", UNYT_AUTH_SERVER_URL: "https://auth.example", UNYT_AUTH_RELAY: "1"}}' >"$repo/network.json"
+    UNYT_RELAY_URL: "", UNYT_AUTH_SERVER_URL: "https://auth.example", UNYT_AUTH_RELAY: "1",
+    VITE_VOUCHER_SERVICE_URL: "https://voucher.example"}}' >"$repo/network.json"
 }
 fixture() { GITHUB_REPOSITORY="${REPOSITORY-example/fork}" bash "$repo/scripts/release-app.sh" "$@"; }
 edit() { jq "$2" "$repo/$1" >"$tmp/edited" && mv "$tmp/edited" "$repo/$1"; } # <file> <jq edit>
@@ -82,9 +83,10 @@ check "a per-release service is at the tag's version, its dots as dashes, prepen
   eval 'grep -qx UNYT_JOINING_SERVICE_URL=https://1-2-3-dev-4-joining.example <<<"$(fixture build-env "$release_tag")"'
 check "and at a stable tag's version" \
   eval 'grep -qx UNYT_AUTH_SERVER_URL=https://10-0-12-auth.example <<<"$(fixture build-env v10.0.12)"'
-check "the migration router and the bridge serve every version" eval '
+check "the migration router, the bridge and the voucher service serve every version" eval '
   env="$(fixture build-env "$release_tag")" && grep -qx VITE_MIGRATION_SERVICE_URL=https://migration.example <<<"$env" &&
-    grep -qx VITE_HOT_BRIDGE_URL=https://hot-bridge.example <<<"$env"'
+    grep -qx VITE_HOT_BRIDGE_URL=https://hot-bridge.example <<<"$env" &&
+    grep -qx VITE_VOUCHER_SERVICE_URL=https://voucher.example <<<"$env"'
 check "a per-release service it leaves empty stays the app's default" \
   eval 'grep -qx UNYT_RELAY_URL= <<<"$(fixture build-env "$release_tag")"'
 check "its release notes name a per-release service at the tag's version" eval \
@@ -154,7 +156,9 @@ for bad in UNYT_JOINING_SERVICE_URL=http://joining.example VITE_MIGRATION_SERVIC
   UNYT_JOINING_SERVICE_URL=https://joining.example:0 "VITE_HOT_LOCK_VAULT=0x$(printf '%040d' 0)" \
   UNYT_JOINING_SERVICE_URL=https://joining.1 UNYT_JOINING_SERVICE_URL=https://joining.example- \
   UNYT_BOOTSTRAP_URL=http://bootstrap.example UNYT_RELAY_URL=relay.example UNYT_AUTH_SERVER_URL=https://auth..example \
-  UNYT_AUTH_RELAY=true UNYT_AUTH_RELAY=; do
+  UNYT_AUTH_RELAY=true UNYT_AUTH_RELAY= VITE_VOUCHER_SERVICE_URL=http://voucher.example VITE_VOUCHER_SERVICE_URL=voucher.example \
+  VITE_VOUCHER_SERVICE_URL=https://user@voucher.example 'VITE_VOUCHER_SERVICE_URL=https://voucher.example?key=1' \
+  'VITE_VOUCHER_SERVICE_URL=https://voucher.example/v1?key=1' 'VITE_VOUCHER_SERVICE_URL=https://voucher.example/v1#top'; do
   broken "a network whose ${bad%%=*} is ${bad#*=} is refused" "builds with ${bad%%=*} ${bad#*=}, which is no value it can take" \
     network.json ".build.${bad%%=*} = \"${bad#*=}\""
 done
@@ -184,6 +188,14 @@ fixtures
 edit network.json '.build.UNYT_BOOTSTRAP_URL = "" | .build.UNYT_AUTH_SERVER_URL = "" | .build.UNYT_AUTH_RELAY = "0"'
 check "a network that leaves its endpoints to the app's defaults builds" \
   eval 'grep -qx UNYT_BOOTSTRAP_URL= <<<"$(fixture build-env "$release_tag")"'
+fixtures
+edit network.json '.build.VITE_VOUCHER_SERVICE_URL = ""'
+check "a network with no voucher service builds without one" \
+  eval 'grep -qx VITE_VOUCHER_SERVICE_URL= <<<"$(fixture build-env "$release_tag")"'
+fixtures
+edit network.json '.build.VITE_VOUCHER_SERVICE_URL = "https://voucher.example:8443/v1/"'
+check "a voucher service with a port and a path builds as written" \
+  eval 'grep -qx VITE_VOUCHER_SERVICE_URL=https://voucher.example:8443/v1/ <<<"$(fixture build-env "$release_tag")"'
 for shape in '.plugins["deep-link"].desktop.schemes = "example-app"' '.plugins = []'; do
   broken "an identity shaped as $shape is refused with a reason" "::error::identity.json" identity.json "$shape"
 done
@@ -440,7 +452,8 @@ printf '[[package]]\nname = "unyt-app"\nversion = "0.0.1"\n' >"$probe_app/Cargo.
 reads_all() { # every value the release builds the fixture app with
   printf 'env("UNYT_%s");\n' JOINING_SERVICE_URL RELEASE_REPO BOOTSTRAP_URL RELAY_URL AUTH_SERVER_URL AUTH_RELAY \
     >"$probe_app/src-tauri/build.rs"
-  printf 'env.VITE_%s;\n' MIGRATION_SERVICE_URL HOT_BRIDGE_URL HOT_LOCK_VAULT ETH_NETWORK >"$probe_app/ui/white-label/vite.config.js"
+  printf 'env.VITE_%s;\n' MIGRATION_SERVICE_URL HOT_BRIDGE_URL HOT_LOCK_VAULT ETH_NETWORK VOUCHER_SERVICE_URL \
+    >"$probe_app/ui/white-label/vite.config.js"
 }
 reads_all
 cp "$here/release-probe.sh" "$here/set-app-version.sh" "$here/check-version-contract.sh" "$here/updater-asset-names.sh" \
