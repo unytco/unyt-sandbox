@@ -14,6 +14,7 @@ Application-level changes belong in
 
 ### Added
 
+- **The TestNet app redeems HoloFuel vouchers.**
 - **A release now proves its app opens (UNYT-966/967/968).** Every installer it ships is installed on a clean machine, launched, and photographed: the release passes only if the app reached a healthy state and a frame of its own window shows a drawn screen. It does not prove the screen is the *right* screen — nothing in the frame is read or identified.
 - **Static checks of what each artifact is:** install and uninstall, version, binary compatibility and declared dependencies in pristine distro containers; signing, notarization, architecture and deployment target on macOS. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.
 - **The gap CI cannot cover, written down as a hand check** ([`docs/windows-clean-machine-check.md`](docs/windows-clean-machine-check.md)): **our Windows installers are unsigned**, so a user meets a SmartScreen "unknown publisher" block that no runner ever sees.
@@ -31,7 +32,7 @@ Application-level changes belong in
 - **The smoke runs only installers whose checksums match the release's signed `SHA256SUMS`.**
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
 - **A pre-release (a `-dev.*` tag) is never offered to users as an update, and is signed with a throwaway key, never the update key.**
-- **Installers and unyt_cli build with Rust 1.98.1, and a release stops when the app's CI pins another.**
+- **Installers and unyt_cli build with Rust 1.99.0, and a release stops when the app's CI pins another.**
 - **On Windows the run goes red when the app cannot start its keystore and its Holochain conductor.** Each Windows lane launches the installed app a second time, with the password prompt skipped and the first launch's data removed, and needs a state that only a running conductor reports.
 
 ### Fixed

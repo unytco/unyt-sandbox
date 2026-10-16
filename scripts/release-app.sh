@@ -30,8 +30,8 @@ merge='def merge_patch($patch):
 origin='https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9](:[1-9][0-9]{0,4})?'
 url_re="^$origin(/[!-~]*)?\$"
 origin_re="^$origin/?\$"
-values='["UNYT_AUTH_RELAY","UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL"]'
-# The services at the tag's version. The migration router and the bridge serve every release.
+values='["UNYT_AUTH_RELAY","UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL","VITE_VOUCHER_SERVICE_URL"]'
+# The services at the tag's version. The migration router, the bridge and the voucher service serve every release.
 versioned='["UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL"]'
 
 problems=()
@@ -95,6 +95,8 @@ check_network() {
       # Empty: the app's default.
       UNYT_BOOTSTRAP_URL\ * | UNYT_RELAY_URL\ * | UNYT_AUTH_SERVER_URL\ *) [[ -z "$value" || "$value" =~ $url_re ]] && continue ;;
       UNYT_AUTH_RELAY\ 0 | UNYT_AUTH_RELAY\ 1) continue ;;
+      # Empty: no voucher redemption. The app's build refuses a query or a fragment.
+      VITE_VOUCHER_SERVICE_URL\ *) [[ -z "$value" || ("$value" =~ $url_re && "$value" != *[?#]*) ]] && continue ;;
     esac
     problems+=("network.json builds with $name $value, which is no value it can take")
   done < <(jq -r '.build | objects | to_entries[] | [.key, (.value | tostring)] | @tsv' "$NETWORK")
