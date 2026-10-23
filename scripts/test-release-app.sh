@@ -21,9 +21,9 @@ refused() { # <description> <error text> <command...>: refused with the error, a
 }
 quietly() { "$@" >/dev/null 2>&1; }
 
-# The tag each release below is at, and the version a per-release service is at, as its subdomain begins.
+# The tag each release below is at: a pre-release, so each versioned service is at its whole version.
 release_tag=v1.2.3-dev.4
-at_tag() { # <network.json>: its build values, each per-release service at $release_tag's version
+at_tag() { # <network.json>: its build values, each versioned service at $release_tag's version
   jq '.build | with_entries(if (.key | test("^UNYT_(AUTH_SERVER|BOOTSTRAP|JOINING_SERVICE|RELAY)_URL$")) and .value != ""
     then .value |= sub("^https://"; "https://1-2-3-dev-4-") else . end)' "$1"
 }
@@ -36,7 +36,7 @@ unset_in() { # <file at the repo root>: each value it has not set yet, as the re
 }
 waiting="$(unset_in identity.json; unset_in network.json)"
 if [ -z "$waiting" ]; then
-  check "this repo's build takes network.json's values at the tag's version, and updates from this repo" \
+  check "this repo's build takes network.json's values at the tag, and updates from this repo" \
     test "$(release_app build-env "$release_tag")" = \
     "$(at_tag "$here/../network.json" | jq -r 'to_entries[] | "\(.key)=\(.value)"'; echo UNYT_RELEASE_REPO=example/fork)"
   check "its release notes name the network and each of its values" test "$(release_app notes "$release_tag")" = \
@@ -76,20 +76,28 @@ broken() { # <description> <error text> <file> <jq edit>: the fixtures, so edite
   refused "$1" "$2" fixture build-env "$release_tag"
 }
 fixtures
-check "a fork's build takes its network's values at the tag's version, and updates from the fork" \
+check "a fork's build takes its network's values at the tag, and updates from the fork" \
   test "$(fixture build-env "$release_tag")" = "$(at_tag "$repo/network.json" | jq -r 'to_entries[] | "\(.key)=\(.value)"'
     echo UNYT_RELEASE_REPO=example/fork)"
-check "a per-release service is at the tag's version, its dots as dashes, prepended to its subdomain" \
+check "a pre-release, even of a patch, prepends its whole version, dots as dashes, to a service's subdomain" \
   eval 'grep -qx UNYT_JOINING_SERVICE_URL=https://1-2-3-dev-4-joining.example <<<"$(fixture build-env "$release_tag")"'
-check "and at a stable tag's version" \
-  eval 'grep -qx UNYT_AUTH_SERVER_URL=https://10-0-12-auth.example <<<"$(fixture build-env v10.0.12)"'
+edit network.json '.build.UNYT_RELAY_URL = "https://relay.example"'
+for tag in v10.11.0 v10.11.12; do
+  for value in UNYT_AUTH_SERVER_URL=https://10-11-0-auth.example UNYT_BOOTSTRAP_URL=https://10-11-0-bootstrap.example \
+    UNYT_JOINING_SERVICE_URL=https://10-11-0-joining.example UNYT_RELAY_URL=https://10-11-0-relay.example; do
+    check "a stable release at $tag builds $value, and its notes name it" eval '
+      grep -qx "$value" <<<"$(fixture build-env "$tag")" &&
+        grep -qxe "- \`${value%%=*}\`: ${value#*=}" <<<"$(fixture notes "$tag")"'
+  done
+done
+fixtures
 check "the migration router, the bridge and the voucher service serve every version" eval '
   env="$(fixture build-env "$release_tag")" && grep -qx VITE_MIGRATION_SERVICE_URL=https://migration.example <<<"$env" &&
     grep -qx VITE_HOT_BRIDGE_URL=https://hot-bridge.example <<<"$env" &&
     grep -qx VITE_VOUCHER_SERVICE_URL=https://voucher.example <<<"$env"'
-check "a per-release service it leaves empty stays the app's default" \
+check "a versioned service it leaves empty stays the app's default" \
   eval 'grep -qx UNYT_RELAY_URL= <<<"$(fixture build-env "$release_tag")"'
-check "its release notes name a per-release service at the tag's version" eval \
+check "its release notes name a versioned service at the tag" eval \
   'grep -qxe "- \`UNYT_BOOTSTRAP_URL\`: https://1-2-3-dev-4-bootstrap.example" <<<"$(fixture notes "$release_tag")"'
 for bad in v 'v1.2.3+build.5' 'v1.2.3 x' 'v1.2.3_x' "v1
 UNYT_RELEASE_REPO=evil/repo"; do
@@ -176,12 +184,12 @@ edit network.json '.build.UNYT_JOINING_SERVICE_URL = "https://joining.xn--p1ai"'
 check "a server under an internationalized top level domain builds" quietly fixture build-env "$release_tag"
 fixtures
 edit network.json '.build.UNYT_JOINING_SERVICE_URL = "https://joining.example:8443/v1/join"'
-check "a per-release service keeps its port and path at the tag's version" \
+check "a versioned service keeps its port and path" \
   eval 'grep -qx UNYT_JOINING_SERVICE_URL=https://1-2-3-dev-4-joining.example:8443/v1/join <<<"$(fixture build-env "$release_tag")"'
 long="$(printf 'a%.0s' {1..51})"
 fixtures
 edit network.json ".build.UNYT_RELAY_URL = \"https://$long.example\""
-check "a per-release subdomain of 63 characters at the tag's version builds" quietly fixture build-env "$release_tag"
+check "a versioned subdomain of 63 characters builds" quietly fixture build-env "$release_tag"
 broken "one longer is refused" "builds UNYT_RELAY_URL as https://1-2-3-dev-4-a$long.example, whose subdomain is longer" \
   network.json ".build.UNYT_RELAY_URL = \"https://a$long.example\""
 fixtures
@@ -617,7 +625,7 @@ check "the release takes no input, so a run builds nothing but what the tag's co
   wired '[.. | strings | select(test("inputs\\."))] | length == 0'
 check "the release says so when the app's changelog has nothing for the tag" wired '
   any(.jobs["build-happ"].steps[]; .run // "" | test("\\[ -s release_notes.txt \\] \\|\\|\n *echo \"::warning::"))'
-check "the release notes name the network at the tag's version" wired '
+check "the release notes name the network at the tag" wired '
   any(.jobs["build-happ"].steps[]; .run == "bash scripts/release-app.sh notes \"$TAG\" >> release_notes.txt\ncat release_notes.txt\n"
     and .env == {TAG: "${{ github.ref_name }}"})'
 check "every step that names the release names the tag the run is on" wired '
