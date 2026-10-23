@@ -81,11 +81,16 @@ check "a fork's build takes its network's values at the tag, and updates from th
     echo UNYT_RELEASE_REPO=example/fork)"
 check "a pre-release, even of a patch, prepends its whole version, dots as dashes, to a service's subdomain" \
   eval 'grep -qx UNYT_JOINING_SERVICE_URL=https://1-2-3-dev-4-joining.example <<<"$(fixture build-env "$release_tag")"'
+edit network.json '.build.UNYT_RELAY_URL = "https://relay.example"'
 for tag in v10.11.0 v10.11.12; do
-  check "a stable release at $tag takes 10.11.0's services, and its notes name them" eval '
-    grep -qx UNYT_AUTH_SERVER_URL=https://10-11-0-auth.example <<<"$(fixture build-env "$tag")" &&
-      grep -qxe "- \`UNYT_AUTH_SERVER_URL\`: https://10-11-0-auth.example" <<<"$(fixture notes "$tag")"'
+  for value in UNYT_AUTH_SERVER_URL=https://10-11-0-auth.example UNYT_BOOTSTRAP_URL=https://10-11-0-bootstrap.example \
+    UNYT_JOINING_SERVICE_URL=https://10-11-0-joining.example UNYT_RELAY_URL=https://10-11-0-relay.example; do
+    check "a stable release at $tag builds $value, and its notes name it" eval '
+      grep -qx "$value" <<<"$(fixture build-env "$tag")" &&
+        grep -qxe "- \`${value%%=*}\`: ${value#*=}" <<<"$(fixture notes "$tag")"'
+  done
 done
+fixtures
 check "the migration router, the bridge and the voucher service serve every version" eval '
   env="$(fixture build-env "$release_tag")" && grep -qx VITE_MIGRATION_SERVICE_URL=https://migration.example <<<"$env" &&
     grep -qx VITE_HOT_BRIDGE_URL=https://hot-bridge.example <<<"$env" &&
