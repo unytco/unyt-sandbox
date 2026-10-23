@@ -8,9 +8,10 @@
 #   release-app.sh notes <tag>                      its network, as release notes
 # Each refuses a file that is malformed. build-env and notes also refuse a value the files have not set
 # yet. Env: GITHUB_REPOSITORY, the repo the app updates from (build-env).
-# A service each release runs its own of is at the tag's version: build-env and notes prepend the version,
-# its dots as dashes, to its subdomain, so v0.111.0-dev.0 builds https://relay.example as
-# https://0-111-0-dev-0-relay.example.
+# Each X.Y.0 release and each pre-release runs its own $versioned services, and a patch release uses its
+# X.Y.0 release's. So build-env and notes prepend X.Y.0 at a stable tag vX.Y.Z, or a pre-release's whole
+# version, dots as dashes, to each one's subdomain: v0.115.1 builds https://relay.example as
+# https://0-115-0-relay.example, and v0.111.0-dev.0 as https://0-111-0-dev-0-relay.example.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
@@ -31,7 +32,7 @@ origin='https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]*
 url_re="^$origin(/[!-~]*)?\$"
 origin_re="^$origin/?\$"
 values='["UNYT_AUTH_RELAY","UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL","VITE_ETH_NETWORK","VITE_HOT_BRIDGE_URL","VITE_HOT_LOCK_VAULT","VITE_MIGRATION_SERVICE_URL","VITE_VOUCHER_SERVICE_URL"]'
-# The services at the tag's version. The migration router, the bridge and the voucher service serve every release.
+# The migration router, the bridge and the voucher service serve every release.
 versioned='["UNYT_AUTH_SERVER_URL","UNYT_BOOTSTRAP_URL","UNYT_JOINING_SERVICE_URL","UNYT_RELAY_URL"]'
 
 problems=()
@@ -125,9 +126,10 @@ set_values() {
 }
 
 build=""
-at_version() { # <tag>: sets $build to network.json's build values, each of $versioned at the tag's version
+at_version() { # <tag>: sets $build to network.json's build values, each of $versioned prefixed for the tag
   # set-app-version.sh holds the tag to its form. This holds what it builds to a URL.
   local version="${1#v}" name value label
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && version="${version%.*}.0"
   build="$(jq -c --arg version "${version//./-}" --argjson versioned "$versioned" '.build | with_entries(
     if (.key | IN($versioned[])) and .value != "" then .value |= "https://\($version)-\(ltrimstr("https://"))" else . end)' \
     "$NETWORK")"

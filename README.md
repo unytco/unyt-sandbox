@@ -85,7 +85,7 @@ When you open the app on your operating system for the first time, it will creat
 
 [`network.json`](network.json) names the network a release builds the app for.
 
-Each release runs its own joining, bootstrap, relay and auth services, so the release puts its version, with dots as dashes, in front of the subdomain of `UNYT_JOINING_SERVICE_URL`, `UNYT_BOOTSTRAP_URL`, `UNYT_RELAY_URL` and `UNYT_AUTH_SERVER_URL`. At tag `v0.111.0-dev.0`, `https://relay.unyt.dev` builds as `https://0-111-0-dev-0-relay.unyt.dev`. If `network.json` sets one of them to `""`, the app uses its own default for that service, and no version is added.
+Each X.Y.0 release and each pre-release runs its own joining, bootstrap, relay and auth services, and a patch release uses its X.Y.0 release's. So a release puts a version, with dots as dashes, in front of the subdomain of `UNYT_JOINING_SERVICE_URL`, `UNYT_BOOTSTRAP_URL`, `UNYT_RELAY_URL` and `UNYT_AUTH_SERVER_URL`: X.Y.0 at a stable tag vX.Y.Z, and the whole version at a pre-release. At tags `v0.115.0` and `v0.115.1`, `https://relay.unyt.dev` builds as `https://0-115-0-relay.unyt.dev`, and at tag `v0.111.0-dev.0` as `https://0-111-0-dev-0-relay.unyt.dev`. If `network.json` sets one of them to `""`, the app uses its own default for that service, and no version is added.
 
 `VITE_MIGRATION_SERVICE_URL`, `VITE_HOT_BRIDGE_URL` and `VITE_VOUCHER_SERVICE_URL` outlive any one app version, so they build as written. A release's notes list every value as it was built.
 
