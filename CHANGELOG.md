@@ -24,6 +24,7 @@ Application-level changes belong in
 
 ### Changed
 
+- **The TestNet app locks HOT into the new test vault.**
 - **The TestNet app's voucher service is `https://voucher.holo.host`.**
 - **A 0.115 patch release inherits v0.115.0's happ, DNA and CLI.**
 - **The TestNet app's HOT bridge is on Base Sepolia.**
