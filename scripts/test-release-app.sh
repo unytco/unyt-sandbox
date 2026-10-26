@@ -284,7 +284,7 @@ check "it writes the app package's version, and nothing else of Cargo.toml" \
   test "$(changed src-tauri/Cargo.toml)" = '< version = "0.108.0"|> version = "0.110.0-dev.3"|'
 check "it writes the app package's Cargo.lock entry, and no other" \
   test "$(changed Cargo.lock)" = '< version = "0.108.0"|> version = "0.110.0-dev.3"|'
-check "and leaves the workspace version, which the zomes build with" diff "$tmp/unyt.before/Cargo.toml" "$versioned/unyt/Cargo.toml"
+check "and leaves the workspace version alone" diff "$tmp/unyt.before/Cargo.toml" "$versioned/unyt/Cargo.toml"
 app_tree crlf
 check "a Windows checkout's Cargo files are written too" eval 'set_version v0.1.0 && test "$(contract v0.1.0)" = 0.1.0'
 crlf() { ! grep -qv $'\r$' "$versioned/unyt/$1"; } # <file>: every line ends in a carriage return
