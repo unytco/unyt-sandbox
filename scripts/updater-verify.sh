@@ -60,3 +60,20 @@ signed_fields() { # <dir> <name> <pubkey> <version>
     fail "$2.sig is not signed for $4, so the app would refuse it"
   echo "$fields"
 }
+
+# Writes <out dir>/SHA256SUMS holding <sums>, and SHA256SUMS.minisig, its signature for <version> by the key
+# in TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD, once that verifies with <pubkey>.
+# Not SHA256SUMS.sig: the manifests job takes every .sig on a release for an updater signature. Needs
+# minisign on PATH and the signer that `npm ci --prefix scripts/tauri-signer` installs.
+sign_sums() { # <version> <pubkey> <sums> <out dir>
+  (
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    printf '%s\n' "$3" >"$tmp/SHA256SUMS"
+    "$(dirname "${BASH_SOURCE[0]}")/tauri-signer/node_modules/.bin/tauri" signer sign --app-version "$1" \
+      "$tmp/SHA256SUMS" >/dev/null
+    signed_fields "$tmp" SHA256SUMS "$2" "$1" >/dev/null
+    cp "$tmp/SHA256SUMS" "$4/"
+    base64 -d <"$tmp/SHA256SUMS.sig" >"$4/SHA256SUMS.minisig"
+  )
+}
