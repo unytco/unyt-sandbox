@@ -65,7 +65,7 @@ on:
 env:
   STATIC_NOTE: >-
     ${{ inputs.static-checks-advisory == true
-    && 'Phase 2 is advisory here: nothing `needs` this job and the caller runs the static phase advisory, so a failure neither blocks a release nor fails the calling run — read this table, not the run''s colour. Phase 1 (does it open) is not advisory: a failed phase-1 lane does fail the calling run.'
+    && 'Phase 2 is advisory here: the caller runs the static phase advisory, so a failure neither blocks a release nor fails the calling run — read this table, not the run''s colour. Phase 1 (does it open) is not advisory: a failed phase-1 lane does fail the calling run.'
     || 'Nothing `needs` this job, so a failure here blocks no release — but it does fail THIS run, which is what a hand-dispatched smoke is for.' }}
   # Where the calling run's installers are downloaded to. Empty on a hand-run
   # smoke, which reads a published release.

@@ -690,7 +690,7 @@ reads() { # <workflow> <tag> <what reads the key, one per line>
 }
 release_wf="$here/../.github/workflows/release-tauri-app.yaml"
 check "a dev tag's run never reads the release key" reads "$release_wf" v1.2.3-dev.0 ""
-check "a release tag's run signs with the release key, in the one job that holds it" \
+check "a release tag's run signs the app with the release key, in the one job that holds it" \
   reads "$release_wf" v1.2.3 "updater-manifests enters the release environment
 updater-manifests reads secrets.TAURI_SIGNING_PRIVATE_KEY
 updater-manifests reads secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD"

@@ -26,13 +26,14 @@ Application-level changes belong in
 ### Changed
 
 - **The TestNet app locks HOT into the new test vault.**
+- **A release run publishes its release as a pre-release, and a person makes it the latest release.**
 - **The TestNet app's voucher service is `https://voucher.holo.host`.**
 - **A 0.115 patch release inherits v0.115.0's happ, DNA and CLI.**
 - **The TestNet app's HOT bridge is on Base Sepolia.**
 - **A release, and every installer in it, is Unyt Sandbox. It installs beside Unyt, and over Unyt Sandbox 0.108 or earlier.**
 - **A release's notes name the network it was built for.**
 - **A patch release builds against its X.Y.0 release's joining, bootstrap, relay and auth services, and a pre-release against its own.**
-- **The run goes red when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. A release is created as a draft, so the run's colour is what a human reads before publishing it — and the harnesses behind all of this now run on every pull request, not only inside a release.
+- **The run goes red, and publishes nothing, when the app does not open**, when a lane cannot trust what it captured, or when the smoke can no longer prove its own checks still fail. The harnesses behind all of this now run on every pull request, not only inside a release.
 - **No job that builds the app holds a credential that can change a release, and no job that runs a built installer holds a token that can write.**
 - **The smoke runs only installers whose checksums match the release's signed `SHA256SUMS`.**
 - **A workflow holds its credentials only while it is checking out** — the release PAT is no longer left behind in the job's git config — and the Rust toolchain action is pinned to a commit rather than a branch that moves under it.
