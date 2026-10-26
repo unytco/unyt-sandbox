@@ -18,6 +18,7 @@ build_secrets='["unyt_deploy_key", "apple_certificate", "apple_certificate_passw
 credential_holders() { # <workflow file name>
   case "$1" in
     release-tauri-app.yaml) echo '["publish-happ", "publish-builds", "updater-manifests", "draft-installers"]' ;;
+    release-cli.yaml) echo '["publish"]' ;;
     *) echo '[]' ;;
   esac
 }

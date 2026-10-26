@@ -641,10 +641,10 @@ check "the release environment is checked, by a job that runs no app code, befor
     == ["bash scripts/check-release-environment.sh release \"$TAG\"", "bash scripts/signing-key.sh \"$TAG\" >>\"$GITHUB_OUTPUT\""]
   and .steps[1].env == {GH_TOKEN: "${{ github.token }}", TAG: "${{ github.ref_name }}"}'
 check "and stage 1 waits for it" wired '.jobs["build-happ"].needs == "release-environment"'
-for tag in v1.2.3 v0.110.0 v10.0.12; do
+for tag in v1.2.3 v0.110.0 v10.0.12 cli-v1.2.0.0; do
   check "$tag signs with the release key" test "$(bash "$here/signing-key.sh" "$tag")" = key=release
 done
-for tag in v1.2.3-dev.0 v0.110.1-dev.12 v1.2.3-rc.1 v1.2.3-dev.0+x v01.2.3 v1.2 1.2.3 "v1.2.3 "; do
+for tag in v1.2.3-dev.0 v0.110.1-dev.12 v1.2.3-rc.1 v1.2.3-dev.0+x v01.2.3 v1.2 1.2.3 "v1.2.3 " cli-v1.2.0-dev.0.0; do
   check "\"$tag\" signs with a throwaway key" test "$(bash "$here/signing-key.sh" "$tag")" = key=throwaway
 done
 check "no tag answers no key" refuses "usage: signing-key.sh <tag>" bash "$here/signing-key.sh" ""
