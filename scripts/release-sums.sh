@@ -8,8 +8,6 @@
 # that names an asset of this release and the bytes the release carries under that name.
 # Env: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD. Needs minisign on PATH and the
 # signer that `npm ci --prefix scripts/tauri-signer` installs.
-#
-# Not SHA256SUMS.sig: the manifests job takes every .sig on the release for an updater signature.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
@@ -52,10 +50,4 @@ for file in "$ASSETS"/*; do
     fail "$name is on the release, but no build of this run recorded it"
 done
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-printf '%s\n' "$sums" >"$tmp/SHA256SUMS"
-"$here/tauri-signer/node_modules/.bin/tauri" signer sign --app-version "$VERSION" "$tmp/SHA256SUMS" >/dev/null
-signed_fields "$tmp" SHA256SUMS "$PUBKEY" "$VERSION" >/dev/null
-cp "$tmp/SHA256SUMS" "$OUT/"
-base64 -d <"$tmp/SHA256SUMS.sig" >"$OUT/SHA256SUMS.minisig"
+sign_sums "$VERSION" "$PUBKEY" "$sums" "$OUT"

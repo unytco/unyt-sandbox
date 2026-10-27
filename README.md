@@ -17,7 +17,7 @@ For full documentation, visit [unyt.co/docs](https://unyt.co/docs/).
 
 ## Downloads
 
-Take your installer from the [latest release](https://github.com/unytco/unyt-sandbox/releases/latest). Every build, including the older ones, is on the [Releases page](https://github.com/unytco/unyt-sandbox/releases).
+Take your installer from the [latest release](https://github.com/unytco/unyt-sandbox/releases/latest). Every build, including the older ones, is on the [Releases page](https://github.com/unytco/unyt-sandbox/releases). A release run publishes its release as a pre-release. A person then makes it the latest release by hand.
 
 Each release ships the same app in two variants. You can run either.
 
@@ -72,6 +72,17 @@ sudo apt install --reinstall ./unyt_*_zero-arc_amd64_linux.deb
 The AppImage has none of this. Each file runs on its own.
 
 Once installed, the Unyt software will run locally on your device and connect with others also running the software to operate as a peer-to-peer application.
+
+## unyt_cli
+
+`unyt_cli` has releases of its own, tagged `cli-vX.Y.0.N`. Each is build `N` of the CLI for the app release `vX.Y.0`, whose DNA every `vX.Y.Z` carries.
+
+- **Which one:** for any app release `vX.Y.Z`, take `unyt_cli` from the newest `cli-vX.Y.0.N` release. `unyt_cli --version` prints `X.Y.0.N`, and the release's notes are the section `## [X.Y.0.N]` of the pinned app's `crates/unyt_cli/CHANGELOG.md`. Check it with that release's `SHA256SUMS` and `SHA256SUMS.minisig`, as above. A CLI release is never the repo's latest release.
+- **Build 0:** once a `vX.Y.0` release run publishes its release, it makes `cli-vX.Y.0.0` from its own commit. Before you tag `vX.Y.0`, cut the Unreleased entries of the app's `crates/unyt_cli/CHANGELOG.md` into `## [X.Y.0.0]`. A `vX.Y.0-dev.M` run makes `cli-vX.Y.0-dev.M.0`, a pre-release with a throwaway key.
+- **Approval:** a reviewer of the `release` environment approves each stable CLI release, so a `vX.Y.0` run asks for a second approval after it publishes.
+- **Releasing newer CLI code:** in unyt-app, cut the Unreleased entries of `crates/unyt_cli/CHANGELOG.md` into a section `## [X.Y.0.N]`, with the next `N`. Make a branch here from the `vX.Y.0` tag. On it, pin `unyt` to an app commit with that code and that section, which must be on the app's remote. Push the tag `cli-vX.Y.0.N` at that commit. A lineage whose `vX.Y.0` predates CLI releases also needs, on that branch, this repo's CLI release workflow and the scripts it runs, and an app commit whose `unyt_cli` reads `UNYT_CLI_VERSION`.
+- **The DNA rule:** the run builds the pinned app's DNA, and publishes nothing unless the `vX.Y.0` release carries that `alliance.dna` byte for byte. A change to `unyt_cli`'s own code never changes the DNA, so it never blocks a release. Anything the zomes build from does: `dnas/`, `crates/rave_engine`, their dependencies and the toolchain. If that changed since `vX.Y.0`, the run refuses: cherry-pick the CLI change onto the app commit `vX.Y.0` pins instead.
+- **One-time setup:** add `cli-v*` to the tag policies of the `release` environment, or a pushed CLI tag cannot sign.
 
 ## Setup
 

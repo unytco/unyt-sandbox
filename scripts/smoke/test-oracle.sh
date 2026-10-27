@@ -1343,8 +1343,8 @@ if [ -f "$rel" ]; then
   # The release calls the smoke with the static phase advisory. Two ways that goes
   # wrong, neither visible in a green run: the call stops asking, or it starts
   # softening phase 1 as well.
-  # Bounded at the next job key, not run to EOF: smoke-test is last today, and a
-  # job added after it would fold in and be judged as part of the call.
+  # Bounded at the next job key, not run to EOF: the jobs after it would fold in
+  # and be judged as part of the call.
   stage3="$(sed -n '/^  smoke-test:/,/^  [a-z]/p' "$rel")"
   if [ -n "$stage3" ]; then pass=$((pass + 1)); else
     fail=$((fail + 1))

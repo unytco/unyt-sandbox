@@ -284,7 +284,7 @@ check "it writes the app package's version, and nothing else of Cargo.toml" \
   test "$(changed src-tauri/Cargo.toml)" = '< version = "0.108.0"|> version = "0.110.0-dev.3"|'
 check "it writes the app package's Cargo.lock entry, and no other" \
   test "$(changed Cargo.lock)" = '< version = "0.108.0"|> version = "0.110.0-dev.3"|'
-check "and leaves the workspace version, which the zomes build with" diff "$tmp/unyt.before/Cargo.toml" "$versioned/unyt/Cargo.toml"
+check "and leaves the workspace version alone" diff "$tmp/unyt.before/Cargo.toml" "$versioned/unyt/Cargo.toml"
 app_tree crlf
 check "a Windows checkout's Cargo files are written too" eval 'set_version v0.1.0 && test "$(contract v0.1.0)" = 0.1.0'
 crlf() { ! grep -qv $'\r$' "$versioned/unyt/$1"; } # <file>: every line ends in a carriage return
@@ -641,10 +641,10 @@ check "the release environment is checked, by a job that runs no app code, befor
     == ["bash scripts/check-release-environment.sh release \"$TAG\"", "bash scripts/signing-key.sh \"$TAG\" >>\"$GITHUB_OUTPUT\""]
   and .steps[1].env == {GH_TOKEN: "${{ github.token }}", TAG: "${{ github.ref_name }}"}'
 check "and stage 1 waits for it" wired '.jobs["build-happ"].needs == "release-environment"'
-for tag in v1.2.3 v0.110.0 v10.0.12; do
+for tag in v1.2.3 v0.110.0 v10.0.12 cli-v1.2.0.0; do
   check "$tag signs with the release key" test "$(bash "$here/signing-key.sh" "$tag")" = key=release
 done
-for tag in v1.2.3-dev.0 v0.110.1-dev.12 v1.2.3-rc.1 v1.2.3-dev.0+x v01.2.3 v1.2 1.2.3 "v1.2.3 "; do
+for tag in v1.2.3-dev.0 v0.110.1-dev.12 v1.2.3-rc.1 v1.2.3-dev.0+x v01.2.3 v1.2 1.2.3 "v1.2.3 " cli-v1.2.0-dev.0.0; do
   check "\"$tag\" signs with a throwaway key" test "$(bash "$here/signing-key.sh" "$tag")" = key=throwaway
 done
 check "no tag answers no key" refuses "usage: signing-key.sh <tag>" bash "$here/signing-key.sh" ""
@@ -690,7 +690,7 @@ reads() { # <workflow> <tag> <what reads the key, one per line>
 }
 release_wf="$here/../.github/workflows/release-tauri-app.yaml"
 check "a dev tag's run never reads the release key" reads "$release_wf" v1.2.3-dev.0 ""
-check "a release tag's run signs with the release key, in the one job that holds it" \
+check "a release tag's run signs the app with the release key, in the one job that holds it" \
   reads "$release_wf" v1.2.3 "updater-manifests enters the release environment
 updater-manifests reads secrets.TAURI_SIGNING_PRIVATE_KEY
 updater-manifests reads secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD"

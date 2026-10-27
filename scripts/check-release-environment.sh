@@ -18,7 +18,7 @@ usage="usage: check-release-environment.sh <environment> <tag>"
 ENVIRONMENT="${1:?$usage}"
 TAG="${2:?$usage}"
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name this repo}"
-hint="give it reviewers, allow no admin bypass, and the tag policy v* alone"
+hint="give it reviewers, allow no admin bypass, and the tag policies v* and cli-v* alone"
 got="$(gh api "repos/$REPO/environments/$ENVIRONMENT" --jq '[
   ([.protection_rules[]? | select(.type == "required_reviewers" and ((.reviewers // []) | length) > 0)] | length),
   .can_admins_bypass,

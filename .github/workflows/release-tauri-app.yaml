@@ -30,6 +30,7 @@ jobs:
       startedAt: ${{ steps.start.outputs.at }}
       happSha256: ${{ steps.happ.outputs.sha256 }}
       stage1Sums: ${{ steps.gather.outputs.sums }}
+      kind: ${{ steps.kind.outputs.kind }}
     steps:
       - name: Note when this run started
         id: start
@@ -528,14 +529,7 @@ jobs:
       - name: A throwaway key to sign with, which dies with this job
         id: throwaway
         if: needs.release-environment.outputs.signingKey == 'throwaway'
-        run: |
-          password="$(openssl rand -hex 32)"
-          echo "::add-mask::$password"
-          scripts/tauri-signer/node_modules/.bin/tauri signer generate --ci -p "$password" \
-            -w "$RUNNER_TEMP/throwaway.key" >/dev/null
-          key="$(cat "$RUNNER_TEMP/throwaway.key")"
-          pubkey="$(cat "$RUNNER_TEMP/throwaway.key.pub")"
-          printf 'key=%s\npassword=%s\npubkey=%s\n' "$key" "$password" "$pubkey" >>"$GITHUB_OUTPUT"
+        run: bash scripts/throwaway-key.sh >>"$GITHUB_OUTPUT"
 
       - name: Download the updater artifacts, their build signatures, and the rest SHA256SUMS covers
         env:
@@ -639,12 +633,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # A FAILED PHASE-1 LANE FAILS THIS RUN. The release is created draft and a
-  # human publishes it, so the run's colour is what tells them. Phase 2 keeps the
-  # advisory behaviour it has always had here.
-  #
-  # Nothing `needs` this job either way. Not `workflow_run` — that only fires on
-  # the default branch.
+  # Not `workflow_run`: that only fires on the default branch.
   smoke-test:
     # JUST THE STAGE: GitHub prefixes every called job with this one, so anything
     # said here is said again on all 16 lines of the Checks list.
@@ -660,3 +649,32 @@ jobs:
       # Only here, and only over phase 2: a hand-dispatched release-smoke must
       # answer red for everything, and no switch may soften phase 1.
       static-checks-advisory: true
+
+  # A person makes it the latest release by hand.
+  publish-release:
+    name: "Stage 4: publish the release as a pre-release"
+    needs: [publish-happ, release-tauri-app, publish-builds, updater-manifests, draft-installers, smoke-test]
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publish the draft as a pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.publish-happ.outputs.releaseId }}
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -F prerelease=true -f make_latest=false >/dev/null
+
+  # Called, not tagged: a tag this run's token pushes would start no workflow.
+  cli-release:
+    name: "Stage 5: the CLI release"
+    needs: [build-happ, publish-release]
+    if: needs.build-happ.outputs.kind == 'migration'
+    uses: ./.github/workflows/release-cli.yaml
+    permissions:
+      contents: write
+      actions: read
+    with:
+      tag: cli-${{ github.ref_name }}.0
+    secrets: inherit

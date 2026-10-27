@@ -3,8 +3,8 @@
 # src-tauri/Cargo.toml's [package] version, and that package's entry in the workspace Cargo.lock, so a
 # --locked build takes it unchanged:
 #   set-app-version.sh <release tag>      e.g. v0.110.0 or v0.110.0-dev.1
-# The workspace version is left alone: the zomes and unyt_cli take theirs from it, and the zomes' wasm
-# would change with it.
+# The workspace version is left alone: only unyt_cli takes it, and a CLI release stamps the version it
+# prints.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
