@@ -4,14 +4,11 @@
 #   cli-release.sh tag <cli tag>                  the tag and its version, as $GITHUB_OUTPUT lines
 #   cli-release.sh version <unyt_cli> <version>   fails unless that binary prints the version
 #   cli-release.sh notes <cli tag> <changelog>    the changelog's section for the tag's version
-#   cli-release.sh publish <cli tag> <commit> <dna sha256> <pubkey> <cli dir>
+#   cli-release.sh publish <cli tag> <commit> <dna sha256> <cli dir>
 # publish fails unless the app release carries an alliance.dna with <dna sha256>, the DNA the CLI was
 # built with, and fails when the tag is already released. It deletes the tag's drafts, then publishes
-# <cli dir>/unyt_cli with its SHA256SUMS signed for <pubkey> and <cli dir>/notes.md as its notes, at
-# <commit>, never as the latest release.
-# Env for publish: GITHUB_REPOSITORY, GH_TOKEN, TAURI_SIGNING_PRIVATE_KEY and
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD. It needs minisign on PATH and the signer that
-# `npm ci --prefix scripts/tauri-signer` installs.
+# <cli dir>/unyt_cli alone as a pre-release, with <cli dir>/notes.md as its notes, at <commit>.
+# Env for publish: GITHUB_REPOSITORY and GH_TOKEN.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=updater-verify.sh
@@ -44,8 +41,8 @@ case "${1:-}" in
     printf '%s\n' "$notes"
     ;;
   publish)
-    usage="usage: cli-release.sh publish <cli tag> <commit> <dna sha256> <pubkey> <cli dir>"
-    TAG="${2:?$usage}" COMMIT="${3:?$usage}" DNA="${4:?$usage}" PUBKEY="${5:?$usage}" DIR="${6:?$usage}"
+    usage="usage: cli-release.sh publish <cli tag> <commit> <dna sha256> <cli dir>"
+    TAG="${2:?$usage}" COMMIT="${3:?$usage}" DNA="${4:?$usage}" DIR="${5:?$usage}"
     REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name the repo the CLI releases from}"
     parse "$TAG"
     tmp="$(mktemp -d)"
@@ -58,17 +55,15 @@ case "${1:-}" in
       --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id) \(.draft)\"")"
     ! grep -q ' false$' <<<"$releases" || fail "$TAG is already released: tag the next N"
 
-    cli_sha256="$(sha256 "$DIR/unyt_cli")"
-    sign_sums "$version" "$PUBKEY" "$cli_sha256  unyt_cli" "$tmp"
     notes="The unyt_cli of [$app_tag](https://github.com/$REPO/releases/tag/$app_tag), with its DNA, built from $COMMIT."
     changes="$(cat "$DIR/notes.md")"
     [ -z "$changes" ] || notes="$changes"$'\n\n'"$notes"
-    case "$version" in *-dev.*) prerelease=true ;; *) prerelease=false ;; esac
     for id in $(cut -d' ' -f1 <<<"$releases"); do
       gh api -X DELETE "repos/$REPO/releases/$id" >/dev/null
     done
-    gh release create "$TAG" --repo "$REPO" --target "$COMMIT" --prerelease="$prerelease" --latest=false \
-      --title "unyt_cli $version" --notes "$notes" "$DIR/unyt_cli" "$tmp/SHA256SUMS" "$tmp/SHA256SUMS.minisig"
+    # A pre-release, because GitHub can make a full release Latest despite make_latest false (cli/cli#10695).
+    gh release create "$TAG" --repo "$REPO" --target "$COMMIT" --prerelease --title "unyt_cli $version" \
+      --notes "$notes" "$DIR/unyt_cli"
     ;;
   *) fail "usage: cli-release.sh tag | version | notes | publish <arguments>" ;;
 esac

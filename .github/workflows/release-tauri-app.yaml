@@ -674,7 +674,6 @@ jobs:
     uses: ./.github/workflows/release-cli.yaml
     permissions:
       contents: write
-      actions: read
     with:
       tag: cli-${{ github.ref_name }}.0
     secrets: inherit

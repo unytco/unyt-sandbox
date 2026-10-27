@@ -14,7 +14,7 @@ Application-level changes belong in
 
 ### Added
 
-- **`unyt_cli` has releases of its own, tagged `cli-vX.Y.0.N` for the app release `vX.Y.0`.**
+- **`unyt_cli` has releases of its own, tagged `cli-vX.Y.0.N` for the app release `vX.Y.0`. Each is a pre-release that carries `unyt_cli` alone.**
 - **The TestNet app redeems HoloFuel vouchers.**
 - **A release now proves its app opens (UNYT-966/967/968).** Every installer it ships is installed on a clean machine, launched, and photographed: the release passes only if the app reached a healthy state and a frame of its own window shows a drawn screen. It does not prove the screen is the *right* screen — nothing in the frame is read or identified.
 - **Static checks of what each artifact is:** install and uninstall, version, binary compatibility and declared dependencies in pristine distro containers; signing, notarization, architecture and deployment target on macOS. Runnable locally with Docker: `scripts/smoke/run-smoke.sh <artifact>`.

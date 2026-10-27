@@ -641,10 +641,10 @@ check "the release environment is checked, by a job that runs no app code, befor
     == ["bash scripts/check-release-environment.sh release \"$TAG\"", "bash scripts/signing-key.sh \"$TAG\" >>\"$GITHUB_OUTPUT\""]
   and .steps[1].env == {GH_TOKEN: "${{ github.token }}", TAG: "${{ github.ref_name }}"}'
 check "and stage 1 waits for it" wired '.jobs["build-happ"].needs == "release-environment"'
-for tag in v1.2.3 v0.110.0 v10.0.12 cli-v1.2.0.0; do
+for tag in v1.2.3 v0.110.0 v10.0.12; do
   check "$tag signs with the release key" test "$(bash "$here/signing-key.sh" "$tag")" = key=release
 done
-for tag in v1.2.3-dev.0 v0.110.1-dev.12 v1.2.3-rc.1 v1.2.3-dev.0+x v01.2.3 v1.2 1.2.3 "v1.2.3 " cli-v1.2.0-dev.0.0; do
+for tag in v1.2.3-dev.0 v0.110.1-dev.12 v1.2.3-rc.1 v1.2.3-dev.0+x v01.2.3 v1.2 1.2.3 "v1.2.3 "; do
   check "\"$tag\" signs with a throwaway key" test "$(bash "$here/signing-key.sh" "$tag")" = key=throwaway
 done
 check "no tag answers no key" refuses "usage: signing-key.sh <tag>" bash "$here/signing-key.sh" ""
@@ -733,5 +733,18 @@ probe_wired() { jq -e "$1" <<<"$probe_wf" >/dev/null; } # <condition on the prob
 check "every pull request probes the pinned app as the release takes it" probe_wired '
   (.on | has("pull_request")) and (.jobs.probe.steps[0].uses | test("^actions/checkout@[0-9a-f]{40}$"))
   and [.jobs.probe.steps[1:][] | .uses // .run] == ["./.github/actions/checkout-app", "bash scripts/release-probe.sh unyt"]'
+cli_wf="$(yq -o=json "$here/../.github/workflows/release-cli.yaml")"
+cli_wired() { jq -e "$@" <<<"$cli_wf" >/dev/null; } # [<jq options>] <condition on the CLI release workflow>
+check "a CLI release waits on no environment, and reads no secret but the app's deploy key" cli_wired '
+  ([.jobs[] | select(has("environment"))] == [])
+  and ([.. | strings | select(test("secrets\\s*[.\\[]"; "i"))] | unique == ["${{ secrets.UNYT_DEPLOY_KEY }}"])'
+check "the app release grants its CLI release every permission the CLI's jobs ask for" \
+  cli_wired --argjson grant "$(jq -c '.jobs["cli-release"].permissions' <<<"$wf")" '
+  def level: {read: 1, write: 2}[.] // 0;
+  all(.jobs[].permissions | to_entries[]; ($grant[.key] | level) >= (.value | level))'
+check "the CLI release publishes the tag at the run's commit, with the DNA its build made" cli_wired '
+  .jobs.publish.steps[-1] | .run == "bash scripts/cli-release.sh publish \"$TAG\" \"$GITHUB_SHA\" \"$DNA_SHA256\" cli"
+  and .env == {GH_TOKEN: "${{ github.token }}", TAG: "${{ needs.tag.outputs.tag }}",
+    DNA_SHA256: "${{ needs.build.outputs.dnaSha256 }}"}'
 
 report "release app scripts"

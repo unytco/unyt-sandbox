@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# cli-release.sh against a stand-in gh that holds a fixture repo's releases. Needs minisign on PATH
-# (install-minisign.sh), the Tauri signer and jq.
+# cli-release.sh against a stand-in gh that holds a fixture repo's releases. Needs jq.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +14,7 @@ mkdir "$tmp/bin"
 cat >"$tmp/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-method=GET words=() repo="" pattern="" dir="" target="" prerelease="" latest="" title="" notes="" filter=""
+method=GET words=() repo="" pattern="" dir="" target="" prerelease=false title="" notes="" filter=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -X) method="$2"; shift ;;
@@ -26,8 +25,7 @@ while [ "$#" -gt 0 ]; do
     --title) title="$2"; shift ;;
     --notes) notes="$2"; shift ;;
     --jq) filter="$2"; shift ;;
-    --prerelease=*) prerelease="${1#*=}" ;;
-    --latest=*) latest="${1#*=}" ;;
+    --prerelease) prerelease=true ;;
     --paginate) ;;
     *) words+=("$1") ;;
   esac
@@ -54,8 +52,8 @@ case "$1" in
       create)
         id="$(jq 'map(.id) + [100] | max + 1' "$releases")"
         save --argjson id "$id" --arg tag "$3" --arg target "$target" --argjson prerelease "$prerelease" \
-          --arg latest "$latest" --arg title "$title" --arg notes "$notes" '. + [{id: $id, tag_name: $tag, draft: false,
-          prerelease: $prerelease, make_latest: $latest, name: $title, body: $notes, target_commitish: $target}]'
+          --arg title "$title" --arg notes "$notes" '. + [{id: $id, tag_name: $tag, draft: false,
+          prerelease: $prerelease, name: $title, body: $notes, target_commitish: $target}]'
         mkdir "$GH/assets/$id"
         cp "${@:4}" "$GH/assets/$id/"
         echo "create $id" >>"$GH/calls" ;;
@@ -82,12 +80,7 @@ world() { # [<release JSON>...]: a fixture repo with those releases, and v1.2.0 
   cp "$tmp/unyt_cli" "$tmp/notes.md" "$CLI/"
 }
 cli() { GITHUB_REPOSITORY=example/fork REPO=example/fork GH="$GH" PATH="$tmp/bin:$PATH" bash "$here/cli-release.sh" "$@"; }
-"$here/tauri-signer/node_modules/.bin/tauri" signer generate --ci -p test -w "$tmp/release.key" >/dev/null
-pubkey="$(cat "$tmp/release.key.pub")"
-published() { # <cli tag> [<dna sha256>]
-  TAURI_SIGNING_PRIVATE_KEY="$(cat "$tmp/release.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=test \
-    cli publish "$1" "$commit" "${2:-$dna}" "$pubkey" "$CLI" >/dev/null
-}
+published() { cli publish "$1" "$commit" "${2:-$dna}" "$CLI" >/dev/null; } # <cli tag> [<dna sha256>]
 release_of() { # <tag> <filter>: the filter on the tag's one release
   jq -r --arg tag "$1" "[.[] | select(.tag_name == \$tag)] | if length == 1 then .[0] | $2 else \"\(length) releases\" end" \
     "$GH/releases.json"
@@ -122,16 +115,12 @@ check "a CLI built with another DNA than its app release carries publishes nothi
 
 world
 check "a CLI release with its app release's DNA publishes" published cli-v1.2.0.0
-check "at the build's commit, never as the latest" \
-  test "$(fields cli-v1.2.0.0 '.draft, .prerelease, .make_latest, .target_commitish')" = "false false false $commit"
+check "at the build's commit, as a pre-release" \
+  test "$(fields cli-v1.2.0.0 '.draft, .prerelease, .target_commitish')" = "false true $commit"
 check "its notes are its changelog's, then the build's" \
   test "$(release_of cli-v1.2.0.0 .body)" = $'\n### Added\n\n- a new command\n\n'"$(built v1.2.0)"
-carries() { # <assets dir>: unyt_cli, and SHA256SUMS that checks it, signed for the release key
-  test "$(ls "$1" | tr '\n' ' ')" = "SHA256SUMS SHA256SUMS.minisig unyt_cli " && cmp -s "$1/unyt_cli" "$tmp/unyt_cli" &&
-    (cd "$1" && sha256sum --check --strict --quiet SHA256SUMS) &&
-    minisign -Vqm "$1/SHA256SUMS" -P "$(base64 -d <<<"$pubkey" | sed -n 2p)"
-}
-check "it carries unyt_cli and SHA256SUMS signed for the release key" carries "$GH/assets/$(release_of cli-v1.2.0.0 .id)"
+carries() { test "$(ls "$1")" = unyt_cli && cmp -s "$1/unyt_cli" "$tmp/unyt_cli"; } # <assets dir>
+check "it carries unyt_cli alone" carries "$GH/assets/$(release_of cli-v1.2.0.0 .id)"
 
 world '{"id": 50, "tag_name": "cli-v1.2.0.0", "draft": true}'
 check "a draft of the tag is deleted, and the release published in its place" eval \
@@ -143,9 +132,7 @@ check "a tag already released is never released again" \
 
 world
 : >"$CLI/notes.md"
-check "a pre-release app's CLI release is a pre-release, never the latest" \
-  eval 'published cli-v1.2.0-dev.4.0 && test "$(fields cli-v1.2.0-dev.4.0 ".prerelease, .make_latest")" = "true false"'
-check "with no notes of its own, its notes name only the build" \
-  test "$(release_of cli-v1.2.0-dev.4.0 .body)" = "$(built v1.2.0-dev.4)"
+check "a pre-release app's CLI release, with no notes of its own, has notes that name only the build" \
+  eval 'published cli-v1.2.0-dev.4.0 && test "$(release_of cli-v1.2.0-dev.4.0 .body)" = "$(built v1.2.0-dev.4)"'
 
 report "CLI release scripts"
