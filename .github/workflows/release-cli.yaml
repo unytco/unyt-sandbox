@@ -12,16 +12,14 @@ on:
         type: string
 
 jobs:
-  release-environment:
-    name: "The CLI tag and its key"
+  tag:
+    name: "The CLI tag"
     permissions:
       contents: read
-      actions: read
     runs-on: ubuntu-22.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
-      signingKey: ${{ steps.signing-key.outputs.key }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,27 +28,15 @@ jobs:
       - name: No code that builds the CLI can reach a credential that can change a release
         run: bash scripts/check-build-credentials.sh .github/workflows/*.y*ml
 
-      - name: The release environment admits the tag this run is on, and holds the signing for a reviewer
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: bash scripts/check-release-environment.sh release "$TAG"
-
       - name: The tag names the app release the CLI is for
         id: tag
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: bash scripts/cli-release.sh tag "$TAG" >>"$GITHUB_OUTPUT"
 
-      - name: A release tag signs with the release key, and any other with a throwaway one
-        id: signing-key
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: bash scripts/signing-key.sh "$TAG" >>"$GITHUB_OUTPUT"
-
   build:
     name: "Build unyt_cli and the DNA it goes with"
-    needs: release-environment
+    needs: tag
     permissions:
       contents: read
     runs-on: ubuntu-22.04
@@ -97,13 +83,13 @@ jobs:
       - name: Build unyt_cli at the CLI release's version
         working-directory: unyt
         env:
-          UNYT_CLI_VERSION: ${{ needs.release-environment.outputs.version }}
+          UNYT_CLI_VERSION: ${{ needs.tag.outputs.version }}
         run: cargo build -p unyt_cli --release --locked
 
       - name: unyt_cli prints that version, and its notes are its changelog's section for it
         env:
-          TAG: ${{ needs.release-environment.outputs.tag }}
-          VERSION: ${{ needs.release-environment.outputs.version }}
+          TAG: ${{ needs.tag.outputs.tag }}
+          VERSION: ${{ needs.tag.outputs.version }}
         run: |
           bash scripts/cli-release.sh version unyt/target/release/unyt_cli "$VERSION"
           mkdir cli
@@ -118,8 +104,7 @@ jobs:
 
   publish:
     name: "Publish the CLI release"
-    needs: [release-environment, build]
-    environment: ${{ needs.release-environment.outputs.signingKey == 'release' && 'release' || '' }}
+    needs: [tag, build]
     permissions:
       contents: write
     runs-on: ubuntu-22.04
@@ -128,39 +113,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install minisign
-        run: bash scripts/install-minisign.sh
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22.23.3
-
-      - name: Install the signer
-        run: npm ci --prefix scripts/tauri-signer --ignore-scripts --no-audit --no-fund
-
-      - name: A throwaway key to sign with, which dies with this job
-        id: throwaway
-        if: needs.release-environment.outputs.signingKey == 'throwaway'
-        run: bash scripts/throwaway-key.sh >>"$GITHUB_OUTPUT"
-
-      - name: The key the release signs for
-        id: updater
-        run: bash scripts/updater-signing.sh identity.json >>"$GITHUB_OUTPUT"
-
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: unyt-cli
           path: cli
 
-      - name: Publish unyt_cli with its signed SHA256SUMS, if the app release has its DNA
+      - name: Publish unyt_cli, if the app release has its DNA
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release-environment.outputs.tag }}
+          TAG: ${{ needs.tag.outputs.tag }}
           DNA_SHA256: ${{ needs.build.outputs.dnaSha256 }}
-          PUBKEY: ${{ needs.release-environment.outputs.signingKey == 'release' &&
-            steps.updater.outputs.pubkey || steps.throwaway.outputs.pubkey }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.release-environment.outputs.signingKey == 'release' &&
-            secrets.TAURI_SIGNING_PRIVATE_KEY || steps.throwaway.outputs.key }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.release-environment.outputs.signingKey == 'release' &&
-            secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || steps.throwaway.outputs.password }}
-        run: bash scripts/cli-release.sh publish "$TAG" "$GITHUB_SHA" "$DNA_SHA256" "$PUBKEY" cli
+        run: bash scripts/cli-release.sh publish "$TAG" "$GITHUB_SHA" "$DNA_SHA256" cli

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# cli-release.sh against a stand-in gh that holds a fixture repo's releases. Needs minisign on PATH
-# (install-minisign.sh), the Tauri signer and jq.
+# cli-release.sh against a stand-in gh that holds a fixture repo's releases. Needs jq.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,12 +80,7 @@ world() { # [<release JSON>...]: a fixture repo with those releases, and v1.2.0 
   cp "$tmp/unyt_cli" "$tmp/notes.md" "$CLI/"
 }
 cli() { GITHUB_REPOSITORY=example/fork REPO=example/fork GH="$GH" PATH="$tmp/bin:$PATH" bash "$here/cli-release.sh" "$@"; }
-"$here/tauri-signer/node_modules/.bin/tauri" signer generate --ci -p test -w "$tmp/release.key" >/dev/null
-pubkey="$(cat "$tmp/release.key.pub")"
-published() { # <cli tag> [<dna sha256>]
-  TAURI_SIGNING_PRIVATE_KEY="$(cat "$tmp/release.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=test \
-    cli publish "$1" "$commit" "${2:-$dna}" "$pubkey" "$CLI" >/dev/null
-}
+published() { cli publish "$1" "$commit" "${2:-$dna}" "$CLI" >/dev/null; } # <cli tag> [<dna sha256>]
 release_of() { # <tag> <filter>: the filter on the tag's one release
   jq -r --arg tag "$1" "[.[] | select(.tag_name == \$tag)] | if length == 1 then .[0] | $2 else \"\(length) releases\" end" \
     "$GH/releases.json"
@@ -125,12 +119,8 @@ check "at the build's commit, as a pre-release" \
   test "$(fields cli-v1.2.0.0 '.draft, .prerelease, .target_commitish')" = "false true $commit"
 check "its notes are its changelog's, then the build's" \
   test "$(release_of cli-v1.2.0.0 .body)" = $'\n### Added\n\n- a new command\n\n'"$(built v1.2.0)"
-carries() { # <assets dir>: unyt_cli, and SHA256SUMS that checks it, signed for the release key
-  test "$(ls "$1" | tr '\n' ' ')" = "SHA256SUMS SHA256SUMS.minisig unyt_cli " && cmp -s "$1/unyt_cli" "$tmp/unyt_cli" &&
-    (cd "$1" && sha256sum --check --strict --quiet SHA256SUMS) &&
-    minisign -Vqm "$1/SHA256SUMS" -P "$(base64 -d <<<"$pubkey" | sed -n 2p)"
-}
-check "it carries unyt_cli and SHA256SUMS signed for the release key" carries "$GH/assets/$(release_of cli-v1.2.0.0 .id)"
+carries() { test "$(ls "$1")" = unyt_cli && cmp -s "$1/unyt_cli" "$tmp/unyt_cli"; } # <assets dir>
+check "it carries unyt_cli alone" carries "$GH/assets/$(release_of cli-v1.2.0.0 .id)"
 
 world '{"id": 50, "tag_name": "cli-v1.2.0.0", "draft": true}'
 check "a draft of the tag is deleted, and the release published in its place" eval \
