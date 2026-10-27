@@ -6,7 +6,7 @@
     "VITE_HOT_BRIDGE_URL": "https://hot-bridge.unyt.dev",
     "VITE_HOT_LOCK_VAULT": "0xedddbef1b6deb820888661829ecf70e9621328b4",
     "VITE_ETH_NETWORK": "base-sepolia",
-    "VITE_VOUCHER_SERVICE_URL": "https://voucher.holo.host",
+    "VITE_VOUCHER_SERVICE_URL": "https://vouchers.holo.host",
     "UNYT_BOOTSTRAP_URL": "https://relay.unyt.dev",
     "UNYT_RELAY_URL": "https://relay.unyt.dev",
     "UNYT_AUTH_SERVER_URL": "https://auth.unyt.dev",
