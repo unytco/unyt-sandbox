@@ -27,7 +27,7 @@ Application-level changes belong in
 
 - **The TestNet app locks HOT into the new test vault.**
 - **A release run publishes its release as a pre-release, and a person makes it the latest release.**
-- **The TestNet app's voucher service is `https://voucher.holo.host`.**
+- **The TestNet app's voucher service is `https://vouchers.holo.host`.**
 - **A 0.115 patch release inherits v0.115.0's happ, DNA and CLI.**
 - **The TestNet app's HOT bridge is on Base Sepolia.**
 - **A release, and every installer in it, is Unyt Sandbox. It installs beside Unyt, and over Unyt Sandbox 0.108 or earlier.**
