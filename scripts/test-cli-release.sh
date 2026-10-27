@@ -15,7 +15,7 @@ mkdir "$tmp/bin"
 cat >"$tmp/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-method=GET words=() repo="" pattern="" dir="" target="" prerelease="" latest="" title="" notes="" filter=""
+method=GET words=() repo="" pattern="" dir="" target="" prerelease=false title="" notes="" filter=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -X) method="$2"; shift ;;
@@ -26,8 +26,7 @@ while [ "$#" -gt 0 ]; do
     --title) title="$2"; shift ;;
     --notes) notes="$2"; shift ;;
     --jq) filter="$2"; shift ;;
-    --prerelease=*) prerelease="${1#*=}" ;;
-    --latest=*) latest="${1#*=}" ;;
+    --prerelease) prerelease=true ;;
     --paginate) ;;
     *) words+=("$1") ;;
   esac
@@ -54,8 +53,8 @@ case "$1" in
       create)
         id="$(jq 'map(.id) + [100] | max + 1' "$releases")"
         save --argjson id "$id" --arg tag "$3" --arg target "$target" --argjson prerelease "$prerelease" \
-          --arg latest "$latest" --arg title "$title" --arg notes "$notes" '. + [{id: $id, tag_name: $tag, draft: false,
-          prerelease: $prerelease, make_latest: $latest, name: $title, body: $notes, target_commitish: $target}]'
+          --arg title "$title" --arg notes "$notes" '. + [{id: $id, tag_name: $tag, draft: false,
+          prerelease: $prerelease, name: $title, body: $notes, target_commitish: $target}]'
         mkdir "$GH/assets/$id"
         cp "${@:4}" "$GH/assets/$id/"
         echo "create $id" >>"$GH/calls" ;;
@@ -122,8 +121,8 @@ check "a CLI built with another DNA than its app release carries publishes nothi
 
 world
 check "a CLI release with its app release's DNA publishes" published cli-v1.2.0.0
-check "at the build's commit, never as the latest" \
-  test "$(fields cli-v1.2.0.0 '.draft, .prerelease, .make_latest, .target_commitish')" = "false false false $commit"
+check "at the build's commit, as a pre-release" \
+  test "$(fields cli-v1.2.0.0 '.draft, .prerelease, .target_commitish')" = "false true $commit"
 check "its notes are its changelog's, then the build's" \
   test "$(release_of cli-v1.2.0.0 .body)" = $'\n### Added\n\n- a new command\n\n'"$(built v1.2.0)"
 carries() { # <assets dir>: unyt_cli, and SHA256SUMS that checks it, signed for the release key
@@ -143,9 +142,7 @@ check "a tag already released is never released again" \
 
 world
 : >"$CLI/notes.md"
-check "a pre-release app's CLI release is a pre-release, never the latest" \
-  eval 'published cli-v1.2.0-dev.4.0 && test "$(fields cli-v1.2.0-dev.4.0 ".prerelease, .make_latest")" = "true false"'
-check "with no notes of its own, its notes name only the build" \
-  test "$(release_of cli-v1.2.0-dev.4.0 .body)" = "$(built v1.2.0-dev.4)"
+check "a pre-release app's CLI release, with no notes of its own, has notes that name only the build" \
+  eval 'published cli-v1.2.0-dev.4.0 && test "$(release_of cli-v1.2.0-dev.4.0 .body)" = "$(built v1.2.0-dev.4)"'
 
 report "CLI release scripts"
