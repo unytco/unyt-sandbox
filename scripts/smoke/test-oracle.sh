@@ -1397,8 +1397,7 @@ if [ -f "$rel" ]; then
   # A GATE MAY NOT RIDE A ROLLING LABEL. macos-latest moved to macOS 26, whose
   # screen-capture rules differ from the ones phase 1 is proven against, so a gate
   # on it would change what "proven" means with no commit to point at.
-  # windows-latest/ubuntu-latest are not the same risk: the Windows lanes name
-  # both images explicitly and the Linux static lane runs in containers.
+  # windows-latest is not the same risk: the Windows lanes name their images.
   #
   # Full-line comments stripped, because the label is named in the comments that
   # explain all this; a trailing one is left, since a line that still RUNS on it
@@ -1408,6 +1407,16 @@ if [ -f "$rel" ]; then
     printf 'FAIL  %-58s %s\n' "a smoke lane rides the rolling macOS image" \
       "gates run macos-15 / macos-15-intel — the images phase 1 is proven on" >&2
   else pass=$((pass + 1)); fi
+
+  # The Linux phase-1 lane launches the app on the runner, so its image is part
+  # of what it proves. Jobs that launch nothing on the runner itself may stay on
+  # ubuntu-latest.
+  linux_gate="$(sed -n '/^  opens-linux:/,/^  [a-z]/p' "$wf" | sed -n 's/^    runs-on: *//p')"
+  if [ "$linux_gate" = "ubuntu-26.04" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1))
+    printf 'FAIL  %-58s %s\n' "the Linux phase-1 lane moved off its proven image" \
+      "[$linux_gate], not ubuntu-26.04" >&2
+  fi
 
   # THE BUILD IS THE OPPOSITE RULE, deliberately: these legs produce what users
   # install, so pinning them changes the product rather than a gate. macos-latest
