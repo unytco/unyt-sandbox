@@ -1,8 +1,8 @@
 {
   "_comment": "The sha256 of the published vM.m.0 assets a UI release vM.m.p of this repo inherits. Update it when a new lineage's .0 is published.",
-  "lineage": "0.115",
-  "parent_tag": "v0.115.0",
-  "happ_sha256": "a2c4777ae172978409989c7f6e2f6053e4ade579010113c7ccb06ee6f4e85d7e",
-  "dna_sha256": "78028f214e9ae3fbe2fb77d0281f6c02f3a06b70d7d622eaf38405877c680fad",
-  "cli_sha256": "fc7e63bdf22f971ea70fdaba6a52e79aad85897650a3b31d0713f4c7f7bb95c0"
+  "lineage": "1.0",
+  "parent_tag": "v1.0.0",
+  "happ_sha256": "e8a283195718bbad94d746ab31cf9a67d452f593ebb67bd8697c36d9aaf72dcd",
+  "dna_sha256": "5ef488a86689d4135004937b691b4896e9d2a53ede64de43a0165896e152658e",
+  "cli_sha256": "2eadd8198b7b98150be2e940dccb3eaaf4f5a8e4ce3e311c85652f237fc47080"
 }
